@@ -31,6 +31,10 @@ public enum FrameFit {
         return Rect(origin: Point(x: x, y: y), size: size)
     }
 
+    /// `imageSize`, `frame` and `zoom` are unused on purpose: the offset is relative to the available
+    /// slack (image size minus frame size), so the same value moves the image by a different
+    /// distance at a different zoom, and the -1...1 range is valid for any of them.
+    ///
     /// Offset limited to -1...1 per axis (non-finite values become 0). Because `imageRect` maps
     /// the offset range onto the available slack, any clamped offset keeps the frame covered.
     public static func clampedOffset(_ offset: Point, imageSize: Size, frame: Rect, zoom: Double) -> Point {

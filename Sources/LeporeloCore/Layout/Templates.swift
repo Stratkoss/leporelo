@@ -81,9 +81,9 @@ public enum TemplateCatalog {
         SpreadTemplate(
             id: "journal-3", kind: .journal, photoCount: 3,
             frames: [
-                FrameSlot(id: "photo1", rect: r(0.55, 0.06, 0.25, 0.88), orientation: .portrait, priority: 0),
-                FrameSlot(id: "photo2", rect: r(0.82, 0.06, 0.15, 0.42), orientation: .landscape, priority: 1),
-                FrameSlot(id: "photo3", rect: r(0.82, 0.52, 0.15, 0.42), orientation: .landscape, priority: 2),
+                FrameSlot(id: "photo1", rect: r(0.52, 0.06, 0.22, 0.88), orientation: .portrait, priority: 0),
+                FrameSlot(id: "photo2", rect: r(0.76, 0.06, 0.21, 0.38), orientation: .landscape, priority: 1),
+                FrameSlot(id: "photo3", rect: r(0.76, 0.56, 0.21, 0.38), orientation: .landscape, priority: 2),
             ],
             texts: journalTexts),
 
@@ -103,9 +103,9 @@ public enum TemplateCatalog {
             id: "journal-5", kind: .journal, photoCount: 5,
             frames: [
                 FrameSlot(id: "photo1", rect: r(0.52, 0.06, 0.45, 0.52), orientation: .landscape, priority: 0),
-                FrameSlot(id: "photo2", rect: r(0.52, 0.62, 0.14, 0.32), orientation: .landscape, priority: 1),
-                FrameSlot(id: "photo3", rect: r(0.675, 0.62, 0.14, 0.32), orientation: .landscape, priority: 2),
-                FrameSlot(id: "photo4", rect: r(0.83, 0.62, 0.14, 0.32), orientation: .landscape, priority: 3),
+                FrameSlot(id: "photo2", rect: r(0.52, 0.66, 0.14, 0.28), orientation: .landscape, priority: 1),
+                FrameSlot(id: "photo3", rect: r(0.675, 0.66, 0.14, 0.28), orientation: .landscape, priority: 2),
+                FrameSlot(id: "photo4", rect: r(0.83, 0.66, 0.14, 0.28), orientation: .landscape, priority: 3),
                 leftPortrait(id: "photo5", priority: 4),
             ],
             texts: journalTexts),
@@ -120,7 +120,7 @@ public enum TemplateCatalog {
         SpreadTemplate(
             id: "gallery-2", kind: .gallery, photoCount: 2,
             frames: [
-                FrameSlot(id: "photo1", rect: r(0.125, 0.06, 0.25, 0.80), orientation: .portrait, priority: 0),
+                FrameSlot(id: "photo1", rect: r(0.14, 0.06, 0.22, 0.82), orientation: .portrait, priority: 0),
                 FrameSlot(id: "photo2", rect: r(0.53, 0.06, 0.44, 0.80), orientation: .landscape, priority: 1),
             ],
             texts: [TextSlot(id: "caption", rect: r(0.53, 0.89, 0.44, 0.06), role: .caption, placeholder: "Popisek")]),
@@ -129,9 +129,9 @@ public enum TemplateCatalog {
         SpreadTemplate(
             id: "gallery-3", kind: .gallery, photoCount: 3,
             frames: [
-                FrameSlot(id: "photo1", rect: r(0.625, 0.06, 0.25, 0.80), orientation: .portrait, priority: 0),
-                FrameSlot(id: "photo2", rect: r(0.03, 0.06, 0.44, 0.38), orientation: .landscape, priority: 1),
-                FrameSlot(id: "photo3", rect: r(0.03, 0.48, 0.44, 0.38), orientation: .landscape, priority: 2),
+                FrameSlot(id: "photo1", rect: r(0.64, 0.06, 0.22, 0.80), orientation: .portrait, priority: 0),
+                FrameSlot(id: "photo2", rect: r(0.135, 0.06, 0.23, 0.38), orientation: .landscape, priority: 1),
+                FrameSlot(id: "photo3", rect: r(0.135, 0.48, 0.23, 0.38), orientation: .landscape, priority: 2),
             ],
             texts: [TextSlot(id: "caption", rect: r(0.03, 0.89, 0.44, 0.06), role: .caption, placeholder: "Popisek")]),
 
