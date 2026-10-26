@@ -9,7 +9,6 @@ import Testing
         let blurred = ImageFixtures.blurred(sharp, radius: 8)
         let s = Sharpness.laplacianVariance(sharp)
         let b = Sharpness.laplacianVariance(blurred)
-        print("MEASURED sharpness checkerboard=\(s) blurred=\(b)")
         #expect(s > b * 5)
     }
 
@@ -47,5 +46,42 @@ import Testing
         #expect(FeaturePrintDistance.distance(fp, fp) == 0)
         let other = try #require(try await analyzer.analyze(ImageFixtures.solid()).featurePrint)
         #expect(FeaturePrintDistance.distance(fp, other) > 0)
+    }
+
+    // Eye contour in a local frame (width 1, half-gap h above and below), rotated by `angle`,
+    // placed in a face box of the given pixel size (landmarks are normalised to that box).
+    private func contour(halfGap h: Double, angle: Double, face: Size) -> [Point] {
+        let local = [(0.0, 0.0), (0.25, h), (0.5, h * 1.1), (0.75, h), (1.0, 0.0),
+                     (0.75, -h * 0.8), (0.5, -h * 0.9), (0.25, -h * 0.8)]
+        let eyeW = 0.2 * face.width // eye width in pixels
+        return local.map { (x, y) in
+            let px = (x - 0.5) * eyeW, py = y * eyeW
+            let rx = px * cos(angle) - py * sin(angle), ry = px * sin(angle) + py * cos(angle)
+            return Point(x: (0.5 * face.width + rx) / face.width, y: (0.5 * face.height + ry) / face.height)
+        }
+    }
+
+    @Test func openEyeNotFlaggedClosedEvenTiltedOrNonSquareFace() {
+        for face in [Size(width: 400, height: 400), Size(width: 300, height: 500)] {
+            for angle in [0.0, 0.5, -0.6, 1.2] {
+                let pts = contour(halfGap: 0.17, angle: angle, face: face)
+                let o = ImageAnalyzer.openness(pts, faceSize: face)!
+                #expect(o > 0.3 && o < 0.4, "openness \(o)")
+                #expect(!ImageAnalyzer.isClosed(pts, faceSize: face))
+            }
+        }
+    }
+
+    @Test func closedEyeFlaggedEvenTilted() {
+        for face in [Size(width: 400, height: 400), Size(width: 300, height: 500)] {
+            for angle in [0.0, 0.5, -0.6, 1.2] {
+                let pts = contour(halfGap: 0.03, angle: angle, face: face)
+                #expect(ImageAnalyzer.isClosed(pts, faceSize: face))
+            }
+        }
+    }
+
+    @Test func degenerateContourIsNotClosed() {
+        #expect(!ImageAnalyzer.isClosed([Point(x: 0, y: 0)], faceSize: Size(width: 10, height: 10)))
     }
 }
