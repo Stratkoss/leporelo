@@ -1,0 +1,82 @@
+import Testing
+import Foundation
+@testable import LeporeloCore
+
+@Suite struct ModelTests {
+    static func makePhoto(_ id: String, at seconds: TimeInterval, day: DayKey? = DayKey(year: 2026, month: 7, day: 1)) -> Photo {
+        Photo(
+            id: id,
+            sourceIdentifier: "src-\(id)",
+            capturedAt: Date(timeIntervalSince1970: seconds),
+            timeZoneSeconds: 7200,
+            location: GeoPoint(latitude: 50.0, longitude: 14.4),
+            pixelWidth: 4000,
+            pixelHeight: 3000,
+            kind: .photo,
+            analysis: PhotoAnalysis(
+                aesthetic: 0.8, sharpness: 0.9, isUtility: false,
+                faceRects: [Rect(x: 0.1, y: 0.1, width: 0.2, height: 0.2)],
+                closedEyes: false, featurePrint: Data([1, 2, 3])
+            ),
+            isSelected: true,
+            dayKey: day,
+            placeName: "Praha",
+            seriesID: nil,
+            originalState: .stored(relativePath: "originals/\(id).heic"),
+            deletedInSource: false
+        )
+    }
+
+    @Test func albumRoundTripsThroughJSON() throws {
+        let p1 = Self.makePhoto("a", at: 1_000)
+        let p2 = Self.makePhoto("b", at: 2_000)
+        let spread = Spread(
+            id: "s1", kind: .gallery, templateID: "gallery-2",
+            dayKey: DayKey(year: 2026, month: 7, day: 1),
+            frames: [Frame(id: "f1", rect: Rect(x: 10, y: 10, width: 100, height: 80),
+                           photoID: "a", offset: Point(x: 0, y: 0), zoom: 1)],
+            texts: [TextBox(id: "t1", rect: Rect(x: 10, y: 100, width: 100, height: 10),
+                            role: .caption, text: "Ahoj")],
+            manuallyEdited: false
+        )
+        let album = Album(
+            formatVersion: Album.currentFormatVersion,
+            id: "album-1", title: "Léto", supplierProfileID: "saal", formatID: "20x20",
+            world: "journal-gallery", cover: nil, spreads: [spread],
+            photos: ["a": p1, "b": p2],
+            source: .dateRange(start: Date(timeIntervalSince1970: 0), end: Date(timeIntervalSince1970: 86_400)),
+            createdAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let decoded = try decoder.decode(Album.self, from: try encoder.encode(album))
+        #expect(decoded == album)
+    }
+
+    @Test func rectInsetAndIntersect() {
+        let r = Rect(x: 0, y: 0, width: 100, height: 50).insetBy(3)
+        #expect(r.origin == Point(x: 3, y: 3))
+        #expect(r.size == Size(width: 94, height: 44))
+        let a = Rect(origin: Point(x: 0, y: 0), size: Size(width: 10, height: 10))
+        let b = Rect(x: 5, y: 5, width: 10, height: 10)
+        #expect(a.intersects(b))
+    }
+
+    @Test func photosByDaySortsWithinDay() {
+        let album = Album(
+            formatVersion: Album.currentFormatVersion, id: "x", title: "t",
+            supplierProfileID: "s", formatID: "f", world: "journal-gallery",
+            cover: nil, spreads: [],
+            photos: [
+                "a": Self.makePhoto("a", at: 300),
+                "b": Self.makePhoto("b", at: 100),
+                "c": Self.makePhoto("c", at: 200),
+            ],
+            source: nil, createdAt: Date(timeIntervalSince1970: 0)
+        )
+        let day = DayKey(year: 2026, month: 7, day: 1)
+        #expect(album.photosByDay()[day]?.map(\.id) == ["b", "c", "a"])
+    }
+}
