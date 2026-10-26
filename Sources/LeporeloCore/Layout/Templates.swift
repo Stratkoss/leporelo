@@ -75,7 +75,9 @@ public enum TemplateCatalog {
         SpreadTemplate(
             id: "intro-1", kind: .intro, photoCount: 1,
             frames: [FrameSlot(id: "photo1", rect: r(0.5, 0, 0.5, 1), orientation: .any, priority: 0, bleeds: true)],
-            texts: [TextSlot(id: "title", rect: r(0.06, 0.38, 0.38, 0.20), role: .title, placeholder: "Název alba")]),
+            texts: [TextSlot(id: "title", rect: r(0.06, 0.38, 0.38, 0.20), role: .title, placeholder: "Název alba"),
+                    TextSlot(id: "body", rect: r(0.06, 0.60, 0.38, 0.20), role: .body,
+                             placeholder: "Datum a místa")]),
 
         // Journal-3: text left, tall portrait main on the right with two landscape photos beside it.
         SpreadTemplate(

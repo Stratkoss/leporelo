@@ -21,10 +21,6 @@ public struct DraftOptions: Sendable, Equatable {
 public enum AlbumDrafter {
     public static let noPlaceTitle = "Bez místa"
 
-    /// Body slot used when the intro template has none (intro-1 only defines a title), in
-    /// normalised spread units, below the title on the left page.
-    static let introBodyRect = Rect(x: 0.06, y: 0.60, width: 0.38, height: 0.20)
-
     public static func pageCount(of album: Album) -> Int {
         album.spreads.count * 2
     }
@@ -46,7 +42,8 @@ public enum AlbumDrafter {
             if !photos.isEmpty { selectedDays.append((group, photos)) }
         }
         let allSelected = selectedDays.flatMap(\.photos)
-        // Nothing to lay out: an empty draft (no intro photo, no cover) rather than empty frames.
+        // Nothing to lay out: an empty draft rather than empty frames. Note for callers (e.g. a
+        // redraft): an empty selection CLEARS the cover and all spreads and yields 0 pages.
         guard let lastPhoto = allSelected.last else {
             result.spreads = []
             result.cover = nil
@@ -80,7 +77,7 @@ public enum AlbumDrafter {
         // 3. Instantiate templates.
         let geometry = PageGeometry(format: format, profile: profile)
         result.spreads = instantiate(plan, geometry: geometry)
-        result.cover = cover(title: album.title, photo: introPhoto, format: format)
+        result.cover = cover(title: album.title, photoID: introPhoto.id, format: format, profile: profile)
         return result
     }
 
@@ -102,9 +99,14 @@ public enum AlbumDrafter {
         return Photo.chronological(a, b)
     }
 
-    /// Journal with the day's N best photos (N = 3...5), then the rest chronologically in galleries.
-    /// A day with fewer than 3 photos cannot fill a journal template without empty frames, so it gets
-    /// galleries only and the date and place go into the first gallery's caption.
+    /// Journal with the day's N best-scoring photos (N = 3...5), then the rest chronologically in
+    /// galleries. The journal takes the best photos (not the first N) because the spec wants the
+    /// day's best photo in the big frame; as a consequence gallery photos may be earlier in time
+    /// than some journal photos.
+    ///
+    /// A day with only 1-2 selected photos gets gallery-only spreads (no journal): every journal
+    /// template has at least 3 frames and a journal must not have empty frames. The date and place
+    /// go into the first gallery's caption instead.
     private static func planDay(_ group: DayGroup, photos: [Photo], perGallery: Int) -> [Planned] {
         let key = group.dayKey
         let title = group.placeNames.isEmpty ? noPlaceTitle : group.placeNames.joined(separator: ", ")
@@ -168,14 +170,6 @@ public enum AlbumDrafter {
             for (role, text) in item.texts {
                 if let i = spread.texts.firstIndex(where: { $0.role == role }) {
                     spread.texts[i].text = text
-                } else if template.kind == .intro && role == .body {
-                    let size = geometry.spreadSize
-                    let r = introBodyRect
-                    spread.texts.append(TextBox(
-                        id: "body",
-                        rect: Rect(x: r.minX * size.width, y: r.minY * size.height,
-                                   width: r.size.width * size.width, height: r.size.height * size.height),
-                        role: .body, text: text))
                 }
             }
             return spread
@@ -197,15 +191,21 @@ public enum AlbumDrafter {
         }
     }
 
-    /// Frame id -> photo id. Pass 1, in priority order: each oriented frame takes the best remaining
-    /// photo of matching orientation (so the best fitting photo lands on the main frame). Pass 2:
-    /// frames still empty (`.any` frames and frames with no matching photo) take the best remaining
-    /// photo. No frame stays empty while photos remain.
+    /// Frame id -> photo id. Frames are visited in priority order:
+    /// - the main frame (priority 0) takes the best remaining photo of matching orientation, or, if
+    ///   none matches, the best remaining photo outright, before any other frame is filled;
+    /// - pass 1: every other oriented frame takes the best remaining photo of matching orientation;
+    /// - pass 2: frames still empty (`.any` frames and frames with no match) take the best remaining
+    ///   photo. No frame stays empty while photos remain.
     static func assign(_ slots: [FrameSlot], photos: [Photo]) -> [String: PhotoID] {
         var remaining = photos.sorted(by: rank)
         let ordered = slots.sorted { ($0.priority, $0.id) < ($1.priority, $1.id) }
         var result: [String: PhotoID] = [:]
-        for slot in ordered where slot.orientation != .any {
+        if let main = ordered.first, main.priority == 0, !remaining.isEmpty {
+            let i = remaining.firstIndex(where: { fits($0, main.orientation) }) ?? 0
+            result[main.id] = remaining.remove(at: i).id
+        }
+        for slot in ordered where slot.orientation != .any && result[slot.id] == nil {
             if let i = remaining.firstIndex(where: { fits($0, slot.orientation) }) {
                 result[slot.id] = remaining.remove(at: i).id
             }
@@ -224,17 +224,26 @@ public enum AlbumDrafter {
         }
     }
 
-    /// Built directly from the page size (one page, origin 0,0) rather than from a catalog template,
-    /// because every catalog template is a two-page spread. The photo fills the page (bleed is added
-    /// by the exporter); the title sits inside the safe zone near the top.
-    private static func cover(title: String, photo: Photo, format: BookFormat) -> Cover {
+    /// Template id of the front cover. NOT a `TemplateCatalog` id: catalog templates are two-page
+    /// spreads and the cover is a single page. Code that rebuilds the album (Task 9, AlbumUpdater)
+    /// must rebuild `album.cover` through `cover(title:photoID:format:profile:)`, not the catalog.
+    public static let coverFrontTemplateID = "cover-front"
+
+    /// The cover for `format`, built directly from the page size (one page, origin 0,0).
+    /// Front: the photo fills the page (bleed is added by the exporter) and the title sits near the
+    /// top inside the safe zone. Back: blank. Used by `draft` and by anything that rebuilds the cover.
+    public static func cover(title: String, photoID: PhotoID?, format: BookFormat,
+                             profile: SupplierProfile) -> Cover {
         let w = format.pageWidthMM, h = format.pageHeightMM
+        let safe = Rect(x: 0, y: 0, width: w, height: h).insetBy(profile.safeMM)
+        let x = max(0.1 * w, safe.minX), y = max(0.08 * h, safe.minY)
+        let titleRect = Rect(x: x, y: y, width: min(0.8 * w, safe.maxX - x),
+                             height: min(0.14 * h, safe.maxY - y))
         let front = Spread(
-            id: "cover-front", kind: .intro, templateID: "cover-front", dayKey: nil,
-            frames: [Frame(id: "photo1", rect: Rect(x: 0, y: 0, width: w, height: h), photoID: photo.id,
+            id: "cover-front", kind: .intro, templateID: coverFrontTemplateID, dayKey: nil,
+            frames: [Frame(id: "photo1", rect: Rect(x: 0, y: 0, width: w, height: h), photoID: photoID,
                            offset: Point(x: 0, y: 0), zoom: 1)],
-            texts: [TextBox(id: "title", rect: Rect(x: 0.1 * w, y: 0.08 * h, width: 0.8 * w, height: 0.14 * h),
-                            role: .title, text: title)],
+            texts: [TextBox(id: "title", rect: titleRect, role: .title, text: title)],
             manuallyEdited: false)
         let back = Spread(id: "cover-back", kind: .blank, templateID: "blank", dayKey: nil,
                           frames: [], texts: [], manuallyEdited: false)

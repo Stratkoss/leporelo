@@ -237,4 +237,46 @@ import Foundation
         #expect(a.selectedPhotos.map(\.id) == ["a", "b", "c"])
         #expect(a.photosByDay()[Self.june18]?.map(\.id) == ["a", "b", "c"])
     }
+
+    // Fix round 1, item 1: with no orientation match the main frame still gets the best photo.
+    @Test func mainFrameGetsBestPhotoWithoutOrientationMatch() {
+        let ps = [Self.photo("w", day: Self.june18, minute: 0, aesthetic: 0.1),
+                  Self.photo("m", day: Self.june18, minute: 1, aesthetic: 0.5),
+                  Self.photo("b", day: Self.june18, minute: 2, aesthetic: 0.9)]
+        for id in ["journal-3", "gallery-3"] {
+            let t = TemplateCatalog.template(id: id)!
+            let main = t.frames.first { $0.priority == 0 }!
+            let assignment = AlbumDrafter.assign(t.frames, photos: ps)
+            #expect(assignment[main.id] == "b", "\(id)")
+            #expect(Set(assignment.values) == ["w", "m", "b"], "\(id)")
+        }
+    }
+
+    // Fix round 1, item 2: the intro body comes from a template slot, so rebuilding keeps it.
+    @Test func introBodyIsATemplateSlot() throws {
+        let (p, f) = try Self.canva()
+        let days = [Self.day(Self.june18, Self.dayPhotos("a", Self.june18, count: 3), places: ["Ravello"])]
+        let a = Self.draft(days, profile: p, format: f)
+        let intro = a.spreads[0]
+        let rebuilt = TemplateLayout.instantiate(TemplateCatalog.template(id: intro.templateID)!,
+                                                 geometry: PageGeometry(format: f, profile: p),
+                                                 dayKey: nil, id: intro.id)
+        #expect(rebuilt.texts.map(\.id) == intro.texts.map(\.id))
+        #expect(rebuilt.texts.contains { $0.id == "body" && $0.role == .body })
+        #expect(Self.text(intro, .body) == "18. 6. 2026\nRavello")
+    }
+
+    // Fix round 1, item 3: the cover is rebuildable for any format.
+    @Test func coverBuilderUsesFormatPageSize() throws {
+        let (p, _) = try Self.canva()
+        let square = try #require(p.formats.first { $0.id == "square-21" })
+        let cover = AlbumDrafter.cover(title: "Léto", photoID: "x", format: square, profile: p)
+        let page = Rect(x: 0, y: 0, width: square.pageWidthMM, height: square.pageHeightMM)
+        #expect(cover.front.frames.map(\.rect) == [page])
+        #expect(cover.front.frames.map(\.photoID) == ["x"])
+        let safe = page.insetBy(p.safeMM)
+        #expect(cover.front.texts.allSatisfy { safe.contains($0.rect) })
+        #expect(Self.text(cover.front, .title) == "Léto")
+        #expect(cover.back.kind == .blank && cover.back.frames.isEmpty)
+    }
 }
