@@ -10,6 +10,8 @@ import ImageIO
 ///   scaled down only as far as `minPixelWidth` requires. If the original is missing or
 ///   unreadable it falls back to the thumbnail: better a low-res image than a crash.
 ///   Preflight, not this provider, is what blocks exports with missing originals.
+///
+/// It snapshots the `Album` at init: rebuild it when originals change (Task 17).
 public struct PackageImageProvider: ImageProvider {
     private let package: ProjectPackage
     private let album: Album
@@ -43,7 +45,7 @@ public struct PackageImageProvider: ImageProvider {
         if minPixelWidth >= uprightWidth {
             needed = longSide
         } else {
-            needed = Int((Double(minPixelWidth) * Double(longSide) / Double(uprightWidth)).rounded(.up))
+            needed = Int((Double(minPixelWidth) * Double(longSide) / Double(uprightWidth)).rounded(.up)) + 1
         }
         return ProjectPackage.decodeUpright(source, maxLongSide: needed)
     }

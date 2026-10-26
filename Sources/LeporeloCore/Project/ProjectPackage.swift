@@ -31,6 +31,9 @@ public enum ProjectError: Error, Equatable, Sendable {
 /// macOS Versions copies the package; originals are large, so Task 17 decides how to avoid
 /// duplicating them in version snapshots.
 ///
+/// JSON goes through `AlbumCoding` (lossless fractional-second dates); Task 17's `AlbumDocument`
+/// must use it too.
+///
 /// The struct holds only the URL and performs stateless file operations, hence it is `Sendable`.
 public struct ProjectPackage: Sendable {
     public static let albumFileName = "album.json"
@@ -44,19 +47,6 @@ public struct ProjectPackage: Sendable {
     init(url: URL) { self.url = url }
 
     // MARK: JSON
-
-    static func makeEncoder() -> JSONEncoder {
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        return encoder
-    }
-
-    static func makeDecoder() -> JSONDecoder {
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        return decoder
-    }
 
     private var albumURL: URL { url.appendingPathComponent(Self.albumFileName) }
 
@@ -98,7 +88,7 @@ public struct ProjectPackage: Sendable {
     /// Writes `album.json` through a temporary file in the same directory; the old file survives
     /// any failure and no temporary file is left behind.
     public func save(_ album: Album) throws {
-        let data = try Self.makeEncoder().encode(album)  // encoding fails before touching the disk
+        let data = try AlbumCoding.encoder().encode(album)  // encoding fails before touching the disk
         try writeAtomically(data, to: albumURL)
     }
 
@@ -109,7 +99,7 @@ public struct ProjectPackage: Sendable {
     /// Decodes album JSON. Version 1 has no migrations: any `formatVersion` other than the current
     /// one (older or newer) throws `unsupportedVersion`.
     public func migrate(_ json: Data) throws -> Album {
-        let decoder = Self.makeDecoder()
+        let decoder = AlbumCoding.decoder()
         let version: Int
         do { version = try decoder.decode(VersionProbe.self, from: json).formatVersion } catch {
             throw ProjectError.corrupt(String(describing: error))
@@ -158,8 +148,9 @@ public struct ProjectPackage: Sendable {
             ? Double(Self.thumbnailMaxPixelSize) / Double(longSide) : 1
         let width = max(1, Int((Double(image.width) * scale).rounded()))
         let height = max(1, Int((Double(image.height) * scale).rounded()))
+        let space = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
         guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
-                                      bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+                                      bytesPerRow: 0, space: space,
                                       bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else {
             throw ProjectError.writeFailed("cannot create thumbnail context")
         }

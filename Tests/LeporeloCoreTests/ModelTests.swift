@@ -28,7 +28,7 @@ import Foundation
     }
 
     @Test func albumRoundTripsThroughJSON() throws {
-        let p1 = Self.makePhoto("a", at: 1_000)
+        let p1 = Self.makePhoto("a", at: 1_000.123)
         let p2 = Self.makePhoto("b", at: 2_000)
         let spread = Spread(
             id: "s1", kind: .gallery, templateID: "gallery-2",
@@ -47,10 +47,8 @@ import Foundation
             source: .dateRange(start: Date(timeIntervalSince1970: 0), end: Date(timeIntervalSince1970: 86_400)),
             createdAt: Date(timeIntervalSince1970: 1_700_000_000)
         )
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
+        let encoder = AlbumCoding.encoder()
+        let decoder = AlbumCoding.decoder()
         let decoded = try decoder.decode(Album.self, from: try encoder.encode(album))
         #expect(decoded == album)
     }

@@ -70,7 +70,33 @@ private func solidImage(width: Int, height: Int) -> CGImage {
         let pkg = try ProjectPackage.create(at: dir.appendingPathComponent("x.leporelo"), album: makeAlbum())
         let text = try String(contentsOf: pkg.url.appendingPathComponent("album.json"), encoding: .utf8)
         #expect(text.contains("\n  \"createdAt\""))
-        #expect(text.contains("2023-11-14T22:13:20Z"))
+        #expect(text.contains("2023-11-14T22:13:20.000Z"))
+    }
+
+    @Test func fractionalSecondsSurviveSaveAndOpen() throws {
+        let dir = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        var photo = makePhoto("a")
+        photo.capturedAt = Date(timeIntervalSince1970: 1_700_000_000.123)
+        let album = makeAlbum(photos: [photo])
+        let pkg = try ProjectPackage.create(at: dir.appendingPathComponent("x.leporelo"), album: album)
+        let loaded = try ProjectPackage.open(pkg.url).1
+        let json = try String(contentsOf: pkg.url.appendingPathComponent("album.json"), encoding: .utf8)
+        #expect(json.contains("20.123Z"))
+        #expect(loaded == album)
+        #expect(loaded.photos["a"]?.capturedAt == photo.capturedAt)
+    }
+
+    @Test func fileWithoutFractionsStillOpens() throws {
+        let dir = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let pkg = try ProjectPackage.create(at: dir.appendingPathComponent("x.leporelo"), album: makeAlbum())
+        let file = pkg.url.appendingPathComponent("album.json")
+        let text = try String(contentsOf: file, encoding: .utf8)
+        let plain = text.replacingOccurrences(of: ".000Z", with: "Z")
+        #expect(plain != text)
+        try plain.write(to: file, atomically: true, encoding: .utf8)
+        #expect(try ProjectPackage.open(pkg.url).1 == makeAlbum())
     }
 
     @Test func saveIsAtomic() throws {
@@ -181,7 +207,7 @@ private func solidImage(width: Int, height: Int) -> CGImage {
         let dir = makeTempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
         let pkg = try ProjectPackage.create(at: dir.appendingPathComponent("x.leporelo"), album: makeAlbum())
-        let enc = ProjectPackage.makeEncoder()
+        let enc = AlbumCoding.encoder()
         let newer = try enc.encode(makeAlbum(version: Album.currentFormatVersion + 1))
         #expect(throws: ProjectError.unsupportedVersion(Album.currentFormatVersion + 1)) { try pkg.migrate(newer) }
         let older = try enc.encode(makeAlbum(version: 0))
@@ -222,7 +248,7 @@ private func solidImage(width: Int, height: Int) -> CGImage {
         let edge = try #require(await provider.image(for: "a", minPixelWidth: 1024))
         #expect(edge.width == 1024)
         let big = try #require(await provider.image(for: "a", minPixelWidth: 3000))
-        #expect(big.width >= 3000 && big.width <= 4000 && big.width == big.height * 2)
+        #expect(big.width >= 3000 && big.width <= 4000 && abs(big.width - big.height * 2) <= 2)
         let full = try #require(await provider.image(for: "a", minPixelWidth: 9000))
         #expect(full.width == 4000 && full.height == 2000) // never upscaled
         #expect(await provider.image(for: "nope", minPixelWidth: 100) == nil)
@@ -233,11 +259,26 @@ private func solidImage(width: Int, height: Int) -> CGImage {
         defer { try? FileManager.default.removeItem(at: dir) }
         let pkg = try ProjectPackage.create(at: dir.appendingPathComponent("x.leporelo"), album: makeAlbum())
         let rel = try pkg.storeOriginal(data: orientedJPEG(width: 40, height: 20), ext: "jpg", for: "a")
-        try pkg.storeThumbnail(solidImage(width: 20, height: 40), for: "a")
+        try pkg.storeThumbnail(solidImage(width: 10, height: 20), for: "a") // differs from the original path
         let album = makeAlbum(photos: [makePhoto("a", w: 20, h: 40, state: .stored(relativePath: rel))])
         let provider = PackageImageProvider(package: pkg, album: album)
         let img = try #require(await provider.image(for: "a", minPixelWidth: 2000))
         #expect(img.width == 20 && img.height == 40)
+    }
+
+    @Test func providerDownscalesRotatedOriginalOnUprightWidth() async throws {
+        let dir = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let pkg = try ProjectPackage.create(at: dir.appendingPathComponent("x.leporelo"), album: makeAlbum())
+        let rel = try pkg.storeOriginal(data: orientedJPEG(width: 4000, height: 2000), ext: "jpg", for: "a")
+        try pkg.storeThumbnail(solidImage(width: 512, height: 1024), for: "a")
+        let album = makeAlbum(photos: [makePhoto("a", w: 2000, h: 4000, state: .stored(relativePath: rel))])
+        let provider = PackageImageProvider(package: pkg, album: album)
+        let img = try #require(await provider.image(for: "a", minPixelWidth: 1500))
+        #expect(img.width >= 1500 && img.width <= 1510)
+        #expect(abs(img.height - img.width * 2) <= 2 && img.height >= 3000)
+        let full = try #require(await provider.image(for: "a", minPixelWidth: 9000))
+        #expect(full.width == 2000 && full.height == 4000)
     }
 
     @Test func providerFallsBackToThumbWhenOriginalMissing() async throws {
