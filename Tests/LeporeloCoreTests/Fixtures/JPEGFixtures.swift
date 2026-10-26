@@ -8,14 +8,22 @@ import UniformTypeIdentifiers
 enum JPEGFixtures {
     /// `offset` like "+02:00"; `date` is formatted as naive local time in that offset
     /// (UTC when `offset` is nil). `date == nil` writes no EXIF date. `orientation` is the EXIF tag.
+    /// `scene == nil` draws a scaled checkerboard; otherwise `ImageFixtures.scene(seed:)` (large,
+    /// cheap to encode, sharp enough not to count as defective).
     static func write(to url: URL, size: (Int, Int) = (64, 48), date: Date? = nil,
-                      offset: String? = nil, gps: GeoPoint? = nil, orientation: Int? = nil) throws {
-        let image = ImageFixtures.checkerboard(size: 8)
-        let ctx = CGContext(data: nil, width: size.0, height: size.1, bitsPerComponent: 8,
-                            bytesPerRow: 0, space: ImageFixtures.colorSpace,
-                            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
-        ctx.draw(image, in: CGRect(x: 0, y: 0, width: size.0, height: size.1))
-        let cg = ctx.makeImage()!
+                      offset: String? = nil, gps: GeoPoint? = nil, orientation: Int? = nil,
+                      scene: Int? = nil) throws {
+        let cg: CGImage
+        if let scene {
+            cg = ImageFixtures.scene(seed: scene, width: size.0, height: size.1)
+        } else {
+            let image = ImageFixtures.checkerboard(size: 8)
+            let ctx = CGContext(data: nil, width: size.0, height: size.1, bitsPerComponent: 8,
+                                bytesPerRow: 0, space: ImageFixtures.colorSpace,
+                                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+            ctx.draw(image, in: CGRect(x: 0, y: 0, width: size.0, height: size.1))
+            cg = ctx.makeImage()!
+        }
 
         var props: [CFString: Any] = [kCGImageDestinationLossyCompressionQuality: 0.8]
         if let date {
