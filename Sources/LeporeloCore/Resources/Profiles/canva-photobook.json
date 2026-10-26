@@ -1,0 +1,24 @@
+{
+  "id": "canva-photobook",
+  "name": "Canva Print – fotokniha",
+  "formats": [
+    { "id": "landscape-8x6in", "name": "Na šířku 8 × 6 in (Canva, výchozí)", "pageWidthMM": 203.2, "pageHeightMM": 152.4 },
+    { "id": "landscape-a4", "name": "Na šířku 297 × 210 mm (záloha, neověřeno u Canvy)", "pageWidthMM": 297, "pageHeightMM": 210 },
+    { "id": "square-21", "name": "Čtverec 210 × 210 mm (záloha, neověřeno u Canvy)", "pageWidthMM": 210, "pageHeightMM": 210 }
+  ],
+  "pageMode": "singlePages",
+  "coverMode": "frontOnly",
+  "pageCount": { "min": 20, "max": 98, "multipleOf": 2 },
+  "bleedMM": 3,
+  "safeMM": 6,
+  "output": { "fileType": "pdf", "dpi": 300, "jpegQuality": 0.92, "separateCover": true },
+  "verified": false,
+  "sourceURL": "https://www.canva.com/photo-books/",
+  "uploadSteps": [
+    "Otevři Canvu a vytvoř novou fotoknihu ve stejném formátu a orientaci, jaký jsi zvolil v Leporelu.",
+    "Nahraj vygenerované PDF (nebo jednotlivé stránky) přes Nahrát soubory a vlož je na stránky fotoknihy.",
+    "Zkontroluj, že každá fotografie vyplňuje stránku včetně spadávky a nic důležitého není mimo bezpečnou zónu.",
+    "Nahraj obálku zvlášť a doplň zadní stranu.",
+    "Projdi automatickou kontrolu Canvy a objednej tisk."
+  ]
+}
