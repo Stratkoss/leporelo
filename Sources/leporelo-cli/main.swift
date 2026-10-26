@@ -13,6 +13,8 @@ let usage = """
     Vytvoří <out>/<název>.leporelo z fotek ve složce (jpg, jpeg, heic, png, i v podsložkách):
     seskupí je po dnech, zanalyzuje, doporučí výběr, navrhne album, zkopíruje originály
     vybraných fotek, provede kontrolu před tiskem a exportuje PDF do <out>/export/.
+    Existující projekt se nikdy nepřepíše: pokud <out>/<název>.leporelo už existuje, běh skončí
+    chybou. Když běh selže dřív, než se zkopírují originály, rozpracovaný projekt se smaže.
 
     Volby:
       --folder <složka>   složka s fotkami (povinné)
@@ -129,6 +131,26 @@ func run(_ options: Options) async -> Int32 {
     let packageURL = out.appendingPathComponent(fileName(for: title) + ".leporelo", isDirectory: true)
     let exportURL = out.appendingPathComponent("export", isDirectory: true)
     let source = FolderPhotoSource(folder: folder)
+    let query = SourceQuery.dateRange(start: .distantPast, end: .distantFuture)
+
+    // Nothing to do: fail before creating anything on disk.
+    do {
+        guard try await !source.photos(matching: query).isEmpty else {
+            log("Chyba: ve složce \(folder.path) nejsou žádné čitelné fotky (jpg, jpeg, heic, png)")
+            return 2
+        }
+    } catch {
+        log("Chyba: složku \(folder.path) nelze přečíst: \(error)")
+        return 2
+    }
+
+    // A package this run created is removed again when the run fails before any original was
+    // copied into it. An existing package is never touched (createPackage refuses to overwrite).
+    var createdPackage: URL?
+    var keepPackage = false
+    defer {
+        if let createdPackage, !keepPackage { try? FileManager.default.removeItem(at: createdPackage) }
+    }
 
     do {
         try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
@@ -136,10 +158,11 @@ func run(_ options: Options) async -> Int32 {
         log("Projekt: \(packageURL.path)")
         let package = try Workflow.createPackage(at: packageURL, title: title, profileID: profile.id,
                                                  formatID: format.id)
+        createdPackage = packageURL
 
         log("Načítám fotky ze složky \(folder.path)…")
         var album = try await Workflow.buildAlbum(
-            from: source, query: .dateRange(start: .distantPast, end: .distantFuture), title: title,
+            from: source, query: query, title: title,
             profileID: profile.id, formatID: format.id, package: package, resolver: InMemoryPlaceResolver([]))
         let days = Set(album.photos.values.compactMap(\.dayKey)).count
         log("Fotek: \(album.photos.count), dnů: \(days)")
@@ -167,6 +190,11 @@ func run(_ options: Options) async -> Int32 {
         log("Kopíruji originály vybraných fotek…")
         album = await Workflow.downloadSelectedOriginals(album: album, source: source, package: package) { done, total in
             if total > 0, done == total || done % 10 == 0 { log("  originály \(done)/\(total)") }
+        }
+        // From here on the project holds copied originals: keep it, also on a preflight failure.
+        keepPackage = album.photos.values.contains { photo in
+            if case .stored = photo.originalState { return true }
+            return false
         }
         try package.save(album)
 

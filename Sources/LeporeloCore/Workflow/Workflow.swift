@@ -58,13 +58,22 @@ public enum Workflow {
     }
 
     /// Recommends photos per day and drafts the album (pure, deterministic):
-    /// days from `DayGrouper.group`, series from `SeriesDetector` (feature-print distance) applied to
-    /// the photos' `seriesID`, `Recommender.recommend` per day sets `isSelected`, then
-    /// `AlbumDrafter.draft`.
+    /// days from `DayGrouper.group` over the photos that have a `dayKey` (photos without one were
+    /// never grouped and are left out, unselected), series from `SeriesDetector` (feature-print
+    /// distance) applied to the photos' `seriesID`, `Recommender.recommend` per day sets
+    /// `isSelected` (every other photo is unselected), then `AlbumDrafter.draft`.
+    ///
+    /// No `places` / `timeZones` maps are passed: `DayGrouper.group` falls back to each photo's
+    /// stored `placeName` (set by `GroupingService.assignDays`), and a stored `dayKey` wins over the
+    /// zone computation.
     public static func recommendAndDraft(album: Album, profile: SupplierProfile, format: BookFormat,
                                          options: DraftOptions = .init()) -> Album {
         var result = album
-        var days = DayGrouper.group(Array(album.photos.values), timeZones: [:], places: [:])
+        // TODO(task19): keep the selection of photos the user decided (`selectionDecidedByUser`);
+        // until then the recommendation decides for all photos.
+        for id in album.photos.keys { result.photos[id]?.isSelected = false }
+        let dated = album.photos.values.filter { $0.dayKey != nil }
+        var days = DayGrouper.group(Array(dated), timeZones: [:], places: [:])
         var recommended = Set<PhotoID>()
         for i in days.indices {
             let series = SeriesDetector.detect(days[i].photos, distance: FeaturePrintDistance.distance)
@@ -74,8 +83,6 @@ public enum Workflow {
         for day in days {
             for photo in day.photos {
                 result.photos[photo.id]?.seriesID = photo.seriesID
-                // TODO(task19): only for photos whose selection the user has not decided yet
-                // (`selectionDecidedByUser`); until then the recommendation decides for all photos.
                 result.photos[photo.id]?.isSelected = recommended.contains(photo.id)
             }
         }
@@ -115,9 +122,10 @@ public enum Workflow {
         return updated
     }
 
-    /// The current time on the millisecond grid `AlbumCoding` stores, so the album `buildAlbum`
-    /// returns equals the one read back from the package.
-    static func now() -> Date {
+    /// The current time on the millisecond grid `AlbumCoding` stores. Anything that creates an
+    /// `Album` (or stamps a date on one) should use it, so the album in memory equals the one read
+    /// back from the package.
+    public static func now() -> Date {
         Date(timeIntervalSince1970: (Date().timeIntervalSince1970 * 1000).rounded() / 1000)
     }
 

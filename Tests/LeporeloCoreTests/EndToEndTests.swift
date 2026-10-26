@@ -43,11 +43,32 @@ import Testing
         #expect(album.photos.values.allSatisfy { $0.analysis != nil })
 
         album = Workflow.recommendAndDraft(album: album, profile: profile, format: format)
+        // Invariants only: the exact count depends on Vision's scores for the synthetic images.
         let selected = album.photos.values.filter(\.isSelected)
-        #expect(selected.count == 3 * Recommender.targetCount(photoCount: 10))
+        let byDay = album.photosByDay()
+        #expect(selected.count > 0)
+        #expect(selected.count <= byDay.values.map { Recommender.targetCount(photoCount: $0.count) }.reduce(0, +))
+        // The fixtures have hard edges (not blurred), so no day is entirely "defective" and every
+        // day keeps at least one recommended photo.
+        for (day, photos) in byDay {
+            let any = photos.contains { $0.isSelected }
+            #expect(any, "no photo selected on \(day)")
+        }
 
         album = await Workflow.downloadSelectedOriginals(album: album, source: source, package: package)
         try package.save(album)
+
+        // What the CLI saved after the downloads is what is on disk.
+        let (_, reopened) = try ProjectPackage.open(package.url)
+        #expect(reopened == album)
+        for photo in reopened.photos.values where photo.isSelected {
+            guard case .stored = photo.originalState else {
+                Issue.record("reopened: \(photo.sourceIdentifier) not stored: \(photo.originalState)")
+                continue
+            }
+            #expect(photo.deletedInSource == false)
+        }
+
         for photo in album.photos.values {
             if photo.isSelected {
                 guard case .stored = photo.originalState,

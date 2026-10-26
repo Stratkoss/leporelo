@@ -14,11 +14,12 @@ private func sourcePhoto(_ id: String, _ t: TimeInterval, zone: Int? = 7200) -> 
                 location: nil, pixelWidth: 4000, pixelHeight: 3000, kind: .photo, isCloudOnly: false)
 }
 
-private func photo(_ id: String, _ t: TimeInterval, day: Int, selected: Bool = false) -> Photo {
+private func photo(_ id: String, _ t: TimeInterval, day: Int?, selected: Bool = false,
+                   place: String? = nil) -> Photo {
     Photo(id: id, sourceIdentifier: "src-\(id)", capturedAt: Date(timeIntervalSince1970: t),
           timeZoneSeconds: 7200, location: nil, pixelWidth: 4000, pixelHeight: 3000, kind: .photo,
-          analysis: nil, isSelected: selected, dayKey: DayKey(year: 2026, month: 7, day: day),
-          placeName: nil, seriesID: nil, originalState: .missing, deletedInSource: false)
+          analysis: nil, isSelected: selected, dayKey: day.map { DayKey(year: 2026, month: 7, day: $0) },
+          placeName: place, seriesID: nil, originalState: .missing, deletedInSource: false)
 }
 
 private func album(_ photos: [Photo]) -> Album {
@@ -113,6 +114,54 @@ private func album(_ photos: [Photo]) -> Album {
         let photos = (0..<20).map { photo("p\($0)", day1 + Double($0) * 600, day: 1, selected: true) }
         let out = Workflow.recommendAndDraft(album: album(photos), profile: profile, format: format)
         #expect(out.photos.values.filter(\.isSelected).count == Recommender.targetCount(photoCount: 20))
+    }
+
+    @Test func recommendAndDraftKeepsPlaceNamesFromPhotos() throws {
+        let (profile, format) = try ProfileCatalog.format(profileID: "canva-photobook", formatID: "landscape-8x6in")
+        let photos = (0..<10).map { photo("p\($0)", day1 + Double($0) * 600, day: 1, place: "Positano") }
+        let out = Workflow.recommendAndDraft(album: album(photos), profile: profile, format: format)
+        let intro = try #require(out.spreads.first { $0.kind == .intro })
+        #expect(intro.texts.first { $0.role == .body }?.text.contains("Positano") == true)
+        let journal = try #require(out.spreads.first { $0.kind == .journal })
+        #expect(journal.texts.first { $0.role == .title }?.text == "Positano")
+    }
+
+    @Test func recommendAndDraftUnselectsUndatedPreselectedPhoto() throws {
+        let (profile, format) = try ProfileCatalog.format(profileID: "canva-photobook", formatID: "landscape-8x6in")
+        var photos = (0..<10).map { photo("p\($0)", day1 + Double($0) * 600, day: 1) }
+        // No dayKey (never grouped), alone on another day, preselected by an earlier state.
+        photos.append(photo("undated", day1 + 5 * 86_400, day: nil, selected: true))
+        let out = Workflow.recommendAndDraft(album: album(photos), profile: profile, format: format)
+        #expect(out.photos["undated"]?.isSelected == false)
+        #expect(!out.spreads.flatMap(\.frames).contains { $0.photoID == "undated" })
+        #expect(out.photos.values.filter(\.isSelected).count == Recommender.targetCount(photoCount: 10))
+    }
+
+    @Test func recommendAndDraftIsDeterministicForEqualTimestampsAndOrder() throws {
+        let (profile, format) = try ProfileCatalog.format(profileID: "canva-photobook", formatID: "landscape-8x6in")
+        // Pairs of photos with identical capturedAt (ties broken by id), 2 days.
+        var photos: [Photo] = []
+        for i in 0..<8 {
+            for twin in ["a", "b"] {
+                photos.append(photo("d1-\(i)\(twin)", day1 + Double(i) * 600, day: 1))
+                photos.append(photo("d2-\(i)\(twin)", day1 + 86_400 + Double(i) * 600, day: 2))
+            }
+        }
+        let forward = album(photos)
+        var backward = album([])
+        for p in photos.reversed() { backward.photos[p.id] = p }
+        var shuffled = album([])
+        var rng = SystemRandomNumberGenerator()
+        for p in photos.shuffled(using: &rng) { shuffled.photos[p.id] = p }
+
+        let reference = Workflow.recommendAndDraft(album: forward, profile: profile, format: format)
+        #expect(Workflow.recommendAndDraft(album: backward, profile: profile, format: format) == reference)
+        #expect(Workflow.recommendAndDraft(album: shuffled, profile: profile, format: format) == reference)
+    }
+
+    @Test func nowIsOnTheMillisecondGrid() {
+        let t = Workflow.now().timeIntervalSince1970 * 1000
+        #expect(t == t.rounded())
     }
 
     @Test func defaultFormatPrefersLandscape() {
