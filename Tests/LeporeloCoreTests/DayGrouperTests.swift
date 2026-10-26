@@ -66,4 +66,35 @@ import Foundation
         #expect(await r.place(for: GeoPoint(latitude: 40.6312, longitude: 14.4789))?.name == "P")
         #expect(await r.place(for: GeoPoint(latitude: 41, longitude: 14.48)) == nil)
     }
+
+    actor CountingResolver: PlaceResolver {
+        private(set) var calls = 0
+        private let known: PlaceKey
+        init(known: GeoPoint) { self.known = PlaceKey(known) }
+        func place(for point: GeoPoint) async -> Place? {
+            calls += 1
+            return PlaceKey(point) == known ? Place(name: "Known", timeZoneIdentifier: nil) : nil
+        }
+    }
+
+    @Test func resolverCalledOncePerDistinctKeyEvenWhenItFails() async {
+        let good = GeoPoint(latitude: 40.63, longitude: 14.48)
+        let bad = GeoPoint(latitude: 10.0, longitude: 20.0)
+        let resolver = CountingResolver(known: good)
+        let photos = [
+            T.photo("a", "2026-06-18T08:00:00Z", gps: good),
+            T.photo("b", "2026-06-18T09:00:00Z", gps: GeoPoint(latitude: 40.6312, longitude: 14.4789)),
+            T.photo("c", "2026-06-18T10:00:00Z", gps: bad),
+            T.photo("d", "2026-06-18T11:00:00Z", gps: GeoPoint(latitude: 10.001, longitude: 20.001)),
+            T.photo("e", "2026-06-18T12:00:00Z", gps: bad),
+        ]
+        var album = Album(formatVersion: Album.currentFormatVersion, id: "x", title: "t", supplierProfileID: "s",
+                          formatID: "f", world: "w", cover: nil, spreads: [],
+                          photos: Dictionary(uniqueKeysWithValues: photos.map { ($0.id, $0) }),
+                          source: nil, createdAt: Date(timeIntervalSince1970: 0))
+        await GroupingService.assignDays(to: &album, resolver: resolver)
+        #expect(await resolver.calls == 2)
+        #expect(album.photos["c"]?.placeName == nil)
+        #expect(album.photos["b"]?.placeName == "Known")
+    }
 }

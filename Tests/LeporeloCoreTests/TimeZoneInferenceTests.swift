@@ -31,14 +31,14 @@ import Foundation
     }
 
     @Test func midnightInItalyWithoutPlacesUsesNeighbourZone() {
-        // No places, no GPS on the second photo; the GPS photo 1 h earlier lends its zone.
-        let a = Self.photo("a", "2026-06-18T20:30:00Z", gps: Self.positano)
-        let b = Self.photo("b", "2026-06-18T21:30:00Z")
+        // a has GPS and its own +2 h offset; b has no GPS, 00:30 local on the 19th (22:30Z).
+        // UTC would put b on the 18th.
+        let a = Self.photo("a", "2026-06-18T21:30:00Z", gps: Self.positano, tz: 7200)
+        let b = Self.photo("b", "2026-06-18T22:30:00Z")
         let z = Self.zones([a, b])
-        #expect(z["b"] == z["a"])
+        #expect(z["b"] == 7200)
         let groups = DayGrouper.group([a, b], timeZones: z, places: [:])
-        #expect(groups.count == 1)
-        #expect(groups[0].dayKey == DayKey(year: 2026, month: 6, day: 18))
+        #expect(groups.map(\.dayKey) == [DayKey(year: 2026, month: 6, day: 18), DayKey(year: 2026, month: 6, day: 19)])
     }
 
     @Test func farZoneIsNotUTCNorMacZone() {

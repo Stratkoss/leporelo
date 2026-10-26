@@ -31,6 +31,7 @@ public enum TimeZoneInference {
             if let neighbour = nearest(to: photo, in: definite) {
                 result[photo.id] = result[neighbour.id]
             } else {
+                // Coarse by design: Italy (15°E zone is +1 h) comes out as +1 h even in summer (+2 h).
                 result[photo.id] = secondsFromGMT(forLongitude: location.longitude)
             }
         }

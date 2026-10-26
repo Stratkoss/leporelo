@@ -61,11 +61,12 @@ public enum GroupingService {
         let photos = album.photos.values.sorted { ($0.capturedAt, $0.id) < ($1.capturedAt, $1.id) }
 
         var resolved: [PlaceKey: Place] = [:]
+        var attempted: Set<PlaceKey> = []   // failed lookups are not retried within one call
         var places: [PhotoID: Place] = [:]
         for photo in photos {
             guard let location = photo.location else { continue }
             let key = PlaceKey(location)
-            if resolved[key] == nil, let place = await resolver.place(for: location) {
+            if attempted.insert(key).inserted, let place = await resolver.place(for: location) {
                 resolved[key] = place
             }
             if let place = resolved[key] { places[photo.id] = place }
