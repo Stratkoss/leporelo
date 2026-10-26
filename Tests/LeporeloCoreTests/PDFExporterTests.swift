@@ -166,12 +166,11 @@ private func imageDictionaries(_ data: Data) -> [String] {
     }
 
     @Test func imagesAreResampledToPlacedSizeInSRGB() async throws {
-        let (p, f) = try Fx.setup()
         let base = FixedProvider(image: p3Image(width: 4000, height: 3000))
         var album = Fx.album(spreads: 1)
         album.photos["p1"]?.pixelWidth = 4000
         album.photos["p1"]?.pixelHeight = 3000
-        let provider = ExportImageProvider(base: base, album: album, profile: p, format: f)
+        let provider = ExportImageProvider(base: base, album: album, jpegQuality: 0.92)
         // Frame 80 x 60 mm, 4:3 photo: the cover-fit image is 80 mm wide -> ceil(80 / 25.4 * 300) = 945 px.
         let img = try #require(await provider.image(for: "p1", minPixelWidth: 945))
         #expect(img.width == 945)
@@ -182,7 +181,7 @@ private func imageDictionaries(_ data: Data) -> [String] {
         #expect((base.recorded.first?.1 ?? 0) >= 4000)
         // Never upscaled above the source.
         let small = ExportImageProvider(base: FixedProvider(image: p3Image(width: 600, height: 450)),
-                                        album: Fx.album(spreads: 1), profile: p, format: f)
+                                        album: Fx.album(spreads: 1), jpegQuality: 0.92)
         let s = try #require(await small.image(for: "p2", minPixelWidth: 945))
         #expect(s.width == 600)
     }
@@ -190,15 +189,17 @@ private func imageDictionaries(_ data: Data) -> [String] {
     @Test func wideImageUsesCoverFitWidthNotFrameWidth() async throws {
         let (p, f) = try Fx.setup()
         var album = Fx.album(spreads: 1)
-        // Square 60 x 60 mm frame, 2:1 photo: cover-fit image is 120 mm wide -> ceil(120 / 25.4 * 300) = 1418.
+        // Square 60 x 60 mm frame, 2:1 photo: the renderer's hint is the drawn width, 120 mm ->
+        // ceil(120 / 25.4 * 300) = 1418 px, and the export provider resamples to exactly that.
         album.spreads[0].frames[0].rect = Rect(x: 20, y: 20, width: 60, height: 60)
-        album.cover = nil
         album.photos["p1"]?.pixelWidth = 4000
         album.photos["p1"]?.pixelHeight = 2000
-        let provider = ExportImageProvider(base: FixedProvider(image: p3Image(width: 4000, height: 2000)),
-                                           album: album, profile: p, format: f)
-        let img = try #require(await provider.image(for: "p1", minPixelWidth: 709))
-        #expect(img.width == 1418)
+        let base = FixedProvider(image: p3Image(width: 4000, height: 2000))
+        let provider = ExportImageProvider(base: base, album: album, jpegQuality: 0.92)
+        let renderer = SpreadRenderer(album: album, geometry: PageGeometry(format: f, profile: p), images: provider)
+        let options = RenderOptions(includeBleed: true, pixelsPerMM: 72 / 25.4, imageDPI: 300)
+        let loaded = await renderer.loadImages(for: album.spreads[0], options: options, area: .page)
+        #expect(try #require(loaded["p1"]).width == 1418)
     }
 
     @Test func preflightErrorBlocksExport() async throws {
@@ -300,13 +301,46 @@ private func imageDictionaries(_ data: Data) -> [String] {
         defer { try? FileManager.default.removeItem(at: dir) }
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         try Data("old".utf8).write(to: dir.appendingPathComponent("pages.pdf"))
-        let exporter = try Fx.exporter(album: Fx.album(spreads: 10))
-        let task = Task { try await exporter.export(to: dir) }
-        task.cancel()
-        await #expect(throws: CancellationError.self) { _ = try await task.value }
+        // Cancels the exporting task from inside the 3rd image request, i.e. mid-render.
+        let provider = CancellingProvider(image: p3Image(), cancelAt: 3)
+        let exporter = try Fx.exporter(album: Fx.album(spreads: 10), provider: provider)
+        await #expect(throws: CancellationError.self) { _ = try await exporter.export(to: dir) }
+        #expect(provider.calls >= 3)
+        #expect(provider.calls < 20)
         let names = try FileManager.default.contentsOfDirectory(atPath: dir.path)
         #expect(names == ["pages.pdf"])
         #expect(try Data(contentsOf: dir.appendingPathComponent("pages.pdf")) == Data("old".utf8))
+    }
+
+    @Test func pagesAreLeftThenRight() async throws {
+        let dir = Fx.tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let result = try await Fx.exporter(album: Fx.album(spreads: 10)).export(to: dir)
+        let doc = try #require(PDFDocument(url: result.pagesURL))
+        // The caption "Popisek i" of spread i sits on its left page only.
+        for i in 1...10 {
+            let left = doc.page(at: 2 * (i - 1))?.string ?? ""
+            let right = doc.page(at: 2 * (i - 1) + 1)?.string ?? ""
+            #expect(left.contains("Popisek \(i)"), "page \(2 * (i - 1))")
+            #expect(!right.contains("Popisek"), "page \(2 * (i - 1) + 1)")
+        }
+    }
+
+    @Test func staleTempFoldersAreSwept() async throws {
+        let dir = Fx.tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let fm = FileManager.default
+        let stale = dir.appendingPathComponent(".leporelo-export-stale", isDirectory: true)
+        let fresh = dir.appendingPathComponent(".leporelo-export-fresh", isDirectory: true)
+        let other = dir.appendingPathComponent("holiday-old", isDirectory: true)
+        for d in [stale, fresh, other] { try fm.createDirectory(at: d, withIntermediateDirectories: true) }
+        let twoHoursAgo = Date().addingTimeInterval(-2 * 3600)
+        try fm.setAttributes([.modificationDate: twoHoursAgo], ofItemAtPath: stale.path)
+        try fm.setAttributes([.modificationDate: twoHoursAgo], ofItemAtPath: other.path)
+        _ = try await Fx.exporter(album: Fx.album(spreads: 10)).export(to: dir)
+        #expect(!fm.fileExists(atPath: stale.path))
+        #expect(fm.fileExists(atPath: fresh.path))
+        #expect(fm.fileExists(atPath: other.path))
     }
 }
 
@@ -315,4 +349,25 @@ private final class Recorder: @unchecked Sendable {
     private var items: [(Int, Int)] = []
     func add(_ a: Int, _ b: Int) { lock.withLock { items.append((a, b)) } }
     var values: [(Int, Int)] { lock.withLock { items } }
+}
+
+/// Cancels the current task during the `cancelAt`-th image request.
+private final class CancellingProvider: ImageProvider, @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    let image: CGImage
+    let cancelAt: Int
+    init(image: CGImage, cancelAt: Int) {
+        self.image = image
+        self.cancelAt = cancelAt
+    }
+    var calls: Int { lock.withLock { count } }
+    func image(for photoID: PhotoID, minPixelWidth: Int) async -> CGImage? {
+        let n = lock.withLock { () -> Int in
+            count += 1
+            return count
+        }
+        if n == cancelAt { withUnsafeCurrentTask { $0?.cancel() } }
+        return image
+    }
 }

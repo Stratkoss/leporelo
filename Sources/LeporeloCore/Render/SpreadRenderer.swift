@@ -34,10 +34,12 @@ public struct RenderOptions: Sendable {
 /// cropping) translates/scales before calling. Fonts are sized in mm because the drawing space is
 /// mm; `points(fromMM:)` gives the equivalent size in points.
 ///
-/// Bleed convention: a frame edge lying on an edge of the rendered trim rect is stretched by
-/// `bleedMM` when `includeBleed` is true. For whole spreads that is the spread's outer boundary
-/// (the spine is not bled across); for `drawPage` the page's own boundary, so the spine edge
-/// counts as outer and spine-touching frames bleed into the spine-side margin of their own page.
+/// Bleed convention (`PageGeometry.bleedExtended`, shared with `Preflight` and the export): a frame
+/// edge lying on an outer edge of the print area is stretched by `bleedMM` when `includeBleed` is
+/// true. For whole spreads (`.spread`) that is the spread's outer boundary (the spine is not bled
+/// across); for `drawPage` (`.page`) every page edge including the spine, so spine-touching frames
+/// bleed into the spine-side margin of their own page, and a frame spanning the spine is extended
+/// identically on both pages (the two halves line up).
 /// A page shows only frames and texts that overlap its trim rect, clipped to its visible area,
 /// so it never shows a neighbour page's content in its margin.
 ///
@@ -64,21 +66,23 @@ public struct SpreadRenderer: Sendable {
         var trim: Rect
         var safeRects: [Rect]
         var spineX: Double?
+        var area: PrintArea
     }
 
     private var spreadRegion: Region {
         Region(trim: Rect(origin: Point(x: 0, y: 0), size: geometry.spreadSize),
                safeRects: [geometry.safeRect(side: .left), geometry.safeRect(side: .right)],
-               spineX: geometry.format.pageWidthMM)
+               spineX: geometry.format.pageWidthMM, area: .spread)
     }
 
     private func pageRegion(_ side: PageSide) -> Region {
         Region(trim: geometry.pageRect(side: side), safeRects: [geometry.safeRect(side: side)],
-               spineX: geometry.format.pageWidthMM)
+               spineX: geometry.format.pageWidthMM, area: .page)
     }
 
     private var coverRegion: Region {
-        Region(trim: geometry.pageRect(side: .left), safeRects: [geometry.safeRect(side: .left)], spineX: nil)
+        Region(trim: geometry.pageRect(side: .left), safeRects: [geometry.safeRect(side: .left)], spineX: nil,
+               area: .cover)
     }
 
     /// Visible area in spread (or cover page) coordinates, in mm.
@@ -89,15 +93,25 @@ public struct SpreadRenderer: Sendable {
     // MARK: Image loading
 
     /// Loads each distinct photo of the spread once (frames sharing a photo share the image).
-    /// The size hint is the widest frame using the photo at `imageDPI` (default `pixelsPerMM * 25.4`).
-    public func loadImages(for spread: Spread, options: RenderOptions) async -> [PhotoID: CGImage] {
+    ///
+    /// The size hint is the widest DRAWN width of the photo at `imageDPI` (default
+    /// `pixelsPerMM * 25.4`): `ceil(w / 25.4 * dpi)` where `w` is the width in mm of
+    /// `FrameFit.imageRect` on the frame extended by the bleed of `area` (when `includeBleed`), with
+    /// the photo's `pixelWidth`/`pixelHeight` from the album and the frame's offset and zoom. That
+    /// is what the cover-fitted image actually spans, so a photo wider than its frame, a zoomed one
+    /// or one bled over the trim edge is requested large enough. A photo the album does not know (or
+    /// without pixel sizes) falls back to the extended frame width.
+    /// `area` must match how the spread is drawn: `.spread` for `draw`/`render`, `.page` for
+    /// `drawPage`/`renderPage`, `.cover` for `drawCover`/`renderCover`.
+    public func loadImages(for spread: Spread, options: RenderOptions,
+                           area: PrintArea = .spread) async -> [PhotoID: CGImage] {
         let dpi = options.imageDPI ?? options.pixelsPerMM * 25.4
         var widest: [PhotoID: Double] = [:]
         var order: [PhotoID] = []
         for frame in spread.frames {
             guard let id = frame.photoID else { continue }
             if widest[id] == nil { order.append(id) }
-            widest[id] = max(widest[id] ?? 0, frame.rect.size.width)
+            widest[id] = max(widest[id] ?? 0, drawnWidth(frame, photoID: id, area: area, options: options))
         }
         var result: [PhotoID: CGImage] = [:]
         for id in order {
@@ -107,6 +121,17 @@ public struct SpreadRenderer: Sendable {
             }
         }
         return result
+    }
+
+    /// Width in mm the photo of `frame` is drawn at (cover-fit on the bleed-extended frame, zoom included).
+    private func drawnWidth(_ frame: Frame, photoID: PhotoID, area: PrintArea, options: RenderOptions) -> Double {
+        let printed = geometry.bleedExtended(frame.rect, area: area, includeBleed: options.includeBleed)
+        guard let photo = album.photos[photoID], photo.pixelWidth > 0, photo.pixelHeight > 0 else {
+            return printed.size.width
+        }
+        let fit = FrameFit.imageRect(imageSize: Size(width: Double(photo.pixelWidth), height: Double(photo.pixelHeight)),
+                                     in: printed, offset: frame.offset, zoom: frame.zoom)
+        return fit.size.width
     }
 
     // MARK: Synchronous drawing (for NSView.draw and other sync callers)
@@ -130,19 +155,19 @@ public struct SpreadRenderer: Sendable {
     // MARK: Async wrappers
 
     public func render(_ spread: Spread, into ctx: CGContext, options: RenderOptions) async {
-        let loaded = await loadImages(for: spread, options: options)
+        let loaded = await loadImages(for: spread, options: options, area: .spread)
         draw(spread, images: loaded, into: ctx, options: options)
     }
 
     /// One page of a spread; used per page for PDF export.
     public func renderPage(_ spread: Spread, side: PageSide, into ctx: CGContext, options: RenderOptions) async {
-        let loaded = await loadImages(for: spread, options: options)
+        let loaded = await loadImages(for: spread, options: options, area: .page)
         drawPage(spread, side: side, images: loaded, into: ctx, options: options)
     }
 
     /// ONE cover page (front or back).
     public func renderCover(_ page: Spread, into ctx: CGContext, options: RenderOptions) async {
-        let loaded = await loadImages(for: page, options: options)
+        let loaded = await loadImages(for: page, options: options, area: .cover)
         drawCover(page, images: loaded, into: ctx, options: options)
     }
 
@@ -193,7 +218,6 @@ public struct SpreadRenderer: Sendable {
         let area = visibleArea(region, options)
         let scale = options.pixelsPerMM
         let trim = region.trim
-        let bleed = options.includeBleed ? geometry.profile.bleedMM : 0
 
         ctx.saveGState()
         defer { ctx.restoreGState() }
@@ -208,7 +232,8 @@ public struct SpreadRenderer: Sendable {
         ctx.clip(to: cgRect(area))
 
         for frame in spread.frames where frame.rect.intersects(trim) {
-            drawFrame(frame, image: frame.photoID.flatMap { images[$0] }, in: ctx, trim: trim, bleed: bleed)
+            let rect = geometry.bleedExtended(frame.rect, area: region.area, includeBleed: options.includeBleed)
+            drawFrame(frame, rect: rect, image: frame.photoID.flatMap { images[$0] }, in: ctx)
         }
         for box in spread.texts where box.rect.intersects(trim) {
             drawText(box, in: ctx, pageWidth: geometry.format.pageWidthMM, isSpread: region.spineX != nil)
@@ -222,20 +247,8 @@ public struct SpreadRenderer: Sendable {
         CGRect(x: r.minX, y: r.minY, width: r.size.width, height: r.size.height)
     }
 
-    /// Frame rect with outer-boundary edges stretched by `bleed`.
-    private func bleedExtended(_ r: Rect, trim: Rect, bleed: Double) -> Rect {
-        guard bleed > 0 else { return r }
-        let eps = 0.01
-        var minX = r.minX, maxX = r.maxX, minY = r.minY, maxY = r.maxY
-        if abs(minX - trim.minX) < eps { minX -= bleed }
-        if abs(maxX - trim.maxX) < eps { maxX += bleed }
-        if abs(minY - trim.minY) < eps { minY -= bleed }
-        if abs(maxY - trim.maxY) < eps { maxY += bleed }
-        return Rect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
-    }
-
-    private func drawFrame(_ frame: Frame, image: CGImage?, in ctx: CGContext, trim: Rect, bleed: Double) {
-        let rect = bleedExtended(frame.rect, trim: trim, bleed: bleed)
+    /// `rect` is the frame extended by the bleed (`PageGeometry.bleedExtended`).
+    private func drawFrame(_ frame: Frame, rect: Rect, image: CGImage?, in ctx: CGContext) {
         ctx.saveGState()
         defer { ctx.restoreGState() }
         ctx.clip(to: cgRect(rect))

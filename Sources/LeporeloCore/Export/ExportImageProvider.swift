@@ -16,37 +16,30 @@ import UniformTypeIdentifiers
 ///    Quartz's PDF context embeds such an image's JPEG data unchanged as a `/DCTDecode` stream,
 ///    so the PDF is not recompressed (verified by `PDFExporterTests.imagesEmbeddedAsJPEG`).
 ///
-/// Target width. The renderer's `minPixelWidth` hint is the widest frame using the photo at the
-/// image DPI, i.e. `ceil(frameWidthMM / 25.4 * dpi)`. That is the frame width, not the width of the
-/// cover-fitted image: a photo wider than its frame (or zoomed, or bled over the trim edge) is
-/// drawn wider than the frame, and resampling it to the frame width would drop it below the output
-/// DPI (a 2:1 photo in a square frame would print at 150 DPI instead of 300). So the provider also
-/// precomputes, once per export, the need of each photo over all frames of the album:
-/// `ceil(imageWidthMM / 25.4 * dpi)` where `imageWidthMM` is the width of `FrameFit.imageRect` on the
-/// frame extended by the bleed on its outer edges (same rule as `Preflight` and the renderer), zoom
-/// included. The target is `min(sourceWidth, max(hint, need))`.
+/// Target width: `min(sourceWidth, minPixelWidth)`. The hint comes from
+/// `SpreadRenderer.loadImages`, which computes it from the photo's DRAWN width (cover-fit on the
+/// bleed-extended frame, zoom included) at `RenderOptions.imageDPI` (the profile's output DPI), the
+/// widest need when a photo is in several frames. There is no second geometry here.
 ///
-/// Cache: one entry per photo (the target is the album-wide maximum, so all frames of a photo get
-/// the same image). `PDFExporter` calls `clearCache()` after each spread, so the two pages of a
-/// spread share the work and memory stays bounded to one spread's photos.
+/// Cache: one entry per photo, reused when it was made for at least the requested target.
+/// `PDFExporter` calls `clearCache()` after each spread, so the two pages of a spread share the
+/// work and memory stays bounded to one spread's photos.
 actor ExportImageProvider: ImageProvider {
     private let base: ImageProvider
     private let jpegQuality: Double
     private let sourceWidth: [PhotoID: Int]
-    private let need: [PhotoID: Int]
     private var cache: [PhotoID: (width: Int, image: CGImage)] = [:]
 
-    init(base: ImageProvider, album: Album, profile: SupplierProfile, format: BookFormat) {
+    init(base: ImageProvider, album: Album, jpegQuality: Double) {
         self.base = base
-        self.jpegQuality = profile.output.jpegQuality
+        self.jpegQuality = jpegQuality
         self.sourceWidth = album.photos.mapValues(\.pixelWidth)
-        self.need = Self.needs(album: album, profile: profile, format: format)
     }
 
     func clearCache() { cache.removeAll() }
 
     func image(for photoID: PhotoID, minPixelWidth: Int) async -> CGImage? {
-        let wanted = max(minPixelWidth, need[photoID] ?? 0, 1)
+        let wanted = max(minPixelWidth, 1)
         // `width` in the cache is the requested target (before capping at the source width).
         if let hit = cache[photoID], hit.width >= wanted { return hit.image }
         let original = max(sourceWidth[photoID] ?? 0, wanted)
@@ -85,43 +78,5 @@ actor ExportImageProvider: ImageProvider {
         CGImageDestinationAddImage(dest, bitmap, [kCGImageDestinationLossyCompressionQuality: quality] as CFDictionary)
         guard CGImageDestinationFinalize(dest) else { return nil }
         return out as Data
-    }
-
-    /// Album-wide pixel width needed per photo at the output DPI (cover-fit, zoom and bleed included).
-    static func needs(album: Album, profile: SupplierProfile, format: BookFormat) -> [PhotoID: Int] {
-        let dpi = Double(profile.output.dpi)
-        let w = format.pageWidthMM, h = format.pageHeightMM
-        let spreadX = profile.pageMode == .singlePages ? [0, w, 2 * w] : [0, 2 * w]
-        var result: [PhotoID: Int] = [:]
-
-        func add(_ spread: Spread, outerX: [Double]) {
-            for frame in spread.frames {
-                guard let id = frame.photoID, let photo = album.photos[id],
-                      photo.pixelWidth > 0, photo.pixelHeight > 0 else { continue }
-                let printed = bleedExtended(frame.rect, outerX: outerX, outerY: [0, h], bleed: profile.bleedMM)
-                let fit = FrameFit.imageRect(imageSize: Size(width: Double(photo.pixelWidth),
-                                                             height: Double(photo.pixelHeight)),
-                                             in: printed, offset: frame.offset, zoom: frame.zoom)
-                let px = Int((fit.size.width / 25.4 * dpi - 1e-9).rounded(.up))
-                result[id] = max(result[id] ?? 0, px)
-            }
-        }
-        for spread in album.spreads { add(spread, outerX: spreadX) }
-        if let cover = album.cover {
-            add(cover.front, outerX: [0, w])
-            add(cover.back, outerX: [0, w])
-        }
-        return result
-    }
-
-    private static func bleedExtended(_ r: Rect, outerX: [Double], outerY: [Double], bleed: Double) -> Rect {
-        let eps = 0.01
-        func on(_ v: Double, _ edges: [Double]) -> Bool { edges.contains { abs($0 - v) < eps } }
-        var minX = r.minX, maxX = r.maxX, minY = r.minY, maxY = r.maxY
-        if on(minX, outerX) { minX -= bleed }
-        if on(maxX, outerX) { maxX += bleed }
-        if on(minY, outerY) { minY -= bleed }
-        if on(maxY, outerY) { maxY += bleed }
-        return Rect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
     }
 }

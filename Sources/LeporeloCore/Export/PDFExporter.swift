@@ -38,6 +38,7 @@ public struct ExportResult: Sendable, Equatable {
 ///   JPEG at `output.jpegQuality`, embedded as DCT without recompression). Core Text embeds the
 ///   fonts (subsets) in the PDF.
 /// - Files: `pages.pdf`, `cover.pdf`, `co-nahrat-kam.txt` in `directory` (created when missing).
+///   Stale temp folders (older than one hour) from crashed exports are swept first.
 ///   Everything is written into a hidden temp folder in `directory` first and moved into place
 ///   only when complete, so a failed or cancelled export never replaces good files with partial
 ///   ones; the temp folder is always removed.
@@ -48,6 +49,9 @@ public struct ExportResult: Sendable, Equatable {
 public struct PDFExporter: Sendable {
     public static let pagesFileName = "pages.pdf"
     public static let coverFileName = "cover.pdf"
+    static let tempPrefix = ".leporelo-export-"
+    /// Temp folders older than this are left over from a crashed export and are removed.
+    static let staleTempAge: TimeInterval = 3600
 
     public let album: Album
     public let profile: SupplierProfile
@@ -70,11 +74,12 @@ public struct PDFExporter: Sendable {
 
         let fm = FileManager.default
         try fm.createDirectory(at: directory, withIntermediateDirectories: true)
-        let temp = directory.appendingPathComponent(".leporelo-export-\(UUID().uuidString)", isDirectory: true)
+        Self.sweepStaleTempFolders(in: directory)
+        let temp = directory.appendingPathComponent("\(Self.tempPrefix)\(UUID().uuidString)", isDirectory: true)
         try fm.createDirectory(at: temp, withIntermediateDirectories: false)
         defer { try? fm.removeItem(at: temp) }
 
-        let provider = ExportImageProvider(base: images, album: album, profile: profile, format: format)
+        let provider = ExportImageProvider(base: images, album: album, jpegQuality: profile.output.jpegQuality)
         let geometry = PageGeometry(format: format, profile: profile)
         let renderer = SpreadRenderer(album: album, geometry: geometry, images: provider)
         let options = RenderOptions(showGuides: false, includeBleed: true, pixelsPerMM: 72 / 25.4,
@@ -145,6 +150,20 @@ public struct PDFExporter: Sendable {
         let coverURL = try tempCover.map { try Self.moveIntoPlace($0, directory: directory) }
         let readmeURL = try Self.moveIntoPlace(tempReadme, directory: directory)
         return ExportResult(pagesURL: pagesURL, coverURL: coverURL, readmeURL: readmeURL, pageCount: pageCount)
+    }
+
+    /// Removes `.leporelo-export-*` folders older than `staleTempAge` (a crash or kill can skip the
+    /// `defer` cleanup). Younger ones may belong to an export running right now and are kept.
+    /// Errors are ignored.
+    static func sweepStaleTempFolders(in directory: URL, now: Date = Date()) {
+        let fm = FileManager.default
+        guard let items = try? fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.contentModificationDateKey],
+                                                      options: []) else { return }
+        for item in items where item.lastPathComponent.hasPrefix(tempPrefix) {
+            guard let modified = try? item.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate,
+                  now.timeIntervalSince(modified) > staleTempAge else { continue }
+            try? fm.removeItem(at: item)
+        }
     }
 
     /// Replaces `directory/<name>` atomically (same volume) or moves the file there.

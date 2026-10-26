@@ -48,18 +48,17 @@ public enum Preflight {
         let spreadArea = Area(
             trim: Rect(x: 0, y: 0, width: 2 * w, height: h),
             safe: [geometry.safeRect(side: .left), geometry.safeRect(side: .right)],
-            outerX: profile.pageMode == .singlePages ? [0, w, 2 * w] : [0, 2 * w], outerY: [0, h],
-            spineX: w)
+            printArea: geometry.spreadPrintArea, spineX: w)
         let coverArea = Area(
             trim: Rect(x: 0, y: 0, width: w, height: h),
-            safe: [geometry.safeRect(side: .left)], outerX: [0, w], outerY: [0, h], spineX: nil)
+            safe: [geometry.safeRect(side: .left)], printArea: .cover, spineX: nil)
 
         for spread in album.spreads {
-            issues += check(spread, area: spreadArea, album: album, profile: profile)
+            issues += check(spread, area: spreadArea, album: album, geometry: geometry)
         }
         if let cover = album.cover {
-            issues += check(cover.front, area: coverArea, album: album, profile: profile)
-            issues += check(cover.back, area: coverArea, album: album, profile: profile)
+            issues += check(cover.front, area: coverArea, album: album, geometry: geometry)
+            issues += check(cover.back, area: coverArea, album: album, geometry: geometry)
         } else if profile.coverMode != .none {
             issues.append(PreflightIssue(id: "noCover", severity: .error, spreadID: nil, frameID: nil,
                                          message: "Album nemá obálku"))
@@ -95,14 +94,14 @@ public enum Preflight {
     private struct Area {
         var trim: Rect
         var safe: [Rect]
-        /// x / y coordinates of the outer boundary where frames get bleed.
-        var outerX: [Double]
-        var outerY: [Double]
+        /// Where frames get bleed (`PageGeometry.bleedExtended`).
+        var printArea: PrintArea
         var spineX: Double?
     }
 
     private static func check(_ spread: Spread, area: Area, album: Album,
-                              profile: SupplierProfile) -> [PreflightIssue] {
+                              geometry: PageGeometry) -> [PreflightIssue] {
+        let profile = geometry.profile
         var issues: [PreflightIssue] = []
         func add(_ rule: String, _ severity: PreflightSeverity, frame: String? = nil, key: String? = nil,
                  _ message: String) {
@@ -130,7 +129,7 @@ public enum Preflight {
             case .unavailable: add("original", .error, frame: frame.id, "Originál fotky není dostupný v iCloudu")
             }
 
-            let printed = bleedExtended(frame.rect, area: area, bleed: profile.bleedMM)
+            let printed = geometry.bleedExtended(frame.rect, area: area.printArea)
             let dpi = FrameFit.effectiveDPI(pixelWidth: photo.pixelWidth, pixelHeight: photo.pixelHeight,
                                             frame: printed, zoom: frame.zoom)
             if dpi < warningDPI {
@@ -195,16 +194,6 @@ public enum Preflight {
                                       message: "Obličej je blízko hřbetu a může zapadnout do vazby"))
         }
         return out
-    }
-
-    private static func bleedExtended(_ r: Rect, area: Area, bleed: Double) -> Rect {
-        func on(_ v: Double, _ edges: [Double]) -> Bool { edges.contains { abs($0 - v) < eps } }
-        var minX = r.minX, maxX = r.maxX, minY = r.minY, maxY = r.maxY
-        if on(minX, area.outerX) { minX -= bleed }
-        if on(maxX, area.outerX) { maxX += bleed }
-        if on(minY, area.outerY) { minY -= bleed }
-        if on(maxY, area.outerY) { maxY += bleed }
-        return Rect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
     }
 
     private static func contains(_ outer: Rect, _ inner: Rect) -> Bool {

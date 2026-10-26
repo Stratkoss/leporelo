@@ -60,11 +60,12 @@ private func redImage(width: Int = 256, height: Int = 256) -> CGImage {
 private let ppmm = 4.0
 private let bleed = 3.0
 
-private func makeRenderer(images: ImageProvider = PlaceholderImageProvider()) throws -> (SpreadRenderer, PageGeometry) {
+private func makeRenderer(images: ImageProvider = PlaceholderImageProvider(),
+                          photos: [PhotoID: Photo] = [:]) throws -> (SpreadRenderer, PageGeometry) {
     let (p, f) = try ProfileCatalog.format(profileID: "canva-photobook", formatID: "landscape-a4")
     let geo = PageGeometry(format: f, profile: p)
     let album = Album(formatVersion: 1, id: "a", title: "Amalfi", supplierProfileID: p.id, formatID: f.id,
-                      world: "journal-gallery", cover: nil, spreads: [], photos: [:], source: nil,
+                      world: "journal-gallery", cover: nil, spreads: [], photos: photos, source: nil,
                       createdAt: Date(timeIntervalSince1970: 0))
     return (SpreadRenderer(album: album, geometry: geo, images: images), geo)
 }
@@ -309,5 +310,62 @@ private func inkRange(_ bmp: Bitmap, box: Rect) -> (first: Double, last: Double)
         let ink = try #require(inkRange(bmp, box: box))
         #expect(ink.first < box.minY + 6)
         #expect(ink.last - ink.first > 15)
+    }
+}
+
+// MARK: - Fix round 2 (Task 12 review): hint = drawn cover-fit width
+
+private func sizedPhoto(_ id: String, _ w: Int, _ h: Int) -> Photo {
+    Photo(id: id, sourceIdentifier: id, capturedAt: Date(timeIntervalSince1970: 0), timeZoneSeconds: 0,
+          location: nil, pixelWidth: w, pixelHeight: h, kind: .photo, analysis: nil, isSelected: true,
+          dayKey: nil, placeName: nil, seriesID: nil, originalState: .stored(relativePath: "o.jpg"),
+          deletedInSource: false)
+}
+
+@Suite struct SpreadRendererHintTests {
+    static let pdf = 72 / 25.4
+
+    @Test func hintIsDrawnWidthOfWidePhotoInSquareFrame() async throws {
+        let rec = RecordingProvider(image: redImage())
+        let (r, _) = try makeRenderer(images: rec, photos: ["p1": sizedPhoto("p1", 4000, 2000)])
+        // 60 x 60 mm frame, 2:1 photo: drawn 120 mm wide -> ceil(120 / 25.4 * 300) = 1418.
+        let s = spread(frames: [frame("a", Rect(x: 20, y: 20, width: 60, height: 60), photo: "p1")])
+        _ = await r.loadImages(for: s, options: RenderOptions(includeBleed: true, pixelsPerMM: Self.pdf, imageDPI: 300))
+        #expect(rec.recorded.map(\.1) == [1418])
+    }
+
+    @Test func hintIncludesZoom() async throws {
+        let rec = RecordingProvider(image: redImage())
+        let (r, _) = try makeRenderer(images: rec, photos: ["p1": sizedPhoto("p1", 4000, 3000)])
+        // 80 x 60 mm frame, 4:3 photo, zoom 2: drawn 160 mm wide -> ceil(160 / 25.4 * 300) = 1890.
+        var f = frame("a", Rect(x: 20, y: 20, width: 80, height: 60), photo: "p1")
+        f.zoom = 2
+        _ = await r.loadImages(for: spread(frames: [f]),
+                               options: RenderOptions(includeBleed: true, pixelsPerMM: Self.pdf, imageDPI: 300))
+        #expect(rec.recorded.map(\.1) == [1890])
+    }
+
+    @Test func hintIncludesBleedOfThePrintArea() async throws {
+        let rec = RecordingProvider(image: redImage())
+        let (r, _) = try makeRenderer(images: rec, photos: ["p1": sizedPhoto("p1", 4000, 3000)])
+        // Full left page 297 x 210, 4:3 photo. Per page every edge bleeds: 303 x 216 -> width-limited,
+        // drawn 303 mm -> 3579. As a spread the spine edge does not bleed: 300 x 216 -> 3544.
+        let s = spread(frames: [frame("a", Rect(x: 0, y: 0, width: 297, height: 210), photo: "p1")])
+        let opts = RenderOptions(includeBleed: true, pixelsPerMM: Self.pdf, imageDPI: 300)
+        _ = await r.loadImages(for: s, options: opts, area: .page)
+        _ = await r.loadImages(for: s, options: opts, area: .spread)
+        _ = await r.loadImages(for: s, options: RenderOptions(includeBleed: false, pixelsPerMM: Self.pdf, imageDPI: 300),
+                               area: .page)
+        #expect(rec.recorded.map(\.1) == [3579, 3544, 3508])
+    }
+
+    @Test func sharedPhotoUsesWidestDrawnNeed() async throws {
+        let rec = RecordingProvider(image: redImage())
+        let (r, _) = try makeRenderer(images: rec, photos: ["p1": sizedPhoto("p1", 4000, 2000)])
+        // Frame a is wider (100 x 30, drawn 100 mm) but frame b (60 x 60) draws the photo 120 mm wide.
+        let s = spread(frames: [frame("a", Rect(x: 20, y: 20, width: 100, height: 30), photo: "p1"),
+                                frame("b", Rect(x: 320, y: 20, width: 60, height: 60), photo: "p1")])
+        _ = await r.loadImages(for: s, options: RenderOptions(includeBleed: true, pixelsPerMM: Self.pdf, imageDPI: 300))
+        #expect(rec.recorded.map(\.1) == [1418])
     }
 }
