@@ -171,7 +171,8 @@ import Foundation
         #expect(placed.count == selected.count)
         #expect(!placed.contains(outside))
         let generated = r.spreads.filter { !$0.manuallyEdited }
-        #expect(Set(D.placed(manual)).isDisjoint(with: D.placed(generated)))
+        // Intro/closing may repeat a day photo (fix round 1); generated day spreads may not.
+        #expect(Set(D.placed(manual)).isDisjoint(with: D.placed(Self.daySpreads(r).filter { !$0.manuallyEdited })))
 
         // Day spreads stay chronological; non-blank generated spreads have no empty frame.
         let keys = Self.daySpreads(r).compactMap(\.dayKey)
@@ -180,6 +181,73 @@ import Foundation
         #expect(r.cover?.front.frames.first?.photoID == a.cover?.front.frames.first?.photoID)
         // Deterministic.
         #expect(AlbumUpdater.redraft(album: a, days: days, profile: p, format: f).album == r)
+    }
+
+    // Fix round 1, item 1: an empty leftover pool must not drop the intro and closing.
+    @Test func redraftWithEveryDaySpreadManualKeepsIntroAndClosing() throws {
+        let (p, f) = try D.canva()   // min 20 pages
+        let days = [D.day(Self.june18, D.dayPhotos("a", Self.june18, count: 8)),
+                    D.day(Self.june19, D.dayPhotos("b", Self.june19, count: 4))]
+        var a = D.draft(days, profile: p, format: f)
+        for s in Self.daySpreads(a) {
+            a = try a.applying(.setText(spreadID: s.id, textID: s.texts[0].id, text: "ručně")).album
+        }
+        let manual = a.spreads.filter(\.manuallyEdited)
+        #expect(manual.count == Self.daySpreads(a).count)
+        let (r, kept) = AlbumUpdater.redraft(album: a, days: days, profile: p, format: f)
+        #expect(kept == manual.count)
+        for m in manual { #expect(r.spreads.contains(m), "\(m.id)") }
+        #expect(r.spreads.first?.kind == .intro)
+        #expect(r.spreads.last?.kind == .closing)
+        #expect(r.spreads.first?.frames.first?.photoID != nil)
+        #expect(r.spreads.last?.frames.first?.photoID != nil)
+        #expect(r.cover?.front.frames.first?.photoID != nil)
+        #expect(Self.daySpreads(r).count == manual.count)
+        #expect(p.pageCount.isSatisfied(by: AlbumDrafter.pageCount(of: r)))
+        #expect(Set(r.spreads.map(\.id)).count == r.spreads.count)
+    }
+
+    // Fix round 1, item 2: a kept journal means no second journal and no second date header.
+    @Test func redraftWithKeptJournalAddsHeaderlessGalleries() throws {
+        let (p, f) = try D.canva(Self.lax)
+        let days = [D.day(Self.june18, D.dayPhotos("a", Self.june18, count: 8), places: ["Ravello"])]
+        var a = D.draft(days, profile: p, format: f)
+        let journal = try #require(a.spreads.first { $0.kind == .journal })
+        #expect(journal.templateID == "journal-5")
+        a = try a.applying(.setText(spreadID: journal.id, textID: "body", text: "Loď")).album
+        let kept = try #require(a.spreads.first { $0.id == journal.id })
+        let leftover = Set(a.selectedPhotos.map(\.id)).subtracting(kept.frames.compactMap(\.photoID))
+        #expect(leftover.count == 3)
+
+        let (r, count) = AlbumUpdater.redraft(album: a, days: days, profile: p, format: f)
+        #expect(count == 1)
+        let day = Self.daySpreads(r)
+        #expect(day.filter { $0.kind == .journal } == [kept])
+        let galleries = day.filter { $0.kind == .gallery }
+        #expect(!galleries.isEmpty)
+        for g in galleries {
+            #expect(g.texts.allSatisfy { $0.text.isEmpty }, "\(g.id)")
+        }
+        let placed = D.placed(galleries)
+        #expect(placed.count == 3 && Set(placed) == leftover)
+    }
+
+    // Fix round 1, item 2: a kept gallery with a date caption suppresses captions of new galleries.
+    @Test func redraftWithKeptCaptionedGalleryAddsNoSecondCaption() throws {
+        let (p, f) = try D.canva(Self.lax)
+        let days = [D.day(Self.june18, D.dayPhotos("a", Self.june18, count: 2), places: ["Ravello"])]
+        var a = D.draft(days, profile: p, format: f)
+        let first = try #require(Self.daySpreads(a).first)
+        #expect(D.text(first, .caption) == "čtvrtek 18. června 2026, Ravello")
+        // Keep the captioned gallery but move one photo out of it into the pool.
+        let moved = try #require(first.frames.last?.photoID)
+        a = AlbumUpdater.photoDeselected(moved, in: a)
+        a = try a.applying(.setText(spreadID: first.id, textID: "caption", text: "čtvrtek 18. června 2026, Ravello")).album
+        a.photos[moved]?.isSelected = true
+        let (r, _) = AlbumUpdater.redraft(album: a, days: days, profile: p, format: f)
+        let generated = Self.daySpreads(r).filter { !$0.manuallyEdited }
+        #expect(D.placed(generated) == [moved])
+        for g in generated { #expect(D.text(g, .caption) == "", "\(g.id)") }
     }
 
     @Test func redraftWithoutManualMatchesDraft() throws {

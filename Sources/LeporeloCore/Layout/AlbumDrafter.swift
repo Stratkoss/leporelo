@@ -31,11 +31,18 @@ public enum AlbumDrafter {
               includeIntro: true, reservedSpreads: 0)
     }
 
-    /// `draft` with two knobs for `AlbumUpdater.redraft`: `includeIntro: false` plans no intro
-    /// spread (the cover is still built), and `reservedSpreads` counts spreads the caller will add
-    /// (kept manual spreads) when padding to the page-count rule.
+    /// `draft` with knobs for `AlbumUpdater.redraft`:
+    /// - `includeIntro: false` plans no intro spread (the cover is still built);
+    /// - `reservedSpreads` counts spreads the caller will add (kept manual spreads) when padding;
+    /// - `excludedFromDays`: photos that per-day planning (journal/gallery) skips. The intro, closing
+    ///   and cover photos, the intro body and the empty-selection guard still use the FULL selection.
+    ///   A day left with no photos gets no spreads;
+    /// - `galleryOnlyDays`: days planned without a journal and with empty gallery captions;
+    /// - `captionlessDays`: days whose galleries get an empty caption (no date/place text).
     static func draft(album: Album, days: [DayGroup], profile: SupplierProfile, format: BookFormat,
-                      options: DraftOptions, includeIntro: Bool, reservedSpreads: Int) -> Album {
+                      options: DraftOptions, includeIntro: Bool, reservedSpreads: Int,
+                      excludedFromDays: Set<PhotoID> = [], galleryOnlyDays: Set<DayKey> = [],
+                      captionlessDays: Set<DayKey> = []) -> Album {
         var result = album
         result.supplierProfileID = profile.id
         result.formatID = format.id
@@ -71,7 +78,11 @@ public enum AlbumDrafter {
 
         let perGallery = min(max(options.galleryPhotosPerSpread, 1), 3)
         for (group, photos) in selectedDays {
-            plan += planDay(group, photos: photos, perGallery: perGallery)
+            let dayPhotos = photos.filter { !excludedFromDays.contains($0.id) }
+            if dayPhotos.isEmpty { continue }
+            let galleryOnly = galleryOnlyDays.contains(group.dayKey)
+            plan += planDay(group, photos: dayPhotos, perGallery: perGallery, allowJournal: !galleryOnly,
+                            caption: !galleryOnly && !captionlessDays.contains(group.dayKey))
         }
         if options.includeClosing {
             plan.append(Planned(templateID: "closing-1", dayKey: nil, photos: [lastPhoto], texts: [.caption: ""]))
@@ -113,12 +124,16 @@ public enum AlbumDrafter {
     /// A day with only 1-2 selected photos gets gallery-only spreads (no journal): every journal
     /// template has at least 3 frames and a journal must not have empty frames. The date and place
     /// go into the first gallery's caption instead.
-    private static func planDay(_ group: DayGroup, photos: [Photo], perGallery: Int) -> [Planned] {
+    ///
+    /// `allowJournal: false` plans galleries only; `caption: false` leaves every gallery caption empty
+    /// (used by a redraft when a kept spread already carries the day's header).
+    private static func planDay(_ group: DayGroup, photos: [Photo], perGallery: Int,
+                                allowJournal: Bool = true, caption: Bool = true) -> [Planned] {
         let key = group.dayKey
         let title = group.placeNames.isEmpty ? noPlaceTitle : group.placeNames.joined(separator: ", ")
         var spreads: [Planned] = []
         var rest = photos
-        if photos.count >= 3 {
+        if allowJournal && photos.count >= 3 {
             let n = min(5, max(3, photos.count))
             let journal = Array(photos.sorted(by: rank).prefix(n))
             let ids = Set(journal.map(\.id))
@@ -129,9 +144,9 @@ public enum AlbumDrafter {
         var start = 0
         while start < rest.count {
             let chunk = Array(rest[start..<min(start + perGallery, rest.count)])
-            let caption = spreads.isEmpty ? dayCaption(key, placeNames: group.placeNames) : ""
+            let text = caption && spreads.isEmpty ? dayCaption(key, placeNames: group.placeNames) : ""
             spreads.append(Planned(templateID: "gallery-\(chunk.count)", dayKey: key, photos: chunk,
-                                   texts: [.caption: caption]))
+                                   texts: [.caption: text]))
             start += perGallery
         }
         return spreads

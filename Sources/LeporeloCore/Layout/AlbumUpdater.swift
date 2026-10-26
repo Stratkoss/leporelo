@@ -26,6 +26,7 @@ public enum AlbumUpdater {
     ///   the latest earlier day, else before the first spread of a later day, else after the intro
     ///   (i.e. before blank and closing spreads), and its caption gets the date and places like a
     ///   drafted day with 1-2 photos. No empty frame is ever created.
+    /// - Filling an empty frame of a manually edited gallery does not change its `manuallyEdited`.
     public static func photoSelected(_ id: PhotoID, in album: Album, geometry: PageGeometry) -> Album {
         guard let photo = album.photos[id], let key = photo.dayKey else { return album }
         var result = album
@@ -107,12 +108,17 @@ public enum AlbumUpdater {
     /// If `format` differs from the album's, the album is first passed through `changeFormat`, so the
     /// kept spreads match the new geometry.
     ///
-    /// Generation: the drafter runs on the selected photos minus the photos in kept spreads (those are
-    /// never placed anywhere else, not even in the intro or closing), with no intro when a manual
-    /// intro is kept, no closing when a manual closing is kept or the album had no closing, and with
-    /// the kept spreads reserved in its page-count padding (so it splits its galleries / adds blanks
-    /// before its closing as in a first draft). The generated intro's body is then rewritten from all
-    /// days with a selected photo (manual ones included).
+    /// Generation: the drafter runs on the full selection, but its per-day planning (journals and
+    /// galleries) skips the photos already in kept spreads, so those are never placed in another day
+    /// spread; the intro, closing and cover photos and the intro body use the full selection (they
+    /// may repeat a day photo, as in a first draft). A day left with no photos gets no new spreads.
+    /// No intro when a manual intro is kept, no closing when a manual closing is kept or the album
+    /// had no closing; the kept spreads are reserved in the drafter's page-count padding (it splits
+    /// its galleries / adds blanks before its closing as in a first draft).
+    ///
+    /// Day headers are not duplicated: a day with a kept `.journal` spread gets galleries only, with
+    /// empty captions; a day with a kept `.gallery` whose caption text is non-empty gets new spreads
+    /// (a journal too, if 3+ photos are left) but their gallery captions are empty.
     ///
     /// Merge order:
     /// 1. kept manual intro spreads (album order), or else the generated intro;
@@ -139,23 +145,18 @@ public enum AlbumUpdater {
         let hasManualClosing = kept.contains { $0.kind == .closing }
         let hadClosing = base.spreads.isEmpty || base.spreads.contains { $0.kind == .closing }
 
-        var pool = base
-        for id in keptPhotos { pool.photos[id]?.isSelected = false }
+        let journalDays = Set(kept.filter { $0.kind == .journal }.compactMap(\.dayKey))
+        let captionedDays = Set(kept.filter { spread in
+            spread.kind == .gallery && spread.texts.contains { $0.role == .caption && !$0.text.isEmpty }
+        }.compactMap(\.dayKey))
         let generated = AlbumDrafter.draft(
-            album: pool, days: days, profile: profile, format: format,
+            album: base, days: days, profile: profile, format: format,
             options: DraftOptions(includeClosing: hadClosing && !hasManualClosing),
-            includeIntro: !hasManualIntro, reservedSpreads: kept.count)
+            includeIntro: !hasManualIntro, reservedSpreads: kept.count,
+            excludedFromDays: keptPhotos, galleryOnlyDays: journalDays, captionlessDays: captionedDays)
 
         // Merge.
-        var gen = generated.spreads
-        let selectedDays = days.sorted { $0.dayKey < $1.dayKey }.filter { group in
-            group.photos.contains { base.photos[$0.id]?.isSelected ?? $0.isSelected }
-        }
-        for i in gen.indices where gen[i].kind == .intro {
-            if let t = gen[i].texts.firstIndex(where: { $0.role == .body }) {
-                gen[i].texts[t].text = AlbumDrafter.introBody(selectedDays)
-            }
-        }
+        let gen = generated.spreads
         let isDay: (Spread) -> Bool = { $0.dayKey != nil && $0.kind != .intro && $0.kind != .closing }
         var merged: [Spread] = hasManualIntro ? kept.filter { $0.kind == .intro } : gen.filter { $0.kind == .intro }
         let dayKeys = Set((kept + gen).filter(isDay).compactMap(\.dayKey)).sorted()
