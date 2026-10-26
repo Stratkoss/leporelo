@@ -91,21 +91,21 @@ public enum TemplateCatalog {
         SpreadTemplate(
             id: "journal-4", kind: .journal, photoCount: 4,
             frames: [
-                FrameSlot(id: "photo1", rect: r(0.52, 0.06, 0.45, 0.52), orientation: .landscape, priority: 0),
-                FrameSlot(id: "photo2", rect: r(0.52, 0.62, 0.22, 0.32), orientation: .landscape, priority: 1),
-                FrameSlot(id: "photo3", rect: r(0.75, 0.62, 0.22, 0.32), orientation: .landscape, priority: 2),
+                FrameSlot(id: "photo1", rect: r(0.52, 0.06, 0.30, 0.56), orientation: .landscape, priority: 0),
+                FrameSlot(id: "photo2", rect: r(0.84, 0.06, 0.13, 0.26), orientation: .landscape, priority: 1),
+                FrameSlot(id: "photo3", rect: r(0.52, 0.66, 0.15, 0.28), orientation: .landscape, priority: 2),
                 leftPortrait(id: "photo4", priority: 3),
             ],
             texts: journalTexts),
 
-        // Journal-5: like journal-4 with a row of three below the landscape main.
+        // Journal-5: journal-4 plus a second photo in the right column.
         SpreadTemplate(
             id: "journal-5", kind: .journal, photoCount: 5,
             frames: [
-                FrameSlot(id: "photo1", rect: r(0.52, 0.06, 0.45, 0.52), orientation: .landscape, priority: 0),
-                FrameSlot(id: "photo2", rect: r(0.52, 0.66, 0.14, 0.28), orientation: .landscape, priority: 1),
-                FrameSlot(id: "photo3", rect: r(0.675, 0.66, 0.14, 0.28), orientation: .landscape, priority: 2),
-                FrameSlot(id: "photo4", rect: r(0.83, 0.66, 0.14, 0.28), orientation: .landscape, priority: 3),
+                FrameSlot(id: "photo1", rect: r(0.52, 0.06, 0.30, 0.56), orientation: .landscape, priority: 0),
+                FrameSlot(id: "photo2", rect: r(0.84, 0.06, 0.13, 0.26), orientation: .landscape, priority: 1),
+                FrameSlot(id: "photo3", rect: r(0.84, 0.36, 0.13, 0.26), orientation: .landscape, priority: 2),
+                FrameSlot(id: "photo4", rect: r(0.52, 0.66, 0.15, 0.28), orientation: .landscape, priority: 3),
                 leftPortrait(id: "photo5", priority: 4),
             ],
             texts: journalTexts),
