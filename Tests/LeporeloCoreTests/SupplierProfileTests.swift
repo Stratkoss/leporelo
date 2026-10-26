@@ -23,6 +23,21 @@ import Testing
         #expect(g.spreadBleedRect == Rect(x: -3, y: -3, width: 600, height: 216))
     }
 
+    @Test func catalogListsCanvaAndRejectsUnknown() throws {
+        #expect(try ProfileCatalog.all().contains { $0.id == "canva-photobook" })
+        #expect(throws: ProfileCatalogError.profileNotFound("nope")) {
+            try ProfileCatalog.profile(id: "nope")
+        }
+    }
+
+    @Test func spreadsModeBleedIsOuterEdgesOnly() throws {
+        var (p, f) = try ProfileCatalog.format(profileID: "canva-photobook", formatID: "landscape-a4")
+        p.pageMode = .spreads
+        let g = PageGeometry(format: f, profile: p)
+        #expect(g.bleedRect(side: .left) == Rect(x: -3, y: -3, width: 300, height: 216))
+        #expect(g.bleedRect(side: .right) == Rect(x: 297, y: -3, width: 300, height: 216))
+    }
+
     @Test func pageCountRuleNextValid() {
         let r = PageCountRule(min: 20, max: nil, multipleOf: 2)
         #expect(r.nextValid(atLeast: 13) == 20)

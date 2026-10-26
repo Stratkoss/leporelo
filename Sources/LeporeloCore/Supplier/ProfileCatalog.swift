@@ -1,15 +1,17 @@
 import Foundation
 
 public enum ProfileCatalogError: Error, Equatable {
+    case resourcesMissing
     case profileNotFound(String)
     case formatNotFound(profileID: String, formatID: String)
 }
 
 public enum ProfileCatalog {
     public static func all() throws -> [SupplierProfile] {
-        guard let dir = Bundle.module.url(forResource: "Profiles", withExtension: nil, subdirectory: "Resources")
-            ?? Bundle.module.url(forResource: "Profiles", withExtension: nil) else {
-            return []
+        // `.copy("Resources")` keeps the folder, so profiles live in <bundle>/Resources/Profiles.
+        let dir = Bundle.module.bundleURL.appendingPathComponent("Resources/Profiles", isDirectory: true)
+        guard FileManager.default.fileExists(atPath: dir.path) else {
+            throw ProfileCatalogError.resourcesMissing
         }
         let files = try FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)
             .filter { $0.pathExtension == "json" }

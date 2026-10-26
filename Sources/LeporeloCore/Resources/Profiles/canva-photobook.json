@@ -2,7 +2,7 @@
   "id": "canva-photobook",
   "name": "Canva Print – fotokniha",
   "formats": [
-    { "id": "landscape-8x6in", "name": "Na šířku 8 × 6 in (Canva, výchozí)", "pageWidthMM": 203.2, "pageHeightMM": 152.4 },
+    { "id": "landscape-8x6in", "name": "Na šířku 8 × 6 in (Canva)", "pageWidthMM": 203.2, "pageHeightMM": 152.4 },
     { "id": "landscape-a4", "name": "Na šířku 297 × 210 mm (záloha, neověřeno u Canvy)", "pageWidthMM": 297, "pageHeightMM": 210 },
     { "id": "square-21", "name": "Čtverec 210 × 210 mm (záloha, neověřeno u Canvy)", "pageWidthMM": 210, "pageHeightMM": 210 }
   ],
