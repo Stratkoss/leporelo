@@ -27,7 +27,9 @@ private func makeAlbum() -> Album {
 }
 
 @Test func everyEditIsReversible() throws {
-    let original = makeAlbum()
+    var original = makeAlbum()
+    original.spreads[2].manuallyEdited = true
+    original.photos["p3"]?.dayKey = nil
     var replacement = original.spreads[1]
     replacement.templateID = "t2"
     replacement.frames.removeLast()
@@ -46,6 +48,11 @@ private func makeAlbum() -> Album {
         .insertSpread(extra, at: 1),
         .deleteSpread(id: "s2"),
         .replaceSpread(replacement),
+        .restoreSpread(replacement),
+        .setText(spreadID: "s3", textID: "t1", text: "new"),
+        .swapFramePhotos(spreadID: "s3", frameA: "f1", frameB: "f2"),
+        .setPhotoDay("p3", DayKey(year: 2026, month: 8, day: 9)),
+        .setPhotoDay("p1", nil),
         .setPhotoDay("p1", DayKey(year: 2026, month: 8, day: 9)),
         .setTitle("Other"),
     ]
@@ -103,5 +110,51 @@ private func makeAlbum() -> Album {
     }
     #expect(throws: AlbumEditError.badIndex) {
         try album.applying(.moveSpread(from: 0, to: 9))
+    }
+}
+
+@Test func replaceSpreadMarksManuallyEdited() throws {
+    let album = makeAlbum()
+    var replacement = album.spreads[0]
+    replacement.templateID = "t2"
+    let (edited, inverse) = try album.applying(.replaceSpread(replacement))
+    #expect(edited.spreads[0].manuallyEdited)
+    #expect(try edited.applying(inverse).album == album)
+}
+
+@Test func duplicateInsertThrows() {
+    let album = makeAlbum()
+    #expect(throws: AlbumEditError.duplicateSpread) {
+        try album.applying(.insertSpread(album.spreads[0], at: 0))
+    }
+}
+
+@Test func setPhotoDayHandlesNilDay() throws {
+    var album = makeAlbum()
+    album.photos["p1"]?.dayKey = nil
+    let day = DayKey(year: 2026, month: 9, day: 1)
+    let (edited, inverse) = try album.applying(.setPhotoDay("p1", day))
+    #expect(edited.photos["p1"]?.dayKey == day)
+    #expect(inverse == .setPhotoDay("p1", nil))
+    #expect(try edited.applying(inverse).album == album)
+}
+
+@Test func failedEditLeavesAlbumUnchanged() {
+    let album = makeAlbum()
+    let snapshot = album
+    _ = try? album.applying(.setText(spreadID: "s1", textID: "nope", text: "x"))
+    _ = try? album.applying(.setFramePhoto(spreadID: "s1", frameID: "f1", photoID: "nope"))
+    _ = try? album.applying(.insertSpread(album.spreads[0], at: 0))
+    #expect(album == snapshot)
+}
+
+@Test func unknownIDsThrow() {
+    let album = makeAlbum()
+    let ghost = Spread(id: "ghost", kind: .blank, templateID: "t", dayKey: nil, frames: [], texts: [], manuallyEdited: false)
+    #expect(throws: AlbumEditError.unknownSpread) { try album.applying(.deleteSpread(id: "ghost")) }
+    #expect(throws: AlbumEditError.unknownSpread) { try album.applying(.replaceSpread(ghost)) }
+    #expect(throws: AlbumEditError.unknownSpread) { try album.applying(.restoreSpread(ghost)) }
+    #expect(throws: AlbumEditError.unknownText) {
+        try album.applying(.setText(spreadID: "s1", textID: "nope", text: "x"))
     }
 }

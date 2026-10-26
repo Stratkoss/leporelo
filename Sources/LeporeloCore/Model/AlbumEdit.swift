@@ -9,22 +9,23 @@ public enum AlbumEdit: Sendable, Codable, Equatable {
     case moveSpread(from: Int, to: Int)
     case insertSpread(Spread, at: Int)
     case deleteSpread(id: String)
-    /// Template change. Stores the given spread verbatim (the caller decides `manuallyEdited`),
-    /// which is what makes it usable as the exact-restore inverse of every other spread edit.
+    /// Template change; marks the stored spread `manuallyEdited = true`.
     case replaceSpread(Spread)
-    case setPhotoDay(PhotoID, DayKey)
+    /// Stores the spread verbatim (flag included). Used as the exact-restore inverse of spread edits.
+    case restoreSpread(Spread)
+    case setPhotoDay(PhotoID, DayKey?)
     case setTitle(String)
 }
 
 public enum AlbumEditError: Error, Equatable {
-    case unknownSpread, unknownFrame, unknownPhoto, badIndex
+    case unknownSpread, unknownFrame, unknownText, unknownPhoto, badIndex, duplicateSpread
 }
 
 extension Album {
     /// Applies `edit` and returns the new album plus the edit that undoes it exactly.
     ///
     /// Inverse strategy: every edit that touches the content of one spread (and sets
-    /// `manuallyEdited = true` on it) is inverted by `replaceSpread(previousSpread)`, so the
+    /// `manuallyEdited = true` on it) is inverted by `restoreSpread(previousSpread)`, so the
     /// previous `manuallyEdited` flag comes back with it. Other edits invert structurally.
     public func applying(_ edit: AlbumEdit) throws -> (album: Album, inverse: AlbumEdit) {
         var album = self
@@ -39,7 +40,7 @@ extension Album {
             try body(&spread)
             spread.manuallyEdited = true
             album.spreads[index] = spread
-            return .replaceSpread(previous)
+            return .restoreSpread(previous)
         }
 
         func frameIndex(_ spread: Spread, _ id: String) throws -> Int {
@@ -84,7 +85,7 @@ extension Album {
         case let .setText(spreadID, textID, text):
             let inverse = try mutateSpread(spreadID) { spread in
                 guard let i = spread.texts.firstIndex(where: { $0.id == textID }) else {
-                    throw AlbumEditError.unknownFrame
+                    throw AlbumEditError.unknownText
                 }
                 spread.texts[i].text = text
             }
@@ -100,6 +101,10 @@ extension Album {
 
         case let .insertSpread(spread, at):
             guard (0...album.spreads.count).contains(at) else { throw AlbumEditError.badIndex }
+            // A duplicate id would make the inverse deleteSpread remove the wrong spread.
+            guard !album.spreads.contains(where: { $0.id == spread.id }) else {
+                throw AlbumEditError.duplicateSpread
+            }
             album.spreads.insert(spread, at: at)
             return (album, .deleteSpread(id: spread.id))
 
@@ -111,19 +116,22 @@ extension Album {
             return (album, .insertSpread(removed, at: index))
 
         case let .replaceSpread(spread):
+            var marked = spread
+            marked.manuallyEdited = true
+            return try applying(.restoreSpread(marked))
+
+        case let .restoreSpread(spread):
             guard let index = album.spreads.firstIndex(where: { $0.id == spread.id }) else {
                 throw AlbumEditError.unknownSpread
             }
             let previous = album.spreads[index]
             album.spreads[index] = spread
-            return (album, .replaceSpread(previous))
+            return (album, .restoreSpread(previous))
 
         case let .setPhotoDay(id, day):
             guard let photo = album.photos[id] else { throw AlbumEditError.unknownPhoto }
-            // A photo without a day cannot be restored with a non-optional DayKey.
-            guard let previousDay = photo.dayKey else { throw AlbumEditError.unknownPhoto }
             album.photos[id]?.dayKey = day
-            return (album, .setPhotoDay(id, previousDay))
+            return (album, .setPhotoDay(id, photo.dayKey))
 
         case let .setTitle(title):
             let previous = album.title
