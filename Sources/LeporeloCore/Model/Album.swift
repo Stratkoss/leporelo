@@ -37,17 +37,26 @@ public struct Album: Sendable, Codable, Equatable {
         self.createdAt = createdAt
     }
 
-    /// Photos grouped by `dayKey` (photos without one are skipped), sorted by `capturedAt` within a day.
+    /// Photos grouped by `dayKey` (photos without one are skipped), sorted by `capturedAt` within a day
+    /// (ties broken by id).
     public func photosByDay() -> [DayKey: [Photo]] {
         var result: [DayKey: [Photo]] = [:]
         for photo in photos.values {
             guard let key = photo.dayKey else { continue }
             result[key, default: []].append(photo)
         }
-        return result.mapValues { $0.sorted { $0.capturedAt < $1.capturedAt } }
+        return result.mapValues { $0.sorted(by: Photo.chronological) }
     }
 
+    /// Selected photos, chronological (ties broken by id).
     public var selectedPhotos: [Photo] {
-        photos.values.filter(\.isSelected)
+        photos.values.filter(\.isSelected).sorted(by: Photo.chronological)
+    }
+}
+
+extension Photo {
+    /// Deterministic chronological order: `capturedAt`, then `id`.
+    public static func chronological(_ a: Photo, _ b: Photo) -> Bool {
+        (a.capturedAt, a.id) < (b.capturedAt, b.id)
     }
 }
