@@ -27,6 +27,15 @@ public enum AlbumDrafter {
 
     public static func draft(album: Album, days: [DayGroup], profile: SupplierProfile, format: BookFormat,
                              options: DraftOptions = .init()) -> Album {
+        draft(album: album, days: days, profile: profile, format: format, options: options,
+              includeIntro: true, reservedSpreads: 0)
+    }
+
+    /// `draft` with two knobs for `AlbumUpdater.redraft`: `includeIntro: false` plans no intro
+    /// spread (the cover is still built), and `reservedSpreads` counts spreads the caller will add
+    /// (kept manual spreads) when padding to the page-count rule.
+    static func draft(album: Album, days: [DayGroup], profile: SupplierProfile, format: BookFormat,
+                      options: DraftOptions, includeIntro: Bool, reservedSpreads: Int) -> Album {
         var result = album
         result.supplierProfileID = profile.id
         result.formatID = format.id
@@ -54,14 +63,11 @@ public enum AlbumDrafter {
 
         // 1. Plan the spreads.
         var plan: [Planned] = []
-        var places: [String] = []
-        for (group, _) in selectedDays {
-            for name in group.placeNames where !places.contains(name) { places.append(name) }
+        let introBody = self.introBody(selectedDays.map(\.group))
+        if includeIntro {
+            plan.append(Planned(templateID: "intro-1", dayKey: nil, photos: [introPhoto],
+                                texts: [.title: album.title, .body: introBody]))
         }
-        var introBody = dateRange(selectedDays.first!.group.dayKey, selectedDays.last!.group.dayKey)
-        if !places.isEmpty { introBody += "\n" + places.joined(separator: ", ") }
-        plan.append(Planned(templateID: "intro-1", dayKey: nil, photos: [introPhoto],
-                            texts: [.title: album.title, .body: introBody]))
 
         let perGallery = min(max(options.galleryPhotosPerSpread, 1), 3)
         for (group, photos) in selectedDays {
@@ -72,7 +78,7 @@ public enum AlbumDrafter {
         }
 
         // 2. Pad to the supplier's page-count rule.
-        pad(&plan, rule: profile.pageCount, hasClosing: options.includeClosing)
+        pad(&plan, rule: profile.pageCount, hasClosing: options.includeClosing, reserved: reservedSpreads)
 
         // 3. Instantiate templates.
         let geometry = PageGeometry(format: format, profile: profile)
@@ -123,10 +129,7 @@ public enum AlbumDrafter {
         var start = 0
         while start < rest.count {
             let chunk = Array(rest[start..<min(start + perGallery, rest.count)])
-            var caption = ""
-            if spreads.isEmpty {
-                caption = czechDate(key) + (group.placeNames.isEmpty ? "" : ", " + title)
-            }
+            let caption = spreads.isEmpty ? dayCaption(key, placeNames: group.placeNames) : ""
             spreads.append(Planned(templateID: "gallery-\(chunk.count)", dayKey: key, photos: chunk,
                                    texts: [.caption: caption]))
             start += perGallery
@@ -140,9 +143,9 @@ public enum AlbumDrafter {
     ///
     /// If the draft already has more pages than the rule's maximum, content is not deleted: the
     /// loop stops and the preflight reports the page count to the user.
-    private static func pad(_ plan: inout [Planned], rule: PageCountRule, hasClosing: Bool) {
-        while !rule.isSatisfied(by: plan.count * 2) {
-            if let max = rule.max, plan.count * 2 > max { return }
+    private static func pad(_ plan: inout [Planned], rule: PageCountRule, hasClosing: Bool, reserved: Int) {
+        while !rule.isSatisfied(by: (plan.count + reserved) * 2) {
+            if let max = rule.max, (plan.count + reserved) * 2 > max { return }
             if let i = plan.firstIndex(where: { $0.kind == .gallery && $0.photos.count > 1 }) {
                 let photo = plan[i].photos.removeLast()
                 plan[i].templateID = "gallery-\(plan[i].photos.count)"
@@ -184,8 +187,7 @@ public enum AlbumDrafter {
             counters["blank", default: 0] += 1
             return "blank-\(counters["blank"]!)"
         case .journal, .gallery:
-            let day = item.dayKey.map { String(format: "%04d-%02d-%02d", $0.year, $0.month, $0.day) } ?? "day"
-            let base = "\(day)-\(item.kind.rawValue)"
+            let base = "\(dayString(item.dayKey))-\(item.kind.rawValue)"
             counters[base, default: 0] += 1
             return item.kind == .journal && counters[base] == 1 ? base : "\(base)-\(counters[base]!)"
         }
@@ -216,7 +218,7 @@ public enum AlbumDrafter {
         return result
     }
 
-    private static func fits(_ photo: Photo, _ orientation: Orientation) -> Bool {
+    static func fits(_ photo: Photo, _ orientation: Orientation) -> Bool {
         switch orientation {
         case .any: return true
         case .landscape: return photo.pixelWidth > photo.pixelHeight
@@ -251,6 +253,29 @@ public enum AlbumDrafter {
     }
 
     // MARK: - Texts
+
+    /// "2026-06-18" (or "day" without a day): the day part of journal and gallery spread ids.
+    static func dayString(_ key: DayKey?) -> String {
+        key.map { String(format: "%04d-%02d-%02d", $0.year, $0.month, $0.day) } ?? "day"
+    }
+
+    /// Caption of the first spread of a day that has no journal: "čtvrtek 18. června 2026, Ravello".
+    static func dayCaption(_ key: DayKey, placeNames: [String]) -> String {
+        czechDate(key) + (placeNames.isEmpty ? "" : ", " + placeNames.joined(separator: ", "))
+    }
+
+    /// Intro body: the date range of `days` (ascending), then their places in order of first
+    /// occurrence. Empty for no days.
+    static func introBody(_ days: [DayGroup]) -> String {
+        guard let first = days.first, let last = days.last else { return "" }
+        var places: [String] = []
+        for group in days {
+            for name in group.placeNames where !places.contains(name) { places.append(name) }
+        }
+        var body = dateRange(first.dayKey, last.dayKey)
+        if !places.isEmpty { body += "\n" + places.joined(separator: ", ") }
+        return body
+    }
 
     /// "čtvrtek 18. června 2026" for the DayKey itself, independent of the Mac's time zone.
     public static func czechDate(_ key: DayKey) -> String {
