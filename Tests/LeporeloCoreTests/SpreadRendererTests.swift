@@ -17,9 +17,12 @@ private struct Bitmap {
     let height: Int
     let data: [UInt8]
 
-    init(png: Data) {
-        let src = CGImageSourceCreateWithData(png as CFData, nil)!
-        let img = CGImageSourceCreateImageAtIndex(src, 0, nil)!
+    init(png: Data?) {
+        let src = CGImageSourceCreateWithData(png! as CFData, nil)!
+        self.init(image: CGImageSourceCreateImageAtIndex(src, 0, nil)!)
+    }
+
+    init(image img: CGImage) {
         let w = img.width, h = img.height
         width = w
         height = h
@@ -172,5 +175,139 @@ private func px(_ mm: Double, includeBleed: Bool) -> Int {
         let data = ctx.data!.assumingMemoryBound(to: UInt8.self)
         // Corner pixel inside the bleed is red (full-page photo is stretched into bleed on all sides).
         #expect(data[0] == 255 && data[1] == 0 && data[2] == 0)
+    }
+}
+
+// MARK: - Fix round 1
+
+private final class RecordingProvider: ImageProvider, @unchecked Sendable {
+    private let lock = NSLock()
+    private var calls: [(PhotoID, Int)] = []
+    let image: CGImage
+    init(image: CGImage) { self.image = image }
+    var recorded: [(PhotoID, Int)] { lock.withLock { calls } }
+    private func record(_ id: PhotoID, _ w: Int) { lock.withLock { calls.append((id, w)) } }
+    func image(for photoID: PhotoID, minPixelWidth: Int) async -> CGImage? {
+        record(photoID, minPixelWidth)
+        return image
+    }
+}
+
+/// Top half red, bottom half blue (sRGB).
+private func splitImage(size: Int = 200) -> CGImage {
+    let ctx = CGContext(data: nil, width: size, height: size, bitsPerComponent: 8, bytesPerRow: 0,
+                        space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+    // CGContext is y-up: the upper half of the picture is y in size/2..<size.
+    ctx.setFillColor(CGColor(srgbRed: 1, green: 0, blue: 0, alpha: 1))
+    ctx.fill(CGRect(x: 0, y: size / 2, width: size, height: size / 2))
+    ctx.setFillColor(CGColor(srgbRed: 0, green: 0, blue: 1, alpha: 1))
+    ctx.fill(CGRect(x: 0, y: 0, width: size, height: size / 2))
+    return ctx.makeImage()!
+}
+
+/// First and last row (in mm from the top, no bleed) with non-white ink inside the box columns.
+private func inkRange(_ bmp: Bitmap, box: Rect) -> (first: Double, last: Double)? {
+    var first: Int?, last: Int?
+    let x0 = px(box.minX, includeBleed: false), x1 = px(box.maxX, includeBleed: false)
+    for y in 0..<bmp.height {
+        for x in x0..<x1 where !near(bmp.pixel(x: x, y: y), 255, 255, 255, tol: 40) {
+            if first == nil { first = y }
+            last = y
+            break
+        }
+    }
+    guard let f = first, let l = last else { return nil }
+    return (Double(f) / ppmm, Double(l + 1) / ppmm)
+}
+
+@Suite struct SpreadRendererFixTests {
+    @Test func bundledFontsAreAvailable() {
+        #expect(FontRegistry.areBundledFontsAvailable)
+        #expect(FontRegistry.registrationProblems.isEmpty)
+    }
+
+    @Test func imageDPIHintIsPassedToProvider() async throws {
+        let rec = RecordingProvider(image: redImage())
+        let (r, _) = try makeRenderer(images: rec)
+        let s = spread(frames: [frame("a", Rect(x: 20, y: 20, width: 100, height: 80), photo: "p1")])
+        let pdf = 72 / 25.4
+        _ = await r.loadImages(for: s, options: RenderOptions(includeBleed: false, pixelsPerMM: pdf, imageDPI: 300))
+        _ = await r.loadImages(for: s, options: RenderOptions(includeBleed: false, pixelsPerMM: pdf))
+        let hints = rec.recorded.map(\.1)
+        #expect(hints == [1182, 284])
+    }
+
+    @Test func sharedPhotoIsFetchedOnceWithWidestHint() async throws {
+        let rec = RecordingProvider(image: redImage())
+        let (r, _) = try makeRenderer(images: rec)
+        let s = spread(frames: [frame("a", Rect(x: 20, y: 20, width: 50, height: 50), photo: "p1"),
+                                frame("b", Rect(x: 300, y: 20, width: 100, height: 50), photo: "p1")])
+        let loaded = await r.loadImages(for: s, options: RenderOptions(includeBleed: false, pixelsPerMM: 4))
+        #expect(loaded.count == 1)
+        #expect(rec.recorded.count == 1)
+        #expect(rec.recorded[0].1 == 400)
+    }
+
+    @Test func pageRenderingShowsSpineBleedOnlyForOwningPage() async throws {
+        let red = redImage()
+        let (r, _) = try makeRenderer(images: SolidProvider(image: red))
+        let s = spread(frames: [frame("f", Rect(x: 297, y: 0, width: 297, height: 210), photo: "p1")])
+        let opts = RenderOptions(includeBleed: true, pixelsPerMM: ppmm)
+        let owner = Bitmap(png: await r.renderPagePNG(s, side: .right, options: opts))
+        #expect(owner.width == Int(303 * ppmm) && owner.height == Int(216 * ppmm))
+        // Page-local x = spread x - 297. Spine-side bleed margin is photo coloured.
+        #expect(near(owner.pixel(x: px(-1.5, includeBleed: true), y: px(100, includeBleed: true)), 255, 0, 0))
+        #expect(near(owner.pixel(x: px(1, includeBleed: true), y: px(100, includeBleed: true)), 255, 0, 0))
+        #expect(near(owner.pixel(x: px(298.5, includeBleed: true), y: px(100, includeBleed: true)), 255, 0, 0))
+        let other = Bitmap(png: await r.renderPagePNG(s, side: .left, options: opts))
+        // The other page's spine-side margin (spread x 298.5) must not show the neighbour's photo.
+        #expect(near(other.pixel(x: px(298.5, includeBleed: true), y: px(100, includeBleed: true)), 255, 255, 255))
+        #expect(near(other.pixel(x: px(290, includeBleed: true), y: px(100, includeBleed: true)), 255, 255, 255))
+    }
+
+    @Test func nonUniformImageIsUprightEverywhere() async throws {
+        let (r, _) = try makeRenderer(images: SolidProvider(image: splitImage()))
+        let leftSpread = spread(frames: [frame("f", Rect(x: 20, y: 20, width: 80, height: 80), photo: "p1")])
+        let rightSpread = spread(frames: [frame("f", Rect(x: 317, y: 20, width: 80, height: 80), photo: "p1")])
+        let opts = RenderOptions(includeBleed: false, pixelsPerMM: ppmm)
+
+        func check(_ bmp: Bitmap, _ label: String) {
+            let top = bmp.pixel(x: px(60, includeBleed: false), y: px(30, includeBleed: false))
+            let bottom = bmp.pixel(x: px(60, includeBleed: false), y: px(90, includeBleed: false))
+            #expect(near(top, 255, 0, 0), "\(label) top")
+            #expect(near(bottom, 0, 0, 255), "\(label) bottom")
+        }
+        check(Bitmap(png: await r.renderPNG(leftSpread, options: opts)), "renderPNG")
+        check(Bitmap(png: await r.renderPagePNG(leftSpread, side: .left, options: opts)), "renderPage left")
+        check(Bitmap(png: await r.renderPagePNG(rightSpread, side: .right, options: opts)), "renderPage right")
+
+        // Direct render into a caller-owned y-up context.
+        let ctx = CGContext(data: nil, width: Int(594 * ppmm), height: Int(210 * ppmm), bitsPerComponent: 8,
+                            bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        await r.render(leftSpread, into: ctx, options: opts)
+        check(Bitmap(image: ctx.makeImage()!), "render")
+    }
+
+    @Test func titleInkSitsAtTopOfItsBox() async throws {
+        let (r, _) = try makeRenderer()
+        let box = Rect(x: 320, y: 100, width: 200, height: 40)
+        let s = spread(texts: [TextBox(id: "t", rect: box, role: .title, text: "Amalfi")])
+        let bmp = Bitmap(png: await r.renderPNG(s, options: RenderOptions(includeBleed: false, pixelsPerMM: ppmm)))
+        let ink = try #require(inkRange(bmp, box: box))
+        #expect(ink.first >= box.minY - 0.5 && ink.first < box.minY + 8)
+        #expect(ink.last < box.minY + 40.0 * 2 / 3)
+    }
+
+    @Test func bodyStartsAtTopAndWraps() async throws {
+        let (r, _) = try makeRenderer()
+        let box = Rect(x: 320, y: 100, width: 60, height: 80)
+        let text = String(repeating: "Ranní káva na terase nad mořem a pak dlouhá cesta dolů do přístavu. ", count: 4)
+        let s = spread(texts: [TextBox(id: "t", rect: box, role: .body, text: text)])
+        let bmp = Bitmap(png: await r.renderPNG(s, options: RenderOptions(includeBleed: false, pixelsPerMM: ppmm)))
+        let ink = try #require(inkRange(bmp, box: box))
+        #expect(ink.first < box.minY + 6)
+        #expect(ink.last - ink.first > 15)
     }
 }
