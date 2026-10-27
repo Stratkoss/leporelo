@@ -24,7 +24,8 @@ public struct PreflightIssue: Sendable, Equatable, Identifiable {
 ///
 /// Order of the result (deterministic): the issues of each spread in `album.spreads` order (frames in
 /// order, then texts in order), then the cover front and back, then the album-level issues: missing
-/// cover, page count, unverified format. Within one frame: original, DPI, faces.
+/// cover, page count, selected photos not in the album (once spreads exist), unverified format.
+/// Within one frame: original, DPI, faces.
 ///
 /// DPI matches what the renderer prints: a frame edge lying on the outer boundary of the page area is
 /// stretched by `bleedMM`, so the DPI is computed on the frame extended on those sides. The outer
@@ -70,11 +71,25 @@ public enum Preflight {
                 id: "pageCount", severity: .error, spreadID: nil, frameID: nil,
                 message: "Album má \(CzechPlural.pages(pages)), dodavatel chce \(describe(profile.pageCount))"))
         }
+        // Only once there is a layout: before the first draft nothing is placed yet.
+        let unplaced = album.spreads.isEmpty ? 0 : album.unplacedSelectedPhotos.count
+        if unplaced > 0 {
+            issues.append(PreflightIssue(id: "unplacedSelected", severity: .warning, spreadID: nil, frameID: nil,
+                                         message: unplacedMessage(unplaced)))
+        }
         if !profile.verified {
             issues.append(PreflightIssue(id: "unverified", severity: .warning, spreadID: nil, frameID: nil,
                                          message: "Rozměry formátu nejsou ověřené"))
         }
         return issues
+    }
+
+    /// "1 vybraná fotka není v albu", "3 vybrané fotky nejsou v albu", "5 vybraných fotek není v albu".
+    static func unplacedMessage(_ n: Int) -> String {
+        let adjective = CzechPlural.choose(n, one: "vybraná", few: "vybrané", many: "vybraných")
+        let noun = CzechPlural.choose(n, one: "fotka", few: "fotky", many: "fotek")
+        let verb = CzechPlural.choose(n, one: "není", few: "nejsou", many: "není")
+        return "\(CzechPlural.grouped(n)) \(adjective) \(noun) \(verb) v albu"
     }
 
     /// "min. 20 stran, max. 98 stran, sudý počet" (always "stran": the abbreviated form).

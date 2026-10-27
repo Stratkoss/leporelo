@@ -109,12 +109,8 @@ public enum AlbumDrafter {
         var kind: SpreadKind { TemplateCatalog.template(id: templateID)!.kind }
     }
 
-    /// Best score first; ties by `capturedAt`, then `id`.
-    private static func rank(_ a: Photo, _ b: Photo) -> Bool {
-        let sa = PhotoScore.score(a), sb = PhotoScore.score(b)
-        if sa != sb { return sa > sb }
-        return Photo.chronological(a, b)
-    }
+    /// Best score first; ties by `capturedAt`, then `id` (shared with the frame assignment).
+    private static func rank(_ a: Photo, _ b: Photo) -> Bool { TemplateLayout.rank(a, b) }
 
     /// Journal with the day's N best-scoring photos (N = 3...5), then the rest chronologically in
     /// galleries. The journal takes the best photos (not the first N) because the spec wants the
@@ -181,7 +177,7 @@ public enum AlbumDrafter {
             let template = TemplateCatalog.template(id: item.templateID)!
             let id = spreadID(item, counters: &counters)
             var spread = TemplateLayout.instantiate(template, geometry: geometry, dayKey: item.dayKey, id: id)
-            let assignment = assign(template.frames, photos: item.photos)
+            let assignment = TemplateLayout.assign(template.frames, photos: item.photos)
             for i in spread.frames.indices {
                 spread.frames[i].photoID = assignment[spread.frames[i].id]
             }
@@ -205,39 +201,6 @@ public enum AlbumDrafter {
             let base = "\(dayString(item.dayKey))-\(item.kind.rawValue)"
             counters[base, default: 0] += 1
             return item.kind == .journal && counters[base] == 1 ? base : "\(base)-\(counters[base]!)"
-        }
-    }
-
-    /// Frame id -> photo id. Frames are visited in priority order:
-    /// - the main frame (priority 0) takes the best remaining photo of matching orientation, or, if
-    ///   none matches, the best remaining photo outright, before any other frame is filled;
-    /// - pass 1: every other oriented frame takes the best remaining photo of matching orientation;
-    /// - pass 2: frames still empty (`.any` frames and frames with no match) take the best remaining
-    ///   photo. No frame stays empty while photos remain.
-    static func assign(_ slots: [FrameSlot], photos: [Photo]) -> [String: PhotoID] {
-        var remaining = photos.sorted(by: rank)
-        let ordered = slots.sorted { ($0.priority, $0.id) < ($1.priority, $1.id) }
-        var result: [String: PhotoID] = [:]
-        if let main = ordered.first, main.priority == 0, !remaining.isEmpty {
-            let i = remaining.firstIndex(where: { fits($0, main.orientation) }) ?? 0
-            result[main.id] = remaining.remove(at: i).id
-        }
-        for slot in ordered where slot.orientation != .any && result[slot.id] == nil {
-            if let i = remaining.firstIndex(where: { fits($0, slot.orientation) }) {
-                result[slot.id] = remaining.remove(at: i).id
-            }
-        }
-        for slot in ordered where result[slot.id] == nil && !remaining.isEmpty {
-            result[slot.id] = remaining.removeFirst().id
-        }
-        return result
-    }
-
-    static func fits(_ photo: Photo, _ orientation: Orientation) -> Bool {
-        switch orientation {
-        case .any: return true
-        case .landscape: return photo.pixelWidth > photo.pixelHeight
-        case .portrait: return photo.pixelHeight > photo.pixelWidth
         }
     }
 

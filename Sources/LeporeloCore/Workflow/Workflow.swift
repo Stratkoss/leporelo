@@ -84,6 +84,22 @@ public enum Workflow {
                                   options: options)
     }
 
+    /// The drafting half of `recommendAndDraft`, without touching the selection (the editor's
+    /// "Navrhnout album"): `AlbumDrafter.draft` over `days(of:)` with the photos' `isSelected` as
+    /// they are. Photos, their selection and series are returned unchanged. Pure, deterministic.
+    public static func draft(album: Album, profile: SupplierProfile, format: BookFormat,
+                             options: DraftOptions = .init()) -> Album {
+        AlbumDrafter.draft(album: album, days: days(of: album), profile: profile, format: format,
+                           options: options)
+    }
+
+    /// The album's days for drafting: `DayGrouper.group` over the photos that have a `dayKey`
+    /// (stored day keys win; place names come from the photos' `placeName`). Also what
+    /// `AlbumUpdater.redraft` needs.
+    public static func days(of album: Album) -> [DayGroup] {
+        DayGrouper.group(album.photos.values.filter { $0.dayKey != nil }, timeZones: [:], places: [:])
+    }
+
     /// The selection half of `recommendAndDraft`, without drafting (the app runs it once after the
     /// first analysis): marks series (`seriesID`) and sets `isSelected = recommended` for every
     /// photo with `selectionDecidedByUser == false`. Spreads and cover are left as they are.

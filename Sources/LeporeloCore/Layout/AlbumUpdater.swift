@@ -34,7 +34,44 @@ public enum AlbumUpdater {
         result.photos[id]?.isSelected = true
         result.photos[id]?.selectionDecidedByUser = true
         if result.spreads.contains(where: { $0.frames.contains { $0.photoID == id } }) { return result }
+        place(photo, day: key, in: &result, geometry: geometry)
+        return result
+    }
 
+    /// Moves a photo to another day (triage drag onto a day) once the album has spreads, so it
+    /// follows into the new day's layout (Task 20/21 ruling). Pure.
+    ///
+    /// - Sets `dayKey`. Selection fields are untouched (a move is not a selection decision).
+    /// - An unselected photo (or the same day, or an unknown photo) changes nothing else.
+    /// - A selected photo leaves every journal/gallery frame that holds it (`photoID = nil`, offset
+    ///   0, zoom 1: the "marked" convention) and is placed in the new day exactly like
+    ///   `photoSelected` places a new photo (an empty gallery frame of the day, else a new
+    ///   `gallery-1`). Intro, closing and cover frames keep it: the trip's title photo does not
+    ///   depend on its day, and clearing them would leave empty frames for no reason.
+    ///
+    /// The caller decides about manual work: the app only calls this when no journal/gallery
+    /// spread holding the photo is `manuallyEdited` (else it only sets the day).
+    public static func photoMoved(_ id: PhotoID, to day: DayKey, in album: Album, geometry: PageGeometry) -> Album {
+        guard var photo = album.photos[id], photo.dayKey != day else { return album }
+        var result = album
+        result.photos[id]?.dayKey = day
+        photo.dayKey = day
+        guard photo.isSelected else { return result }
+        for s in result.spreads.indices where result.spreads[s].kind == .journal || result.spreads[s].kind == .gallery {
+            for f in result.spreads[s].frames.indices where result.spreads[s].frames[f].photoID == id {
+                result.spreads[s].frames[f].photoID = nil
+                result.spreads[s].frames[f].offset = Point(x: 0, y: 0)
+                result.spreads[s].frames[f].zoom = 1
+            }
+        }
+        place(photo, day: day, in: &result, geometry: geometry)
+        return result
+    }
+
+    /// `photoSelected`'s placement: an empty frame of the day's galleries (orientation first),
+    /// else a new `gallery-1` at the day's place in the album.
+    private static func place(_ photo: Photo, day key: DayKey, in result: inout Album, geometry: PageGeometry) {
+        let id = photo.id
         // 1. An empty frame of the day's galleries.
         let galleries = result.spreads.indices.filter {
             result.spreads[$0].kind == .gallery && result.spreads[$0].dayKey == key
@@ -43,13 +80,13 @@ public enum AlbumUpdater {
             result.spreads[s].frames.indices.filter { result.spreads[s].frames[$0].photoID == nil }.map { (s, $0) }
         }
         let fitting = empty.first { s, f in
-            AlbumDrafter.fits(photo, slotOrientation(result.spreads[s], frameID: result.spreads[s].frames[f].id))
+            TemplateLayout.fits(photo, slotOrientation(result.spreads[s], frameID: result.spreads[s].frames[f].id))
         }
         if let (s, f) = fitting ?? empty.first {
             result.spreads[s].frames[f].photoID = id
             result.spreads[s].frames[f].offset = Point(x: 0, y: 0)
             result.spreads[s].frames[f].zoom = 1
-            return result
+            return
         }
 
         // 2. A new gallery-1.
@@ -77,7 +114,6 @@ public enum AlbumUpdater {
             }
         }
         result.spreads.insert(spread, at: index)
-        return result
     }
 
     /// Marks the photo unselected (a user decision: `selectionDecidedByUser = true`) and empties every frame holding it (spreads and cover):

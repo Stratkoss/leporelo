@@ -174,3 +174,120 @@ public enum TemplateLayout {
             manuallyEdited: false)
     }
 }
+
+// MARK: - Photo assignment (shared by the drafter and `retemplate`)
+
+extension TemplateLayout {
+    /// Frame id -> photo id. Frames are visited in priority order:
+    /// - the main frame (priority 0) takes the best remaining photo of matching orientation, or, if
+    ///   none matches, the best remaining photo outright, before any other frame is filled;
+    /// - pass 1: every other oriented frame takes the best remaining photo of matching orientation;
+    /// - pass 2: frames still empty (`.any` frames and frames with no match) take the best remaining
+    ///   photo. No frame stays empty while photos remain; with more photos than frames the
+    ///   lowest-ranked ones are left out.
+    /// "Best" is `rank`: `PhotoScore.score` descending, ties by `capturedAt`, then id.
+    public static func assign(_ slots: [FrameSlot], photos: [Photo]) -> [String: PhotoID] {
+        var remaining = photos.sorted(by: rank)
+        let ordered = slots.sorted { ($0.priority, $0.id) < ($1.priority, $1.id) }
+        var result: [String: PhotoID] = [:]
+        if let main = ordered.first, main.priority == 0, !remaining.isEmpty {
+            let i = remaining.firstIndex(where: { fits($0, main.orientation) }) ?? 0
+            result[main.id] = remaining.remove(at: i).id
+        }
+        for slot in ordered where slot.orientation != .any && result[slot.id] == nil {
+            if let i = remaining.firstIndex(where: { fits($0, slot.orientation) }) {
+                result[slot.id] = remaining.remove(at: i).id
+            }
+        }
+        for slot in ordered where result[slot.id] == nil && !remaining.isEmpty {
+            result[slot.id] = remaining.removeFirst().id
+        }
+        return result
+    }
+
+    public static func fits(_ photo: Photo, _ orientation: Orientation) -> Bool {
+        switch orientation {
+        case .any: return true
+        case .landscape: return photo.pixelWidth > photo.pixelHeight
+        case .portrait: return photo.pixelHeight > photo.pixelWidth
+        }
+    }
+
+    /// Best score first; ties by `capturedAt`, then `id`.
+    static func rank(_ a: Photo, _ b: Photo) -> Bool {
+        let sa = PhotoScore.score(a), sb = PhotoScore.score(b)
+        if sa != sb { return sa > sb }
+        return Photo.chronological(a, b)
+    }
+}
+
+// MARK: - Template change
+
+/// The outcome of `TemplateLayout.retemplate`.
+public struct RetemplateResult: Sendable, Equatable {
+    /// The spread on the new template (`manuallyEdited = true`).
+    public var spread: Spread
+    /// Photos of the old spread that got no frame (the new template has fewer frames),
+    /// chronological. They stay selected; the preflight reports them as not in the album.
+    public var unplacedPhotoIDs: [PhotoID]
+    /// Non-empty texts of the old spread that have no slot in the new template, in old order.
+    /// Applying the result loses them, so the caller asks the user first.
+    public var droppedTexts: [TextBox]
+
+    public init(spread: Spread, unplacedPhotoIDs: [PhotoID], droppedTexts: [TextBox]) {
+        self.spread = spread
+        self.unplacedPhotoIDs = unplacedPhotoIDs
+        self.droppedTexts = droppedTexts
+    }
+}
+
+extension TemplateLayout {
+    /// `spread` re-laid on `template` (spec 6.4 "změnit šablonu dvoustrany"). Pure.
+    ///
+    /// - Keeps the spread id and dayKey; kind and templateID come from the template; frames and
+    ///   text boxes are a fresh instance of the template for `geometry`; `manuallyEdited = true`.
+    /// - Photos: the old spread's photos (frame order, each once; ids missing from `photos` are
+    ///   skipped, the preflight reports those already) are assigned with `assign`, the drafter's
+    ///   orientation- and score-aware assignment, so the best photo lands in the main frame.
+    ///   Offsets and zooms reset (the frame shapes change). Extra photos go to
+    ///   `unplacedPhotoIDs`; extra frames stay empty (the preflight blocks the export until the
+    ///   user fills them, deletes the spread or switches back).
+    /// - Texts: each new slot takes the old text with the same id, else the first not yet used old
+    ///   text with the same role. Old texts that are not whitespace-only and found no slot are
+    ///   returned in `droppedTexts`; nothing is lost silently.
+    public static func retemplate(_ spread: Spread, to template: SpreadTemplate, geometry: PageGeometry,
+                                  photos: [PhotoID: Photo]) -> RetemplateResult {
+        var result = instantiate(template, geometry: geometry, dayKey: spread.dayKey, id: spread.id)
+        result.manuallyEdited = true
+
+        var seen = Set<PhotoID>()
+        let old = spread.frames.compactMap(\.photoID).filter { seen.insert($0).inserted }.compactMap { photos[$0] }
+        let assignment = assign(template.frames, photos: old)
+        for i in result.frames.indices {
+            result.frames[i].photoID = assignment[result.frames[i].id]
+        }
+        let placed = Set(assignment.values)
+        let unplaced = old.filter { !placed.contains($0.id) }.sorted(by: Photo.chronological).map(\.id)
+
+        // Two passes, so a slot matched by id is never taken by another slot's role fallback.
+        var used = Set<Int>()
+        var filled = Set<Int>()
+        for byID in [true, false] {
+            for i in result.texts.indices where !filled.contains(i) {
+                let box = result.texts[i]
+                let match = spread.texts.indices.first {
+                    !used.contains($0) && (byID ? spread.texts[$0].id == box.id : spread.texts[$0].role == box.role)
+                }
+                if let match {
+                    used.insert(match)
+                    filled.insert(i)
+                    result.texts[i].text = spread.texts[match].text
+                }
+            }
+        }
+        let dropped = spread.texts.indices.filter { i in
+            !used.contains(i) && !spread.texts[i].text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }.map { spread.texts[$0] }
+        return RetemplateResult(spread: result, unplacedPhotoIDs: unplaced, droppedTexts: dropped)
+    }
+}

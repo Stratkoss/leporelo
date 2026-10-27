@@ -246,6 +246,64 @@ import Foundation
         let one = try Self.check(a, verified: false, rule: rule)
         #expect(one == (try Self.check(a, verified: false, rule: rule)))
         #expect(one.map(\.id) == ["emptyFrame:s1:f1", "emptyFrame:s2:f1", "emptyFrame:cover-front:photo1",
-                                  "pageCount", "unverified"])
+                                  "pageCount", "unplacedSelected", "unverified"])
+    }
+
+    // MARK: Unplaced selected photos (Task 21a)
+
+    static func video(_ id: String) -> Photo {
+        var v = photo(id)
+        v.kind = .video
+        return v
+    }
+
+    static func unselected(_ id: String) -> Photo {
+        var p = photo(id)
+        p.isSelected = false
+        return p
+    }
+
+    @Test func unplacedSelectedPhotosGiveOneAlbumWarning() throws {
+        let photos = [Self.photo("p1"), Self.photo("p2"), Self.photo("p3"), Self.unselected("p4"), Self.video("v1")]
+        let issues = try Self.check(Self.album(spreads: [Self.spread("s1"), Self.spread("s2")], photos: photos,
+                                               cover: Self.cover()))
+        let unplaced = issues.filter { $0.id == "unplacedSelected" }
+        #expect(unplaced.count == 1)
+        #expect(unplaced[0].severity == .warning)
+        #expect(unplaced[0].spreadID == nil && unplaced[0].frameID == nil)
+        #expect(unplaced[0].message == "2 vybrané fotky nejsou v albu")
+        #expect(!Preflight.hasErrors(issues))
+    }
+
+    @Test func unplacedMessageUsesCzechPlurals() throws {
+        func message(_ n: Int) throws -> String? {
+            let extra = (0..<n).map { Self.photo("x\($0)") }
+            return try Self.check(Self.album(spreads: [Self.spread("s1"), Self.spread("s2")],
+                                             photos: [Self.photo("p1")] + extra, cover: Self.cover()))
+                .first { $0.id == "unplacedSelected" }?.message
+        }
+        #expect(try message(0) == nil)
+        #expect(try message(1) == "1 vybraná fotka není v albu")
+        #expect(try message(4) == "4 vybrané fotky nejsou v albu")
+        #expect(try message(5) == "5 vybraných fotek není v albu")
+    }
+
+    @Test func coverPhotoCountsAsPlaced() throws {
+        let photos = [Self.photo("p1"), Self.photo("c")]
+        let issues = try Self.check(Self.album(spreads: [Self.spread("s1"), Self.spread("s2")], photos: photos,
+                                               cover: Self.cover(photo: "c")))
+        #expect(!issues.contains { $0.id == "unplacedSelected" })
+    }
+
+    @Test func noUnplacedWarningBeforeTheFirstDraft() throws {
+        let issues = try Self.check(Self.album(spreads: [], photos: [Self.photo("p1"), Self.photo("p2")]))
+        #expect(!issues.contains { $0.id == "unplacedSelected" })
+    }
+
+    @Test func placedPhotoIDsCoverSpreadsAndCover() {
+        let a = Self.album(spreads: [Self.spread("s1", frames: [Self.frame("f1", photo: "p1"), Self.frame("f2", photo: nil)])],
+                           photos: [Self.photo("p1"), Self.photo("c"), Self.photo("x")], cover: Self.cover(photo: "c"))
+        #expect(a.placedPhotoIDs == ["p1", "c"])
+        #expect(a.unplacedSelectedPhotos.map(\.id) == ["x"])
     }
 }

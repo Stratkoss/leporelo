@@ -309,4 +309,59 @@ import Foundation
         // Round trip back restores the original layout.
         #expect(AlbumUpdater.changeFormat(album: b, to: f, profile: p) == a)
     }
+
+    // MARK: - photoMoved (Task 21a)
+
+    @Test func movedPhotoLeavesItsDaySpreadAndJoinsTheNewDay() throws {
+        let (p, f) = try D.canva(Self.lax)
+        let days = [D.day(Self.june18, D.dayPhotos("a", Self.june18, count: 8)),
+                    D.day(Self.june19, D.dayPhotos("b", Self.june19, count: 4))]
+        let a = D.draft(days, profile: p, format: f)
+        let gallery = try #require(a.spreads.first { $0.kind == .gallery && $0.dayKey == Self.june18 })
+        let id = try #require(gallery.frames.compactMap(\.photoID).first)
+        let decided = a.photos[id]?.selectionDecidedByUser
+
+        let b = AlbumUpdater.photoMoved(id, to: Self.june19, in: a, geometry: Self.geometry(p, f))
+
+        #expect(b.photos[id]?.dayKey == Self.june19)
+        #expect(b.photos[id]?.isSelected == true)
+        #expect(b.photos[id]?.selectionDecidedByUser == decided)  // a move is not a selection decision
+        #expect(b.spreads.first { $0.id == gallery.id }?.frames.contains { $0.photoID == id } == false)
+        let holders = b.spreads.filter { $0.frames.contains { $0.photoID == id } }
+        #expect(holders.map(\.dayKey) == [Self.june19])
+        #expect(holders.map(\.templateID) == ["gallery-1"])
+        // Inserted after June 19's last spread.
+        let lastJune19 = try #require(b.spreads.lastIndex { $0.dayKey == Self.june19 })
+        #expect(b.spreads[lastJune19].id == holders[0].id)
+    }
+
+    @Test func movedIntroPhotoKeepsIntroAndCover() throws {
+        let (p, f) = try D.canva(Self.lax)
+        let days = [D.day(Self.june18, D.dayPhotos("a", Self.june18, count: 8)),
+                    D.day(Self.june19, D.dayPhotos("b", Self.june19, count: 4))]
+        let a = D.draft(days, profile: p, format: f)
+        let intro = try #require(a.spreads.first { $0.kind == .intro })
+        let id = try #require(intro.frames.first?.photoID)
+        let oldDay = try #require(a.photos[id]?.dayKey)
+        let target = oldDay == Self.june18 ? Self.june19 : Self.june18
+
+        let b = AlbumUpdater.photoMoved(id, to: target, in: a, geometry: Self.geometry(p, f))
+
+        #expect(b.spreads.first { $0.kind == .intro }?.frames.first?.photoID == id)
+        #expect(b.cover == a.cover)
+        let dayHolders = b.spreads.filter {
+            ($0.kind == .journal || $0.kind == .gallery) && $0.frames.contains { $0.photoID == id }
+        }
+        #expect(dayHolders.map(\.dayKey) == [target])
+    }
+
+    @Test func movedUnselectedPhotoOnlyChangesItsDay() throws {
+        let (p, f) = try D.canva(Self.lax)
+        var a = D.draft([D.day(Self.june18, D.dayPhotos("a", Self.june18, count: 4))], profile: p, format: f)
+        a = Self.adding(D.photo("u", day: Self.june18, minute: 40), to: a)
+        let b = AlbumUpdater.photoMoved("u", to: Self.june19, in: a, geometry: Self.geometry(p, f))
+        var expected = a
+        expected.photos["u"]?.dayKey = Self.june19
+        #expect(b == expected)
+    }
 }

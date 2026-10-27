@@ -52,6 +52,23 @@ public struct Album: Sendable, Codable, Equatable {
     public var selectedPhotos: [Photo] {
         photos.values.filter(\.isSelected).sorted(by: Photo.chronological)
     }
+
+    /// Ids of the photos in any frame of the spreads or the cover (front and back).
+    public var placedPhotoIDs: Set<PhotoID> {
+        var ids = Set<PhotoID>()
+        for spread in spreads + [cover?.front, cover?.back].compactMap({ $0 }) {
+            for frame in spread.frames { if let id = frame.photoID { ids.insert(id) } }
+        }
+        return ids
+    }
+
+    /// Selected photos (not videos) that sit in no frame of the spreads or the cover,
+    /// chronological. Deleting a spread, a template with fewer frames or a drop that replaces a
+    /// photo leaves them; they would silently be missing from the print (Preflight warns).
+    public var unplacedSelectedPhotos: [Photo] {
+        let placed = placedPhotoIDs
+        return selectedPhotos.filter { $0.kind != .video && !placed.contains($0.id) }
+    }
 }
 
 extension Photo {

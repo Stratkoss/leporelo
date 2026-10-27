@@ -245,4 +245,26 @@ private func album(_ photos: [Photo]) -> Album {
         #expect(Workflow.defaultFormat(of: profile(["square-21", "portrait"]))?.id == "square-21")
         #expect(Workflow.defaultFormat(of: profile([])) == nil)
     }
+
+    // MARK: - draft (Task 21a)
+
+    @Test func draftUsesTheSelectionAsIs() throws {
+        let (profile, format) = try ProfileCatalog.format(profileID: "canva-photobook", formatID: "landscape-8x6in")
+        var photos: [Photo] = (0..<6).map {
+            photo("d1-\($0)", day1 + Double($0) * 600, day: 1, selected: $0 % 2 == 0, place: "Ravello")
+        }
+        photos += (0..<4).map { photo("d2-\($0)", day1 + 86_400 + Double($0) * 600, day: 2, selected: true) }
+        photos.append(photo("undated", day1, day: nil, selected: true))
+        let input = album(photos)
+
+        let out = Workflow.draft(album: input, profile: profile, format: format)
+
+        #expect(out.photos == input.photos)  // no recommendation, no series marking
+        let days = DayGrouper.group(input.photos.values.filter { $0.dayKey != nil }, timeZones: [:], places: [:])
+        #expect(Workflow.days(of: input) == days)
+        #expect(out == AlbumDrafter.draft(album: input, days: days, profile: profile, format: format))
+        let framed = Set(out.spreads.flatMap(\.frames).compactMap(\.photoID))
+        #expect(framed == Set(input.selectedPhotos.filter { $0.dayKey != nil }.map(\.id)))
+        #expect(out.spreads.contains { $0.kind == .journal && $0.texts.contains { $0.text == "Ravello" } })
+    }
 }

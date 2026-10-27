@@ -246,7 +246,7 @@ import Foundation
         for id in ["journal-3", "gallery-3"] {
             let t = TemplateCatalog.template(id: id)!
             let main = t.frames.first { $0.priority == 0 }!
-            let assignment = AlbumDrafter.assign(t.frames, photos: ps)
+            let assignment = TemplateLayout.assign(t.frames, photos: ps)
             #expect(assignment[main.id] == "b", "\(id)")
             #expect(Set(assignment.values) == ["w", "m", "b"], "\(id)")
         }
