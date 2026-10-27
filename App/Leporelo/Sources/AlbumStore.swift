@@ -315,7 +315,7 @@ final class AlbumStore {
         case .moveSpread: "Přesunout dvoustranu"
         case .insertSpread: "Přidat dvoustranu"
         case .deleteSpread: "Smazat dvoustranu"
-        case .replaceSpread: "Změnit šablonu"
+        case .replaceSpread: "Změnit dvoustranu"
         case .restoreSpread: "Obnovit dvoustranu"
         case .setPhotoDay: "Přesunout fotku do dne"
         case .setTitle: "Změnit název"

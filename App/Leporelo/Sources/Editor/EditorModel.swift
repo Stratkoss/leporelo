@@ -23,12 +23,13 @@ enum LayoutItem: Hashable {
     case text(String)
 }
 
-/// How `EditorModel.updateLayout` conforms a frame to the page margin.
+/// How `EditorModel.updateLayout` conforms a frame or text to the page margin.
 enum LayoutUpdateMode {
-    /// The frame is dragged or nudged: it only shifts, never changes size
-    /// (`MarginRule.conformMovedFrame`).
+    /// The item is dragged or nudged: it only shifts, never changes size
+    /// (`MarginRule.conformMovedFrame`, `conformMovedText`).
     case move
-    /// An edge or corner is dragged: each edge snaps on its own (`MarginRule.conformFrame`).
+    /// An edge or corner is dragged: a frame's edges snap on their own (`MarginRule.conformFrame`),
+    /// a text's dragged edge is clamped to the margin box (`conformText`).
     case resize
 }
 
@@ -763,18 +764,22 @@ final class EditorModel {
 
     /// The item's new rectangle (spread mm) in the preview, conformed to the page margin (area
     /// `.spread`): a frame by `MarginRule.conformMovedFrame` for `.move` (it keeps its size) or
-    /// `conformFrame` for `.resize`; a text by `conformText` in both modes (it only shifts unless
-    /// larger than the margin box). Without a running session for `item` it starts one on the
-    /// current spread first (committing any other session). A non-finite rectangle is ignored.
-    func updateLayout(_ item: LayoutItem, rect: Rect, mode: LayoutUpdateMode = .resize) {
+    /// `conformFrame` for `.resize`; a text by `conformMovedText` for `.move` (it only shifts
+    /// unless larger than the margin box) or `conformText` for `.resize` (the dragged edge is
+    /// clamped, the box does not shift). `nudge` is the arrow-key step that produced `rect`: a
+    /// moved frame then steps between the bleed and the margin line instead of being pulled back
+    /// (`conformMovedFrame(_:area:nudge:)`); nil for a mouse drag. Without a running session for
+    /// `item` it starts one on the current spread first (committing any other session). A
+    /// non-finite rectangle is ignored.
+    func updateLayout(_ item: LayoutItem, rect: Rect, mode: LayoutUpdateMode = .resize, nudge: Point? = nil) {
         if layoutSession?.item != item { beginLayoutChange(item) }
         guard layoutSession != nil,
               [rect.minX, rect.minY, rect.size.width, rect.size.height].allSatisfy(\.isFinite) else { return }
-        switch item {
-        case .frame:
-            layoutSession?.rect = mode == .move ? marginRule.conformMovedFrame(rect, area: .spread)
-                                                : marginRule.conformFrame(rect, area: .spread)
-        case .text: layoutSession?.rect = marginRule.conformText(rect, area: .spread)
+        switch (item, mode) {
+        case (.frame, .move): layoutSession?.rect = marginRule.conformMovedFrame(rect, area: .spread, nudge: nudge)
+        case (.frame, .resize): layoutSession?.rect = marginRule.conformFrame(rect, area: .spread)
+        case (.text, .move): layoutSession?.rect = marginRule.conformMovedText(rect, area: .spread)
+        case (.text, .resize): layoutSession?.rect = marginRule.conformText(rect, area: .spread)
         }
     }
 
@@ -861,7 +866,8 @@ final class EditorModel {
     }
 
     /// "Okraj": sets the book's page margin (`AlbumUpdater.settingMargin`: clamped to the profile's
-    /// safe zone ... `MarginRule.maxMarginMM`, every spread and the cover conformed) as one step
+    /// safe zone ... `MarginRule.maxMarginMM`, template spreads re-laid from their template, custom
+    /// layouts and the cover conformed) as one step
     /// "Změnit okraj". Nothing when the clamped value equals the current margin.
     func setMargin(_ mm: Double) {
         commitSessions()
@@ -924,8 +930,8 @@ final class EditorModel {
                                          marginMM: store.album.marginMM)
     }
 
-    /// "Změnit šablonu" (`TemplateLayout.retemplate`, edit `replaceSpread`, one step). A hand-made
-    /// layout (`customLayout`) blocks the change until `confirmLayoutReplace` (asked first), then
+    /// "Doporučené rozložení…": applies a template (`TemplateLayout.retemplate`, edit
+    /// `replaceSpread`, one step "Použít doporučené rozložení"). A hand-made layout (`customLayout`) blocks the change until `confirmLayoutReplace` (asked first), then
     /// texts that would be lost block it until `confirmTextLoss`; photos without a frame stay
     /// selected but unplaced; extra frames stay empty (preflight). On a hand-made layout the
     /// spread's own template restores the recommended layout.
@@ -940,7 +946,7 @@ final class EditorModel {
         guard let result = previewTemplateChange(to: templateID, in: id) else { return .unavailable }
         if spread.customLayout && !confirmLayoutReplace { return .needsLayoutReplaceConfirmation }
         if !result.droppedTexts.isEmpty && !confirmTextLoss { return .needsTextLossConfirmation(result.droppedTexts) }
-        return perform([.replaceSpread(result.spread)], "Změnit šablonu")
+        return perform([.replaceSpread(result.spread)], EditorText.applyLayoutAction)
             ? .applied(unplacedPhotoIDs: result.unplacedPhotoIDs) : .unavailable
     }
 

@@ -617,9 +617,10 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
     }
 
     /// `rect` snapped by `SnapEngine` (targets: the page edges, margins and centres, the other
-    /// frames and texts of the spread, the grid; per `snapSettings`), threshold 8 points. Sets the
-    /// guides to draw. No snapping while ⌘ is held, nor for a ⇧ corner resize (the snapped edges
-    /// would break the kept ratio).
+    /// frames and texts of the spread, the grid; per `snapSettings`, without the lines inside a
+    /// margin band: `MarginRule.allowedTargets`), threshold 8 points. Sets the guides to draw
+    /// (`mouseDragged` then keeps only those the conformed result touches). No snapping while ⌘
+    /// is held, nor for a ⇧ corner resize (the snapped edges would break the kept ratio).
     private func snapped(_ rect: Rect, edges: RectEdges, item: LayoutItem, keepAspect: Bool,
                          flags: NSEvent.ModifierFlags, scale: CGFloat) -> Rect {
         snapGuides = []
@@ -627,8 +628,10 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
               let geometry, let model, let page, scale > 0 else { return rect }
         let others = page.frames.filter { item != .frame($0.id) }.map(\.rect)
             + page.texts.filter { item != .text($0.id) }.map(\.rect)
-        let targets = SnapEngine.targets(geometry: geometry, marginMM: model.marginMM, area: .spread, others: others,
-                                         settings: snapSettings)
+        let targets = MarginRule(geometry: geometry, marginMM: model.marginMM).allowedTargets(
+            SnapEngine.targets(geometry: geometry, marginMM: model.marginMM, area: .spread, others: others,
+                               settings: snapSettings),
+            area: .spread)
         let result = SnapEngine.snap(rect, moving: edges, to: targets, threshold: Double(Self.snapThreshold / scale))
         snapGuides = result.guides
         return result.rect
@@ -653,6 +656,8 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
                                flags: event.modifierFlags, scale: layout.scale)
             // After an outside commit mid-gesture (e.g. ⌘Z) `updateLayout` starts a new session itself.
             model.updateLayout(state.item, rect: rect, mode: state.edges == .all ? .move : .resize)
+            // The margin rule may have moved the item off a snap line: draw only the guides it is on.
+            if let shown = itemRect(state.item) { snapGuides = SnapEngine.guides(snapGuides, touching: shown) }
             needsDisplay = true
             return
         }
@@ -809,9 +814,12 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
                     model.beginLayoutChange(selected, in: page?.id)
                     layoutArrowSession = true
                 }
-                let moved = Rect(x: rect.minX + Double(dx) * stepMM, y: rect.minY + Double(dy) * stepMM,
+                let nudge = Point(x: Double(dx) * stepMM, y: Double(dy) * stepMM)
+                let moved = Rect(x: rect.minX + nudge.x, y: rect.minY + nudge.y,
                                  width: rect.size.width, height: rect.size.height)
-                model.updateLayout(selected, rect: moved, mode: .move)
+                // With the nudge a frame steps between the bleed and the margin line instead of
+                // being pulled back to where it started.
+                model.updateLayout(selected, rect: moved, mode: .move, nudge: nudge)
                 needsDisplay = true
                 return
             }

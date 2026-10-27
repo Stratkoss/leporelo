@@ -544,7 +544,11 @@ enum EditorText {
     static let backToTriage = "Zpět do třídění"
     static let redraft = "Navrhnout znovu"
     static let export = "Exportovat…"
-    static let changeTemplate = "Změnit šablonu…"
+    static let changeTemplate = "Doporučené rozložení…"
+    static let applyLayoutQuestion = "Použít doporučené rozložení?"
+    static let applyLayout = "Použít"
+    /// The undo action name of applying a recommended layout (a template) to a spread.
+    static let applyLayoutAction = "Použít doporučené rozložení"
     static let insertAfter = "Vložit dvoustranu za"
     static let deleteSpread = "Smazat dvoustranu"
     static let wholeSelection = "Celý výběr"

@@ -2,7 +2,7 @@ import AppKit
 import LeporeloCore
 import SwiftUI
 
-/// "Doporučená rozložení" ("Změnit šablonu…"): the templates `EditorModel.availableTemplates(for:)`
+/// "Doporučená rozložení" ("Doporučené rozložení…"): the templates `EditorModel.availableTemplates(for:)`
 /// offers for a spread, each with a small rendered preview (blank grey frames, the placeholders as
 /// text, conformed to the book's `marginMM`) and its frame count. Choosing one runs
 /// `attempt(templateID, confirmTextLoss, confirmLayoutReplace)` (the editor's `changeTemplate`).
@@ -54,7 +54,7 @@ struct TemplatePicker: View {
                             .buttonStyle(.plain)
                             .disabled(template.id == currentTemplateID && !customLayout)
                             .accessibilityLabel(EditorText.templateLabel(template)
-                                                + (template.id == currentTemplateID ? ", současná šablona" : ""))
+                                                + (template.id == currentTemplateID ? ", současné rozložení" : ""))
                     }
                 }
                 .padding(2)
@@ -67,10 +67,10 @@ struct TemplatePicker: View {
         }
         .padding(20)
         .frame(minWidth: 460, idealWidth: 640, minHeight: 360, idealHeight: 460)
-        .alert("Změnit šablonu?", isPresented: Binding(get: { pendingLoss != nil },
-                                                        set: { if !$0 { pendingLoss = nil } }),
+        .alert(EditorText.applyLayoutQuestion, isPresented: Binding(get: { pendingLoss != nil },
+                                                                    set: { if !$0 { pendingLoss = nil } }),
                presenting: pendingLoss) { pending in
-            Button("Změnit šablonu", role: .destructive) {
+            Button(EditorText.applyLayout, role: .destructive) {
                 choose(pending.templateID, confirmTextLoss: true, confirmLayoutReplace: pending.layoutConfirmed)
             }
             Button("Zrušit", role: .cancel) {}
@@ -87,7 +87,7 @@ struct TemplatePicker: View {
         } message: { pending in
             if !pending.texts.isEmpty { Text(EditorText.textLoss(pending.texts)) }
         }
-        .alert("Šablonu nejde použít", isPresented: $showsUnavailable) {
+        .alert("Rozložení nejde použít", isPresented: $showsUnavailable) {
             Button("OK", role: .cancel) {}
         } message: {
             Text("Dvoustrana se mezitím změnila. Zkuste to prosím znovu.")

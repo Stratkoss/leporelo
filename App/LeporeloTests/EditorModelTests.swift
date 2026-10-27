@@ -511,7 +511,7 @@ struct EditorModelTests {
         #expect(frameMap(after) == TemplateLayout.assign(target.frames, photos: photos))
         #expect(after.frames.filter { $0.photoID == nil }.count == 1)
         #expect(after.texts.first { $0.role == .caption }?.text == gallery.texts.first { $0.role == .caption }?.text)
-        #expect(undo.undoActionName == "Změnit šablonu")
+        #expect(undo.undoActionName == "Použít doporučené rozložení")
 
         undo.undo()
         #expect(store.album == before)
@@ -855,7 +855,7 @@ struct EditorSessionTests {
         _ = model.changeTemplate(to: "journal-4", in: journal.id)
         endEvent()
         #expect(spread(store.album, journal.id)?.templateID == "journal-4")
-        #expect(undo.undoActionName == "Změnit šablonu")
+        #expect(undo.undoActionName == "Použít doporučené rozložení")
 
         model.undo()
         endEvent()
@@ -1256,15 +1256,31 @@ struct EditorLayoutTests {
         #expect(spread(store.album, journal.id)?.frames.first { $0.id == frame.id }?.rect
                 == Rect(x: 20, y: 20, width: 100, height: 74))
 
-        // A text stays inside the margin box of its page, keeping its size.
+        // A moved text stays inside the margin box of its page, keeping its size.
         let title = try #require(journal.texts.first { $0.id == "title" })
         step(undo) {
             model.beginLayoutChange(.text(title.id))
-            model.updateLayout(.text(title.id), rect: Rect(x: 2, y: 3, width: 50, height: 10))
+            model.updateLayout(.text(title.id), rect: Rect(x: 2, y: 3, width: 50, height: 10), mode: .move)
             model.endLayoutChange()
         }
         #expect(spread(store.album, journal.id)?.texts.first { $0.id == title.id }?.rect
                 == Rect(x: 20, y: 20, width: 50, height: 10))
+
+        // A text resized into the band: only the dragged edge is clamped, the box does not shift.
+        step(undo) {
+            model.beginLayoutChange(.text(title.id))
+            model.updateLayout(.text(title.id), rect: Rect(x: 20, y: 20, width: 50, height: 185), mode: .resize)
+            model.endLayoutChange()
+        }
+        #expect(spread(store.album, journal.id)?.texts.first { $0.id == title.id }?.rect
+                == Rect(x: 20, y: 20, width: 50, height: 170))
+        step(undo) {
+            model.beginLayoutChange(.text(title.id))
+            model.updateLayout(.text(title.id), rect: Rect(x: 5, y: 20, width: 65, height: 170), mode: .resize)
+            model.endLayoutChange()
+        }
+        #expect(spread(store.album, journal.id)?.texts.first { $0.id == title.id }?.rect
+                == Rect(x: 20, y: 20, width: 50, height: 170))
 
         // Non-finite input is ignored.
         let resized = try #require(spread(store.album, journal.id)?.frames.first { $0.id == frame.id }?.rect)
@@ -1274,9 +1290,10 @@ struct EditorLayoutTests {
         model.endLayoutChange()
     }
 
-    /// Arrow keys (incremental `.move` updates in one session) at the margin line never shrink
-    /// the frame: each 1 mm step into the band shifts back to the margin line (the nearer side).
-    @Test func arrowNudgeAtMarginDoesNotShrink() throws {
+    /// Arrow keys (incremental `.move` updates with their nudge, in one session) step a frame
+    /// from the margin line to the bleed and back, never shrinking it; outward at the trim it
+    /// stays. (Replaces the old ruling where 1 mm ← from the margin line was pulled back.)
+    @Test func arrowNudgeStepsBetweenMarginAndBleed() throws {
         let (model, store, undo) = try makeModel(try standardAlbum())
         let gallery = try #require(store.album.spreads.first { $0.templateID == "gallery-2" })
         model.currentSpreadID = gallery.id
@@ -1288,18 +1305,47 @@ struct EditorLayoutTests {
         }
         #expect(spread(store.album, gallery.id)?.frames.first { $0.id == "photo1" }?.rect == start)
 
+        func press(_ dx: Double, _ dy: Double = 0) throws -> Rect {
+            let current = try #require(model.displayedSpread(gallery.id)?.frames.first { $0.id == "photo1" }?.rect)
+            model.updateLayout(.frame("photo1"), rect: moved(current, dx: dx, dy: dy), mode: .move,
+                               nudge: Point(x: dx, y: dy))
+            return try #require(model.displayedSpread(gallery.id)?.frames.first { $0.id == "photo1" }?.rect)
+        }
         try step(undo) {
             model.beginLayoutChange(.frame("photo1"))
-            for _ in 0..<5 {
-                let current = try #require(model.displayedSpread(gallery.id)?.frames.first { $0.id == "photo1" }?.rect)
-                model.updateLayout(.frame("photo1"), rect: moved(current, dx: -1, dy: 0), mode: .move)
-                let after = try #require(model.displayedSpread(gallery.id)?.frames.first { $0.id == "photo1" }?.rect)
-                #expect(after.size == start.size)
-                #expect(after.minX == 10)
-            }
+            let out = try press(-1)    // margin line -> bleed
+            let beyond = try press(-1) // nothing beyond the trim
+            let back = try press(1)    // bleed -> margin line
+            let further = try press(5)
+            #expect(out == Rect(x: 0, y: 40, width: 120, height: 90))
+            #expect(beyond == Rect(x: 0, y: 40, width: 120, height: 90))
+            #expect(back == start)
+            #expect(further == Rect(x: 15, y: 40, width: 120, height: 90))
             model.endLayoutChange()
         }
-        #expect(spread(store.album, gallery.id)?.frames.first { $0.id == "photo1" }?.rect == start)
+        #expect(spread(store.album, gallery.id)?.frames.first { $0.id == "photo1" }?.rect
+                == Rect(x: 15, y: 40, width: 120, height: 90))
+
+        // ⇧→ from the right margin line before the spine reaches the spine (it used to tie and
+        // fall back); ⇧↓ from the bottom margin line reaches the bottom trim.
+        let right = Rect(x: 167, y: 110, width: 120, height: 90)  // maxX 287, maxY 200
+        try step(undo) {
+            model.beginLayoutChange(.frame("photo1"))
+            model.updateLayout(.frame("photo1"), rect: right, mode: .move)
+            let toSpine = try press(5)
+            let toBottom = try press(0, 5)
+            #expect(toSpine.maxX == 297)
+            #expect(toBottom.maxY == 210)
+            model.endLayoutChange()
+        }
+        // A mouse drag (no nudge) is unchanged: 1 mm into the band goes back to the nearer side.
+        try step(undo) {
+            model.beginLayoutChange(.frame("photo1"))
+            model.updateLayout(.frame("photo1"), rect: Rect(x: 9, y: 40, width: 120, height: 90), mode: .move)
+            let dragged = try #require(model.displayedSpread(gallery.id)?.frames.first { $0.id == "photo1" }?.rect)
+            #expect(dragged == start)
+            model.endLayoutChange()
+        }
     }
 
     @Test func layoutChangeMarksSpreadCustomAndManual() throws {
@@ -1569,7 +1615,7 @@ struct EditorLayoutTests {
         }
         #expect(spread(store.album, journal.id)?.templateID == "gallery-2")
         #expect(spread(store.album, journal.id)?.customLayout == false)
-        #expect(undo.undoActionName == "Změnit šablonu")
+        #expect(undo.undoActionName == "Použít doporučené rozložení")
         undo.undo()
         #expect(spread(store.album, journal.id) == custom)
 
