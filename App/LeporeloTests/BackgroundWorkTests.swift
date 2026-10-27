@@ -142,6 +142,71 @@ struct BackgroundWorkTests {
         #expect(Set(store.album.photos.values.filter(\.isSelected).map(\.id)) == recommended.subtracting([dropped]))
     }
 
+    /// Final fix wave A3: photos analysed late (the album already has spreads) do not run the
+    /// recommendations, which would deselect undecided photos that stay in their frames.
+    @Test func lateAnalysisOfADraftedAlbumKeepsTheSelection() async throws {
+        let store = try await makeStore(dayOfPhotos(12))
+        let first = makeWork(store, source: FakePhotoSource())
+        first.start()
+        await first.waitUntilFinished()
+        var album = store.album
+        for id in album.photos.keys { album.photos[id]?.isSelected = true }  // undecided, all selected
+        let (profile, format) = try ProfileCatalog.format(profileID: album.supplierProfileID, formatID: album.formatID)
+        album = Workflow.draft(album: album, profile: profile, format: format)
+        #expect(!album.spreads.isEmpty)
+        let late = album.photos.keys.sorted().prefix(3)
+        for id in late { album.photos[id]?.analysis = nil }
+        store.replaceWithoutUndo(album: album)
+        let selected = Set(store.album.photos.values.filter(\.isSelected).map(\.id))
+        #expect(selected.count == 12)
+
+        let again = makeWork(store, source: FakePhotoSource())
+        again.start()
+        await again.waitUntilFinished()
+        #expect(late.allSatisfy { store.album.photos[$0]?.analysis != nil })
+        #expect(!again.recommendationsApplied)
+        #expect(Set(store.album.photos.values.filter(\.isSelected).map(\.id)) == selected)
+    }
+
+    /// Final fix wave A4: the busy autosave delay applies while photos are analysed too.
+    @Test func analysisUsesTheBusyAutosaveDelay() async throws {
+        #expect(AlbumStore.autosaveDelay(normal: .seconds(3), busy: .seconds(10), downloading: false,
+                                         analysing: false) == .seconds(3))
+        #expect(AlbumStore.autosaveDelay(normal: .seconds(3), busy: .seconds(10), downloading: false,
+                                         analysing: true) == .seconds(10))
+        #expect(AlbumStore.autosaveDelay(normal: .seconds(3), busy: .seconds(10), downloading: true,
+                                         analysing: false) == .seconds(10))
+        let store = try await makeStore(dayOfPhotos(6))
+        let source = FakePhotoSource()
+        source.holdThumbnails()
+        let work = makeWork(store, source: source)
+        #expect(store.effectiveAutosaveDelay == store.autosaveDelay)
+        work.start()
+        try await waitUntil("held thumbnails") { source.heldCalls > 0 }
+        #expect(store.backgroundAnalysisRunning)
+        #expect(store.effectiveAutosaveDelay == store.autosaveBusyDelay)
+        source.releaseAll()
+        await work.waitUntilFinished()
+        #expect(!store.backgroundAnalysisRunning)
+        #expect(store.effectiveAutosaveDelay == store.autosaveDelay)
+
+        // A cancelled pass clears the flag too.
+        var album = store.album
+        for id in album.photos.keys { album.photos[id]?.analysis = nil }
+        store.replaceWithoutUndo(album: album)
+        let held = FakePhotoSource()
+        held.holdThumbnails()
+        let cancelled = makeWork(store, source: held)
+        cancelled.start()
+        try await waitUntil("held thumbnails") { held.heldCalls > 0 }
+        #expect(store.backgroundAnalysisRunning)
+        cancelled.cancel()
+        #expect(!store.backgroundAnalysisRunning)
+        held.releaseAll()
+        await cancelled.waitUntilFinished()
+        #expect(!store.backgroundAnalysisRunning)
+    }
+
     /// A pass in which no photo could be analyzed (e.g. every thumbnail unavailable) does not
     /// count as "the first analysis": no recommendations, nothing written.
     @Test func noRecommendationsWhenNothingWasAnalyzed() async throws {

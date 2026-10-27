@@ -50,17 +50,24 @@ private func draftedAlbum() throws -> Album {
     return drafted
 }
 
-/// One solid colour for every photo, optionally slow (to cancel mid-export).
+/// One solid colour for every photo, optionally slow (to cancel mid-export). Wide enough for any
+/// frame of A4 landscape at 300 DPI (a page-wide frame with bleed needs ~3 579 px): the export
+/// fails closed on images narrower than needed.
 private struct FakeImageProvider: ImageProvider {
     var delay: Duration?
-    func image(for photoID: PhotoID, minPixelWidth: Int) async -> CGImage? {
-        if let delay { try? await Task.sleep(for: delay) }
-        let ctx = CGContext(data: nil, width: 400, height: 300, bitsPerComponent: 8, bytesPerRow: 0,
+
+    private static let solid: CGImage = {
+        let ctx = CGContext(data: nil, width: 3600, height: 2700, bitsPerComponent: 8, bytesPerRow: 0,
                             space: CGColorSpace(name: CGColorSpace.sRGB)!,
                             bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
         ctx.setFillColor(CGColor(srgbRed: 0.2, green: 0.5, blue: 0.8, alpha: 1))
-        ctx.fill(CGRect(x: 0, y: 0, width: 400, height: 300))
-        return ctx.makeImage()
+        ctx.fill(CGRect(x: 0, y: 0, width: 3600, height: 2700))
+        return ctx.makeImage()!
+    }()
+
+    func image(for photoID: PhotoID, minPixelWidth: Int) async -> CGImage? {
+        if let delay { try? await Task.sleep(for: delay) }
+        return Self.solid
     }
 }
 
@@ -88,6 +95,12 @@ private func makeModel(_ album: Album? = nil, verified: Bool = false, images: Fa
     let album = try album ?? draftedAlbum()
     let url = makeTempDir().appendingPathComponent("Export.leporelo")
     let package = try ProjectPackage.create(at: url, album: album)
+    // The stored originals exist (the export checks the files; the fake provider supplies pixels).
+    for photo in album.photos.values {
+        if case .stored = photo.originalState {
+            _ = try package.storeOriginal(data: Data([0xFF, 0xD8, 0xFF]), ext: "jpg", for: photo.id)
+        }
+    }
     let store = AlbumStore(album: album, package: package)
     let g = try laxGeometry(verified: verified)
     let model = ExportModel(store: store, geometry: { g }, runner: runner ?? .pdf(images: { _ in images }),
@@ -174,6 +187,30 @@ struct ExportModelTests {
         #expect(model.exportButtonTitle == "Čekám na originály (2)")
         #expect(!model.canExport)
         #expect(model.rows.contains { $0.text == "Originál není dostupný" && $0.issue.severity == .error })
+    }
+
+    /// Final fix wave C1: a placed photo whose stored original file is gone is an error (before
+    /// the export starts), with a hint; one file check per placed photo.
+    @Test func missingOriginalFileBlocksExport() async throws {
+        let (model, store) = try makeModel()
+        let placed = try #require(store.album.placedPhotoIDs.sorted().first)
+        let url = try #require(store.package.originalURL(for: placed, album: store.album))
+        try FileManager.default.removeItem(at: url)
+        await model.runPreflight().value
+        model.acceptedWarnings = true
+        let errors = model.issues.filter { $0.id.hasPrefix("originalFile:") }
+        #expect(!errors.isEmpty)
+        #expect(errors.allSatisfy { $0.severity == .error && $0.message == "Soubor originálu chybí v projektu" })
+        let frames = (store.album.spreads + [store.album.cover?.front].compactMap { $0 })
+            .flatMap { $0.frames }.filter { $0.photoID == placed }
+        #expect(errors.count == frames.count)
+        #expect(!model.canExport)
+        let row = try #require(model.rows.first { $0.issue.id.hasPrefix("originalFile:") })
+        #expect(row.hint == ExportLogic.missingFileHint)
+        // A photo that is not `.stored` is Preflight's "original" error, not a second one.
+        var album = store.album
+        album.photos[placed]?.originalState = .missing
+        #expect(ExportLogic.missingOriginalFiles(album, package: store.package).isEmpty)
     }
 
     @Test func unavailableOriginalIsNotWaiting() async throws {
@@ -403,6 +440,10 @@ struct ExportModelTests {
         #expect(ExportLogic.failure(for: ExportError.unsupportedCoverMode).message.contains("obálk"))
         let write = ExportLogic.failure(for: ExportError.cannotWrite("pages.pdf"))
         #expect(write.message.contains("pages.pdf"))
+        let originals = ExportLogic.failure(for: ExportError.missingOriginals(["a", "b"]))
+        #expect(originals.message.hasPrefix("Originály 2 fotek v projektu chybí nebo nejdou přečíst, export se nezapsal."))
+        #expect(originals.detail == "a, b")
+        #expect(!originals.message.contains("!"))
         struct Boom: Error {}
         let other = ExportLogic.failure(for: Boom())
         #expect(other.message == "Export se nepodařil.")

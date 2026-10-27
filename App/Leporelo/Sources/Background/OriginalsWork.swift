@@ -18,10 +18,12 @@ import SwiftUI
 ///   whose state is `.missing` (or `.downloading` left over from a cancelled work) and that are not
 ///   in flight. `OriginalsDownloader` (concurrency 3) dedups.
 /// - Bounded automatic retries: a photo is tried automatically at most `Options.autoAttempts`
-///   times per work (first attempt + one retry for transient errors, which end as `.missing`).
-///   `.unavailable` (gone from Photos, or iCloud failed three times in a row inside the downloader)
-///   is never retried automatically. `retryFailed()` ("Stáhnout znovu") re-enqueues every wanted
-///   photo that is `.unavailable` or `.missing` and resets the automatic budget.
+///   times per work (first attempt + one retry for transient errors, which end as `.missing`; an
+///   iCloud or network failure that the downloader retried three times in a row is transient
+///   too). `.unavailable` (gone from Photos: `notFound`) is never retried automatically.
+///   `retryFailed()` ("Stáhnout znovu") first adopts complete files already in `originals/`, then
+///   re-enqueues every other wanted photo that is `.unavailable` or `.missing` and resets the
+///   automatic budget.
 /// - Batching: state changes are collected and written as ONE no-undo store mutation
 ///   (`AlbumStore.setOriginalStates`) every `batchSize` changes or `flushInterval`, and when a run
 ///   ends. States of photos no longer in the album are ignored by the store.
@@ -124,7 +126,7 @@ final class OriginalsWork {
     }
 
     /// "Stáhnout znovu": every wanted photo that failed gets another chance (and a fresh automatic
-    /// budget).
+    /// budget). A complete file already in `originals/` is adopted instead of downloaded again.
     func retryFailed() {
         guard !isCancelled, let store else { return }
         let ids = Self.wanted(in: store.album).filter { id in
@@ -132,7 +134,9 @@ final class OriginalsWork {
             return state == .unavailable || state == .missing
         }
         for id in ids { attempts[id] = 0 }
-        enqueue(ids.sorted())
+        enqueue(adoptStoredFiles(ids.sorted()))
+        // Recount now (adopted photos are no longer failed) instead of on the next observation.
+        storeChanged()
     }
 
     /// Returns when nothing is queued, running or waiting to be written (pending states are

@@ -189,6 +189,63 @@ struct OriginalsWorkTests {
         work.cancel()
     }
 
+    /// Final fix wave C9: an iCloud/network failure (the downloader tries 3 times) ends `.missing`,
+    /// not `.unavailable`: retried automatically once more (bounded), then by "Stáhnout znovu".
+    @Test func cloudFailuresStayTransient() async throws {
+        let store = try await makeOriginalsStore(2)
+        let id = store.sortedIDs()[0]
+        let identifier = try #require(store.album.photos[id]?.sourceIdentifier)
+        let source = FakePhotoSource()
+        source.failOriginal(identifier, with: .cloudUnavailable(identifier))
+        let work = makeOriginalsWork(store, source: source)
+        work.start()
+        try select(id, in: store)
+        // 2 automatic attempts x 3 downloader tries.
+        try await waitFor("two automatic attempts") { source.originalCalls(identifier) >= 6 }
+        await work.waitUntilIdle()
+        for title in ["A", "B", "C"] {
+            try store.applyWithoutUndo(.setTitle(title))
+            try await Task.sleep(for: .milliseconds(30))
+            await work.waitUntilIdle()
+        }
+        #expect(source.originalCalls(identifier) == 6)
+        #expect(store.album.photos[id]?.originalState == .missing)
+        #expect(work.failedCount == 1)
+
+        source.failOriginal(identifier, with: nil)
+        work.retryFailed()
+        try await waitFor("stored after retry") {
+            if case .stored = store.album.photos[id]?.originalState { return true }
+            return false
+        }
+        #expect(source.originalCalls(identifier) == 7)
+        work.cancel()
+    }
+
+    /// "Stáhnout znovu" adopts a complete file that is already in `originals/` instead of
+    /// downloading it again (the photo may have left Photos meanwhile).
+    @Test func retryFailedAdoptsStoredFilesFirst() async throws {
+        let store = try await makeOriginalsStore(2)
+        let id = store.sortedIDs()[0]
+        let identifier = try #require(store.album.photos[id]?.sourceIdentifier)
+        let source = FakePhotoSource()
+        source.failOriginal(identifier, with: .notFound(identifier))
+        let work = makeOriginalsWork(store, source: source)
+        work.start()
+        try select(id, in: store)
+        try await waitFor("unavailable") { store.album.photos[id]?.originalState == .unavailable }
+        await work.waitUntilIdle()
+        #expect(source.originalCalls(identifier) == 1)
+        // A complete original turns up in the package (e.g. a download whose state was lost).
+        _ = try store.package.storeOriginal(data: Data("orphan".utf8), ext: "jpg", for: id)
+        work.retryFailed()
+        await work.waitUntilIdle()
+        #expect(store.album.photos[id]?.originalState == .stored(relativePath: "originals/\(id).jpg"))
+        #expect(source.originalCalls(identifier) == 1)
+        #expect(work.failedCount == 0)
+        work.cancel()
+    }
+
     /// State changes are written in batches (one no-undo mutation each), not per photo.
     @Test func stateChangesAreBatched() async throws {
         let store = try await makeOriginalsStore(12)
@@ -406,10 +463,10 @@ struct SourceRefreshTests {
         let remaining = sourcePhotos(3).dropFirst()
         let source = FakePhotoSource(photos: Array(remaining) + [.fake("n1", minutes: 9 * 60 + 5),
                                                                 .fake("n2", minutes: 9 * 60 + 15)])
-        let report = try await SourceRefresh.run(store: store, source: source)
+        let report = try #require(try await SourceRefresh.run(store: store, source: source))
 
         #expect(report == RefreshReport(added: 2, deleted: 1))
-        #expect(RefreshText.summary(report) == "Přidány 2 nové fotky, 1 fotka už v Photos není.")
+        #expect(RefreshText.summary(report) == "Přidány 2 nové fotky, 1 fotka už není ve Fotkách.")
         #expect(writes == 1)
         #expect(store.album.photos.count == 5)
         let added = store.album.photos.values.filter { $0.sourceIdentifier.hasPrefix("n") }
@@ -478,13 +535,37 @@ struct SourceRefreshTests {
         session.close()
     }
 
+    /// Final fix wave A5: a rebind (revert, reload) while the source is read leaves the old store
+    /// alone and reports nothing.
+    @Test func refreshAfterARebindIsDiscarded() async throws {
+        let seed = try await makeOriginalsStore(2, name: "Zahozeno")
+        let url = seed.package.url
+        let source = FakePhotoSource(photos: sourcePhotos(2) + [.fake("n1", minutes: 9 * 60 + 3)])
+        let session = AlbumSession(placeResolver: { InMemoryPlaceResolver([]) })
+        session.bind(document: try AlbumDocument(file: FileWrapper(url: url, options: [])), fileURL: url,
+                     sourceProvider: { _ in source })
+        let oldStore = try #require(session.store)
+        await session.work?.waitUntilFinished()
+        source.holdPhotos()
+        let refresh = Task { await session.refreshFromSource() }
+        try await waitFor("held photos") { source.heldCalls > 0 }
+        session.bind(document: try AlbumDocument(file: FileWrapper(url: url, options: [])), fileURL: url,
+                     sourceProvider: { _ in source })
+        #expect(session.store !== oldStore)
+        source.releaseAll()
+        #expect(await refresh.value == .discarded)
+        #expect(oldStore.album.photos.count == 2)
+        #expect(session.store?.album.photos.count == 2)
+        session.close()
+    }
+
     @Test func summaryPlurals() {
         #expect(RefreshText.summary(.init(added: 0, deleted: 0)) == "Žádné změny.")
         #expect(RefreshText.summary(.init(added: 1, deleted: 0)) == "Přidána 1 nová fotka.")
-        #expect(RefreshText.summary(.init(added: 5, deleted: 3)) == "Přidáno 5 nových fotek, 3 fotky už v Photos nejsou.")
-        #expect(RefreshText.summary(.init(added: 0, deleted: 1)) == "1 fotka už v Photos není.")
-        #expect(RefreshText.summary(.init(added: 0, deleted: 4)) == "4 fotky už v Photos nejsou.")
-        #expect(RefreshText.summary(.init(added: 3000, deleted: 5)) == "Přidáno 3\u{00A0}000 nových fotek, 5 fotek už v Photos není.")
+        #expect(RefreshText.summary(.init(added: 5, deleted: 3)) == "Přidáno 5 nových fotek, 3 fotky už nejsou ve Fotkách.")
+        #expect(RefreshText.summary(.init(added: 0, deleted: 1)) == "1 fotka už není ve Fotkách.")
+        #expect(RefreshText.summary(.init(added: 0, deleted: 4)) == "4 fotky už nejsou ve Fotkách.")
+        #expect(RefreshText.summary(.init(added: 3000, deleted: 5)) == "Přidáno 3\u{00A0}000 nových fotek, 5 fotek už není ve Fotkách.")
     }
 }
 
@@ -536,8 +617,8 @@ struct AlbumScreenTests {
         var photo = makeTestPhoto("p", state: .stored(relativePath: "originals/p.jpg"))
         photo.deletedInSource = true
         #expect(TriageModel.badges(photo, duplicate: false).contains(.deletedInSource))
-        #expect(PhotoCell.tooltip(.deletedInSource, state: photo.originalState) == "Už v Photos není, originál zůstává v albu")
-        #expect(PhotoCell.tooltip(.deletedInSource, state: .missing) == "Už v Photos není")
+        #expect(PhotoCell.tooltip(.deletedInSource, state: photo.originalState) == "Už není ve Fotkách, originál zůstává v albu")
+        #expect(PhotoCell.tooltip(.deletedInSource, state: .missing) == "Už není ve Fotkách")
         photo.deletedInSource = false
         #expect(!TriageModel.badges(photo, duplicate: false).contains(.deletedInSource))
     }

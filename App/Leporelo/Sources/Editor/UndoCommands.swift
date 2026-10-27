@@ -3,8 +3,9 @@ import SwiftUI
 
 /// The album window's answer to Edit > Undo/Redo (published with `focusedSceneValue`), routed by
 /// `UndoRouter`: the editor's model in editor mode (commits a running session first), the window's
-/// undo manager in triage. The items are never disabled (`UndoMenuItem`); their titles name the
-/// step ⌘Z really undoes (a session only once it has changes).
+/// undo manager in triage, the responder chain while a sheet of the window or a text field other
+/// than the canvas overlay has the keyboard. The items are never disabled (`UndoMenuItem`); their
+/// titles name the step ⌘Z really undoes (a session only once it has changes).
 @MainActor
 @Observable
 final class AlbumUndoTarget {
@@ -12,9 +13,14 @@ final class AlbumUndoTarget {
     @ObservationIgnored weak var editor: EditorModel?
     @ObservationIgnored weak var store: AlbumStore?
     @ObservationIgnored weak var undoManager: UndoManager?
+    /// Reads the key window's focus (tests inject one).
+    @ObservationIgnored var focus: @MainActor () -> UndoFocus? = { UndoFocus.current() }
 
+    /// Evaluated afresh for every title and every action, so the item's title and what ⌘Z does
+    /// follow the same route (a sheet or a foreign text field: the responder chain).
     var route: UndoRoute {
-        UndoRouter.route(mode: mode, hasEditor: editor != nil, hasUndoManager: undoManager != nil)
+        UndoRouter.route(mode: mode, hasEditor: editor != nil, hasUndoManager: undoManager != nil,
+                         focus: focus())
     }
 
     /// The editor session's pending action (only with changes). Reading it and the store's

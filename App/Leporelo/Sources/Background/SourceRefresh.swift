@@ -21,13 +21,18 @@ struct RefreshReport: Equatable, Sendable {
 ///    the album by now is skipped) and the deleted flags of photos still in the album are set as
 ///    the refresh found them. Photos gone from Photos keep everything else: selection, frames,
 ///    the stored original.
+///
+/// `shouldApply` is asked on the main actor right before step 3: false (the window rebound to
+/// another store meanwhile, e.g. after a revert) applies nothing and returns nil.
 enum SourceRefresh {
     @MainActor
-    static func run(store: AlbumStore, source: any PhotoSource) async throws -> RefreshReport {
+    static func run(store: AlbumStore, source: any PhotoSource,
+                    shouldApply: @MainActor () -> Bool = { true }) async throws -> RefreshReport? {
         let snapshot = store.album
         let result = try await refresh(snapshot, source: source)
         let added = result.album.photos.values.filter { snapshot.photos[$0.id] == nil }
         let days = await days(of: added, in: store.album)
+        guard shouldApply() else { return nil }
 
         var updated = store.album
         var deleted = 0
@@ -72,15 +77,15 @@ enum SourceRefresh {
 enum RefreshText {
     static let command = "Načíst nové fotky ze zdroje"
 
-    /// "Přidány 2 nové fotky, 1 fotka už v Photos není." / "Přidána 1 nová fotka." /
-    /// "1 fotka už v Photos není." / "Žádné změny." (a clause only for a non-zero count).
+    /// "Přidány 2 nové fotky, 1 fotka už není ve Fotkách." / "Přidána 1 nová fotka." /
+    /// "1 fotka už není ve Fotkách." / "Žádné změny." (a clause only for a non-zero count).
     static func summary(_ report: RefreshReport) -> String {
         if report.added == 0 && report.deleted == 0 { return "Žádné změny." }
         let n = CzechPlural.grouped(report.added)
         let addedText = CzechPlural.choose(report.added, one: "Přidána \(n) nová fotka",
                                            few: "Přidány \(n) nové fotky", many: "Přidáno \(n) nových fotek")
-        let deletedText = CzechPlural.choose(report.deleted, one: "už v Photos není", few: "už v Photos nejsou",
-                                             many: "už v Photos není")
+        let deletedText = CzechPlural.choose(report.deleted, one: "už není ve Fotkách",
+                                             few: "už nejsou ve Fotkách", many: "už není ve Fotkách")
         let deletedClause = "\(CzechPlural.photos(report.deleted)) \(deletedText)"
         switch (report.added > 0, report.deleted > 0) {
         case (true, true): return "\(addedText), \(deletedClause)."

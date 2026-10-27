@@ -90,6 +90,7 @@ struct AlbumWindow: View {
             switch await session.refreshFromSource() {
             case .success(let report): refreshAlert = RefreshText.success(report)
             case .failure(let alert): refreshAlert = alert
+            case .discarded: break
             }
         }
     }

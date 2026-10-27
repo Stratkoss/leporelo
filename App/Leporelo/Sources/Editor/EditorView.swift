@@ -27,7 +27,6 @@ struct EditorView: View {
     @Environment(\.undoManager) private var undoManager
     @Environment(\.exportAlbum) private var exportAlbum
 
-    @State private var coverSide: CoverSide?
     @State private var loader = ThumbnailLoader()
     @State private var thumbnails = SpreadThumbnailCache()
     @State private var trayHighlight: PhotoID?
@@ -45,7 +44,7 @@ struct EditorView: View {
                 VStack(spacing: 0) {
                     issueBanner
                     canvas
-                    Text(coverSide == nil ? EditorText.canvasHint : EditorText.coverReadOnly)
+                    Text(model.coverSide == nil ? EditorText.canvasHint : EditorText.coverReadOnly)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
@@ -58,7 +57,9 @@ struct EditorView: View {
                     .frame(width: 236)
             }
             Divider()
-            SpreadStripView(model: model, coverSide: $coverSide, thumbnails: thumbnails,
+            SpreadStripView(model: model,
+                            coverSide: Binding(get: { model.coverSide }, set: { model.coverSide = $0 }),
+                            thumbnails: thumbnails,
                             onChangeTemplate: { templateSpreadID = $0 },
                             onDelete: requestDelete,
                             onShowInTray: showInTray)
@@ -107,7 +108,7 @@ struct EditorView: View {
     // MARK: Canvas
 
     private var canvasContent: CanvasContent? {
-        if let coverSide, let cover = model.store.album.cover {
+        if let coverSide = model.coverSide, let cover = model.store.album.cover {
             return .cover(coverSide == .front ? cover.front : cover.back)
         }
         return model.currentSpread.map(CanvasContent.spread)

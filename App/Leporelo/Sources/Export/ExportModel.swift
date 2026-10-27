@@ -139,11 +139,11 @@ final class ExportModel: Identifiable {
     @discardableResult
     func runPreflight() -> Task<Void, Never> {
         guard let g = geometry() else { return Task {} }
-        let album = store.album, revision = store.revision
+        let album = store.album, revision = store.revision, package = store.package
         preflightGeneration += 1
         let generation = preflightGeneration
         return Task { [weak self] in
-            let result = await Self.evaluate(album: album, geometry: g)
+            let result = await Self.evaluate(album: album, package: package, geometry: g)
             guard let self, generation == self.preflightGeneration else { return }
             self.publish(result, revision: revision)
         }
@@ -186,10 +186,11 @@ final class ExportModel: Identifiable {
         }
     }
 
-    private nonisolated static func evaluate(album: Album, geometry: PageGeometry) async
+    /// Off the main actor: Preflight (text layout included) and one file check per placed photo.
+    private nonisolated static func evaluate(album: Album, package: ProjectPackage, geometry: PageGeometry) async
         -> (issues: [PreflightIssue], waiting: Int) {
         await Task.detached(priority: .userInitiated) {
-            ExportLogic.evaluate(album: album, profile: geometry.profile, format: geometry.format)
+            ExportLogic.evaluate(album: album, profile: geometry.profile, format: geometry.format, package: package)
         }.value
     }
 
@@ -263,7 +264,7 @@ final class ExportModel: Identifiable {
         if issuesRevision == revision {
             checked = (issues, waitingForOriginals)
         } else {
-            checked = await Self.evaluate(album: album, geometry: g)
+            checked = await Self.evaluate(album: album, package: store.package, geometry: g)
             publish(checked, revision: revision)  // a changed warning set resets `acceptedWarnings`
         }
         let keys = ExportLogic.warningKeys(checked.issues)

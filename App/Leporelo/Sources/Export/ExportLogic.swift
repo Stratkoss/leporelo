@@ -83,10 +83,46 @@ enum ExportLogic {
         }
     }
 
-    /// Preflight plus the waiting count, for one album snapshot (runs off the main actor).
-    static func evaluate(album: Album, profile: SupplierProfile, format: BookFormat)
-        -> (issues: [PreflightIssue], waiting: Int) {
-        (Preflight.check(album: album, profile: profile, format: format), waitingForOriginals(album))
+    static let missingFileMessage = "Soubor originálu chybí v projektu"
+    static let missingFileHint =
+        "Originál byl z balíku alba smazán. Zavřete a znovu otevřete album, Leporelo ho stáhne znovu, nebo fotku vyměňte."
+
+    /// Preflight plus the waiting count, for one album snapshot (runs off the main actor). With a
+    /// `package`, also an error for every placed photo whose original is `.stored` but whose file is
+    /// not in the package (`missingOriginalFiles`): the export would otherwise print a thumbnail.
+    static func evaluate(album: Album, profile: SupplierProfile, format: BookFormat,
+                         package: ProjectPackage? = nil) -> (issues: [PreflightIssue], waiting: Int) {
+        var issues = Preflight.check(album: album, profile: profile, format: format)
+        if let package { issues += missingOriginalFiles(album, package: package) }
+        return (issues, waitingForOriginals(album))
+    }
+
+    /// "Soubor originálu chybí v projektu" (error, `originalFile:<spreadID>:<frameID>`) for every
+    /// frame of the spreads and the cover whose photo is `.stored` but
+    /// `ProjectPackage.originalURL(for:album:)` is nil (the file was deleted or moved). One file
+    /// check per placed photo. Other states are Preflight's "original" errors already.
+    static func missingOriginalFiles(_ album: Album, package: ProjectPackage) -> [PreflightIssue] {
+        var missing: [PhotoID: Bool] = [:]
+        func isMissing(_ id: PhotoID) -> Bool {
+            if let known = missing[id] { return known }
+            guard case .stored? = album.photos[id]?.originalState else {
+                missing[id] = false
+                return false
+            }
+            let result = package.originalURL(for: id, album: album) == nil
+            missing[id] = result
+            return result
+        }
+        let pages = album.spreads + [album.cover?.front, album.cover?.back].compactMap { $0 }
+        var issues: [PreflightIssue] = []
+        for page in pages {
+            for frame in page.frames {
+                guard let id = frame.photoID, isMissing(id) else { continue }
+                issues.append(PreflightIssue(id: "originalFile:\(page.id):\(frame.id)", severity: .error,
+                                             spreadID: page.id, frameID: frame.id, message: missingFileMessage))
+            }
+        }
+        return issues
     }
 
     /// The identity of a warning for "accepted": a changed message (e.g. other DPI) is a new one.
@@ -108,6 +144,9 @@ enum ExportLogic {
                 } else if spreadID == album.cover?.back.id {
                     row.place = "Zadní strana obálky"
                 }
+            }
+            if issue.id.hasPrefix("originalFile:") {
+                row.hint = missingFileHint
             }
             if issue.id.hasPrefix("original:"), photoState(of: issue, in: album) == .unavailable {
                 row.text = "Originál není dostupný"
@@ -169,6 +208,9 @@ enum ExportLogic {
         case .unsupportedCoverMode?:
             return ExportFailure(message: "Tento dodavatel chce obálku se hřbetem a tu Leporelo zatím neumí vytvořit.",
                                  detail: nil)
+        case let .missingOriginals(ids)?:
+            return ExportFailure(message: ExportError.missingOriginalsMessage(ids.count) + ". " + missingFileHint,
+                                 detail: ids.joined(separator: ", "))
         case let .cannotWrite(name)?:
             return ExportFailure(message: "Soubor \(name) nejde zapsat. Zkontrolujte, že do složky můžete zapisovat a je na disku místo.",
                                  detail: name)

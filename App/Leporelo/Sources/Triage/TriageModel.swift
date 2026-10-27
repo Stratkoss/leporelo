@@ -52,7 +52,7 @@ struct TriageItem: Equatable, Identifiable {
             case .screenshot: parts.append("snímek obrazovky nebo účtenka")
             case .duplicate: parts.append("podobná fotka v sérii")
             case .cloud: parts.append(TriageText.originalDescription(photo.originalState))
-            case .deletedInSource: parts.append("už v Photos není")
+            case .deletedInSource: parts.append("už není ve Fotkách")
             case .video: break
             }
         }
@@ -135,6 +135,13 @@ enum TriageText {
     static func footer(selected: Int, pages: Int, estimated: Bool = true) -> String {
         let verb = CzechPlural.choose(selected, one: "Vybrána", few: "Vybrány", many: "Vybráno")
         return "\(verb) \(CzechPlural.photos(selected)) · \(estimated ? "odhad " : "")\(CzechPlural.pages(pages))"
+    }
+
+    /// "Přesahuje maximum 98 stran" when `pages` (actual or estimated) is above the supplier's
+    /// maximum; nil within it or without a maximum.
+    static func pageMaximumWarning(pages: Int, maximum: Int?) -> String? {
+        guard let maximum, pages > maximum else { return nil }
+        return "Přesahuje maximum \(CzechPlural.grouped(maximum)) stran"
     }
 
     static func originalDescription(_ state: OriginalState) -> String {
@@ -449,6 +456,13 @@ final class TriageModel {
     /// "Vybráno 148 fotek · odhad 36 stran", or "… · 36 stran" once the album has spreads.
     var footerText: String {
         TriageText.footer(selected: selectedTotal, pages: pageCount, estimated: pagesAreEstimated)
+    }
+
+    /// Shown next to the footer when the page count (actual or estimated) is above the supplier's
+    /// maximum (the drafter already packs 3 photos per gallery spread then; the preflight blocks
+    /// the export until the album is shorter).
+    var pageMaximumWarning: String? {
+        TriageText.pageMaximumWarning(pages: pageCount, maximum: format(of: store.album)?.0.pageCount.max)
     }
 
     /// The album's profile and format, read from the catalog once per format.

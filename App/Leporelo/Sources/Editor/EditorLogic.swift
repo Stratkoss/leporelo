@@ -181,7 +181,9 @@ struct IssueAnchors {
             if let frame = issue.frameID, frameIDs.contains(frame) {
                 byFrame[frame, default: []].append(issue)
             } else if issue.frameID == nil, !issue.id.hasPrefix("emptyBody:"),
-                      let text = spread.texts.first(where: { issue.id.hasSuffix(":" + $0.id) }) {
+                      let text = spread.texts.first(where: { $0.id == issue.textID })
+                        ?? spread.texts.first(where: { issue.id.hasSuffix(":" + $0.id) }) {
+                // Text rules ("textOverflow", "textSafe", "textBleed") name their box in `textID`.
                 byText[text.id, default: []].append(issue)
             } else {
                 unanchored.append(issue)
@@ -212,6 +214,33 @@ enum WarningBadge {
     static func tooltip(_ issues: [PreflightIssue]) -> String {
         issues.map(\.message).joined(separator: "\n")
     }
+
+    struct Placement: Equatable {
+        var rect: CGRect
+        var severity: PreflightSeverity
+        var tooltip: String
+    }
+
+    /// Every badge of `spread`: one per frame with issues (anchored on the frame as printed,
+    /// `frameRect`), then one per text box with issues (anchored on the box: a text that does not
+    /// fit, or lies outside the safe zone, gets its icon in the box's top-right corner).
+    /// `viewRect` maps millimetres to view coordinates.
+    static func placements(_ issues: [PreflightIssue], spread: Spread, bounds: CGRect,
+                           frameRect: (Frame) -> Rect, viewRect: (Rect) -> CGRect) -> [Placement] {
+        let anchors = IssueAnchors(issues, spread: spread)
+        var result: [Placement] = []
+        for frame in spread.frames {
+            guard let list = anchors.byFrame[frame.id] else { continue }
+            result.append(Placement(rect: rect(anchor: viewRect(frameRect(frame)), bounds: bounds),
+                                    severity: severity(list), tooltip: tooltip(list)))
+        }
+        for box in spread.texts {
+            guard let list = anchors.byText[box.id] else { continue }
+            result.append(Placement(rect: rect(anchor: viewRect(box.rect), bounds: bounds),
+                                    severity: severity(list), tooltip: tooltip(list)))
+        }
+        return result
+    }
 }
 
 // MARK: - Strip: reordering
@@ -220,6 +249,26 @@ enum WarningBadge {
 /// leading intro and a trailing closing cannot be dragged, and nothing can be dropped before the
 /// intro or after the closing (`EditorModel.moveSpread` would clamp; the strip refuses instead).
 enum StripDrop {
+    enum Decision: Equatable {
+        /// Not a spread drag of this strip.
+        case reject
+        /// The drag pasteboard already names the dragged spread: move it now.
+        case move(String)
+        /// The payload is not readable synchronously (or the pasteboard still holds an earlier
+        /// drag's text): load it from the item provider and move only if it names this spread.
+        case loadPayload(String)
+    }
+
+    /// What a drop on the strip does: `draggingID` is the spread this strip started dragging,
+    /// `payload` the drag pasteboard's plain text when it can be read synchronously. A payload
+    /// that names another spread is not trusted to reject (it may be left over from an earlier
+    /// drag); the item provider decides then.
+    static func decision(draggingID: String?, payload: String?) -> Decision {
+        guard let id = draggingID else { return .reject }
+        if let payload, SpreadDrag.spreadID(from: payload) == id { return .move(id) }
+        return .loadPayload(id)
+    }
+
     static func allowedGaps(_ kinds: [SpreadKind]) -> ClosedRange<Int> {
         let lower = kinds.first == .intro ? 1 : 0
         let upper = kinds.count > 1 && kinds.last == .closing ? kinds.count - 1 : kinds.count
@@ -280,9 +329,39 @@ struct SpreadThumbnailKey: Hashable {
 ///   crop session first (the text overlay has no undo of its own: `allowsUndo` is off);
 /// - an album window in triage: the window's undo manager;
 /// - anything else (no album window in front, e.g. the "Nové album" window): the responder chain
-///   (`undo:`), so text fields there keep their own undo.
+///   (`undo:`), so text fields there keep their own undo;
+/// - also the responder chain while a SHEET of the album window is key ("Nové album…", export,
+///   template picker, alerts) or while a text field other than the canvas text overlay has focus:
+///   ⌘Z there belongs to that field, never to the album behind it.
 enum UndoRoute: Equatable {
     case editor, window, responderChain
+}
+
+/// Where the keyboard is when Edit > Undo is chosen (`UndoFocus.current()` reads it from AppKit).
+struct UndoFocus: Equatable {
+    enum Text: Equatable {
+        /// No text view has focus.
+        case none
+        /// The editor's canvas text overlay (`CanvasTextView`): its undo is the album's.
+        case canvasOverlay
+        /// Any other text field or text view (its own undo).
+        case other
+    }
+
+    var keyWindowIsSheet: Bool
+    var text: Text
+
+    /// The key window's state, nil without a key window.
+    @MainActor static func current() -> UndoFocus? {
+        guard let window = NSApp.keyWindow else { return nil }
+        let text: Text
+        if let responder = window.firstResponder as? NSText {
+            text = responder is CanvasTextView ? .canvasOverlay : .other
+        } else {
+            text = .none
+        }
+        return UndoFocus(keyWindowIsSheet: window.sheetParent != nil, text: text)
+    }
 }
 
 /// One Edit menu item. Never disabled on purpose: a disabled item whose Commands body SwiftUI
@@ -314,7 +393,11 @@ enum UndoRouter {
         }
     }
 
-    static func route(mode: WindowMode?, hasEditor: Bool, hasUndoManager: Bool) -> UndoRoute {
+    /// `focus`: the key window (nil: none, or not known); a sheet or a foreign text field takes
+    /// ⌘Z to the responder chain.
+    static func route(mode: WindowMode?, hasEditor: Bool, hasUndoManager: Bool,
+                      focus: UndoFocus? = nil) -> UndoRoute {
+        if let focus, focus.keyWindowIsSheet || focus.text == .other { return .responderChain }
         guard let mode else { return .responderChain }
         if mode == .editor && hasEditor { return .editor }
         return hasUndoManager ? .window : .responderChain

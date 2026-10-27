@@ -248,6 +248,11 @@ struct TriageModelTests {
 
     @Test func footerUsesCzechPlurals() {
         #expect(TriageText.footer(selected: 148, pages: 36) == "Vybráno 148 fotek · odhad 36 stran")
+        // Final fix wave C3: above the supplier's maximum the footer warns.
+        #expect(TriageText.pageMaximumWarning(pages: 100, maximum: 98) == "Přesahuje maximum 98 stran")
+        #expect(TriageText.pageMaximumWarning(pages: 98, maximum: 98) == nil)
+        #expect(TriageText.pageMaximumWarning(pages: 400, maximum: nil) == nil)
+        #expect(TriageText.pageMaximumWarning(pages: 2000, maximum: 1000) == "Přesahuje maximum 1\u{00A0}000 stran")
         #expect(TriageText.footer(selected: 1, pages: 4) == "Vybrána 1 fotka · odhad 4 strany")
         #expect(TriageText.footer(selected: 3, pages: 0) == "Vybrány 3 fotky · odhad 0 stran")
         #expect(TriageText.footer(selected: 3000, pages: 98) == "Vybráno 3\u{00A0}000 fotek · odhad 98 stran")

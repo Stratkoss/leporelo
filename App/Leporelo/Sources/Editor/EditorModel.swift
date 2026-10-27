@@ -151,6 +151,11 @@ final class EditorModel {
     /// The tray day the user chose for the current spread; nil follows the spread.
     private var chosenTrayDay: DayKey?
 
+    /// The cover side shown on the canvas instead of the current spread (the strip's cover
+    /// thumbnails); nil shows the spread. Choosing a spread (also the export's "Dvoustrana N" jump)
+    /// clears it.
+    var coverSide: CoverSide?
+
     /// The shown spread: the one the user chose while it exists, else the spread now at its last
     /// position (the nearest remaining one), else the first spread; nil without spreads. Choosing a
     /// spread ends a running text or crop session (committed) and resets the tray day.
@@ -169,6 +174,7 @@ final class EditorModel {
         }
         set {
             commitSessions()
+            coverSide = nil
             requestedSpreadID = newValue
             if let newValue, let index = spreadIndex(of: newValue) { lastSpreadIndex = index }
             chosenTrayDay = nil

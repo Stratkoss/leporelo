@@ -125,7 +125,7 @@ struct SpreadStripView: View {
                 }
                 .buttonStyle(.borderless)
                 .foregroundStyle(.orange)
-                .help("Klepnutím zobrazíte, které to jsou")
+                .help("Kliknutím zobrazíte, které to jsou")
                 .popover(isPresented: $showsUnplaced) { unplacedList(unplaced) }
             }
             Spacer()
@@ -135,7 +135,7 @@ struct SpreadStripView: View {
 
     private func unplacedList(_ photos: [Photo]) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Klepnutím fotku najdete v zásobníku").font(.caption).foregroundStyle(.secondary)
+            Text("Kliknutím fotku najdete v zásobníku").font(.caption).foregroundStyle(.secondary)
             ScrollView {
                 VStack(alignment: .leading, spacing: 2) {
                     ForEach(photos, id: \.id) { photo in
@@ -334,21 +334,34 @@ struct StripDropDelegate: DropDelegate {
 
     /// SwiftUI has no drag-end callback, so `draggingID` can be stale (a strip drag that ended
     /// elsewhere): the dropped text must really be that spread's payload, never a photo.
+    /// False unless this strip is dragging a spread onto a valid gap (`StripDrop.decision`). When
+    /// the drag pasteboard already names that spread the move happens now; otherwise the payload is
+    /// loaded from the item provider and checked before the move (the return value cannot wait for
+    /// that asynchronous check).
     func performDrop(info: DropInfo) -> Bool {
         defer {
             dropGap = nil
             draggingID = nil
         }
-        guard let id = draggingID, let t = target(info),
-              let provider = info.itemProviders(for: [.plainText, .utf8PlainText]).first else { return false }
-        let model = model
-        _ = provider.loadObject(ofClass: NSString.self) { object, _ in
-            let payload = (object as? NSString).map { $0 as String } ?? ""
-            Task { @MainActor in
-                guard SpreadDrag.spreadID(from: payload) == id else { return }
-                model.moveSpread(id, to: t.to)
+        guard let t = target(info) else { return false }
+        let payload = NSPasteboard(name: .drag).string(forType: .string)
+        switch StripDrop.decision(draggingID: draggingID, payload: payload) {
+        case .reject:
+            return false
+        case .move(let id):
+            model.moveSpread(id, to: t.to)
+            return true
+        case .loadPayload(let id):
+            guard let provider = info.itemProviders(for: [.plainText, .utf8PlainText]).first else { return false }
+            let model = model
+            _ = provider.loadObject(ofClass: NSString.self) { object, _ in
+                let loaded = (object as? NSString).map { $0 as String } ?? ""
+                Task { @MainActor in
+                    guard SpreadDrag.spreadID(from: loaded) == id else { return }
+                    model.moveSpread(id, to: t.to)
+                }
             }
+            return true
         }
-        return true
     }
 }

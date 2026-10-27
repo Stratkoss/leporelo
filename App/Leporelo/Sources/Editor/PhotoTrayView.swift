@@ -154,7 +154,7 @@ private struct TrayCell: View {
     private var accessibilityLabel: String {
         var parts = ["Fotka \(EditorText.photoLabel(photo))", photo.isSelected ? "vybraná" : "nevybraná"]
         if isPlaced { parts.append("v albu") } else if photo.isSelected { parts.append("není v albu") }
-        if photo.deletedInSource { parts.append("už v Photos není") }
+        if photo.deletedInSource { parts.append("už není ve Fotkách") }
         return parts.joined(separator: ", ")
     }
 }

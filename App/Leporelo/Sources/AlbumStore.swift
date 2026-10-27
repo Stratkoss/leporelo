@@ -36,12 +36,25 @@ final class AlbumStore {
     @ObservationIgnored var autosaveHandler: (@MainActor () async -> Bool)?
     /// How long `requestAutosave` waits so a burst of background flushes makes one save.
     @ObservationIgnored var autosaveDelay: Duration = .seconds(3)
-    /// The wait while originals download (every flush would otherwise save every few seconds).
+    /// The wait while originals download or photos are analysed (every flush would otherwise save
+    /// every few seconds).
     @ObservationIgnored var autosaveBusyDelay: Duration = .seconds(10)
     /// Set by `OriginalsWork` while downloads run.
     @ObservationIgnored var backgroundDownloadsRunning = false
+    /// Set by `BackgroundWork` while an analysis pass runs (its flushes come every ~0.5 s and one
+    /// save of a 3 000-photo package takes most of a second).
+    @ObservationIgnored var backgroundAnalysisRunning = false
     /// The delay `requestAutosave` uses now.
-    var effectiveAutosaveDelay: Duration { backgroundDownloadsRunning ? autosaveBusyDelay : autosaveDelay }
+    var effectiveAutosaveDelay: Duration {
+        Self.autosaveDelay(normal: autosaveDelay, busy: autosaveBusyDelay,
+                           downloading: backgroundDownloadsRunning, analysing: backgroundAnalysisRunning)
+    }
+
+    /// The busy delay while originals download OR photos are analysed, else the normal one.
+    nonisolated static func autosaveDelay(normal: Duration, busy: Duration, downloading: Bool,
+                                          analysing: Bool) -> Duration {
+        downloading || analysing ? busy : normal
+    }
     /// Explicit autosaves that failed in a row (reset by a success).
     @ObservationIgnored private var autosaveFailures = 0
     /// Three explicit autosaves in a row failed: the banner says "Ukládání se nezdařilo".

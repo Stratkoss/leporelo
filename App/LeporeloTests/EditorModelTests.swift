@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 import LeporeloCore
@@ -549,6 +550,20 @@ struct EditorModelTests {
         #expect(model.selectedFrameID == nil)
     }
 
+    /// Final fix wave A6: choosing a spread (the export's "Dvoustrana N" jump) leaves the cover.
+    @Test func choosingASpreadLeavesTheCover() throws {
+        let (model, store, _) = try makeModel(try standardAlbum())
+        let ids = store.album.spreads.map(\.id)
+        model.coverSide = .front
+        #expect(model.coverSide == .front)
+        model.currentSpreadID = ids[2]
+        #expect(model.coverSide == nil)
+        #expect(model.currentSpreadID == ids[2])
+        model.coverSide = .back
+        model.currentSpreadID = ids[2]  // the same spread again
+        #expect(model.coverSide == nil)
+    }
+
     @Test func nextAndPreviousStopAtTheEnds() throws {
         let (model, store, _) = try makeModel(try standardAlbum())
         let ids = store.album.spreads.map(\.id)
@@ -907,6 +922,7 @@ struct EditorViewSupportTests {
         step(undo) { model.setText("title", "Ravello") }
 
         let target = AlbumUndoTarget()
+        target.focus = { nil }
         target.editor = model
         target.store = store
         target.undoManager = undo
@@ -934,10 +950,38 @@ struct EditorViewSupportTests {
         target.undo()
         #expect(spread(store.album, journal.id)?.texts.first { $0.id == "body" }?.text == "")
 
+        // A sheet of the window is key ("Nové album…", export): the responder chain, plain title,
+        // and ⌘Z does not touch the album.
+        target.mode = .editor
+        target.focus = { UndoFocus(keyWindowIsSheet: true, text: .other) }
+        #expect(target.route == .responderChain)
+        #expect(target.undoItem == UndoMenuItem(title: "Odvolat", isEnabled: true))
+        let before = store.album
+        target.undo()
+        #expect(store.album == before)
+        target.focus = { UndoFocus(keyWindowIsSheet: false, text: .canvasOverlay) }
+        #expect(target.route == .editor)
+
         // Without an undo manager or an editor: the responder chain.
         let bare = AlbumUndoTarget()
         #expect(bare.route == .responderChain)
         #expect(bare.undoItem == UndoMenuItem(title: "Odvolat", isEnabled: true))
+    }
+
+    /// Final fix wave A2: the text overlay scrolls when its text is longer than the box.
+    @Test func textOverlayScrollsLongText() {
+        let (scroll, text) = SpreadCanvasNSView.makeTextOverlay(frame: CGRect(x: 0, y: 0, width: 200, height: 40))
+        #expect(scroll.documentView === text)
+        #expect(scroll.hasVerticalScroller)
+        #expect(!scroll.hasHorizontalScroller)
+        #expect(text.isVerticallyResizable && !text.isHorizontallyResizable)
+        #expect(!text.allowsUndo)
+        text.font = NSFont.systemFont(ofSize: 13)
+        text.string = String(repeating: "Dlouhý text, který se do rámečku nevejde. ", count: 40)
+        text.layoutManager?.ensureLayout(for: text.textContainer!)
+        text.sizeToFit()
+        #expect(text.frame.height > scroll.contentSize.height)
+        #expect(text.frame.width <= scroll.contentSize.width + 0.5)
     }
 
     @Test func showInTrayJumpsToThePhotosDay() throws {

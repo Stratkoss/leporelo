@@ -182,7 +182,7 @@ final class PhotoCell: NSCollectionViewItem {
         case .screenshot: "Snímek obrazovky nebo účtenka"
         case .cloud: TriageText.originalDescription(state).capitalizedFirst
         case .deletedInSource:
-            if case .stored = state { "Už v Photos není, originál zůstává v albu" } else { "Už v Photos není" }
+            if case .stored = state { "Už není ve Fotkách, originál zůstává v albu" } else { "Už není ve Fotkách" }
         }
     }
 

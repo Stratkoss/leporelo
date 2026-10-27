@@ -114,6 +114,11 @@ struct TriageView: View {
         HStack {
             Text(model.footerText)
                 .monospacedDigit()
+            if let warning = model.pageMaximumWarning {
+                Label(warning, systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                    .monospacedDigit()
+            }
             Spacer()
             Button(TriageText.propose) { proposeAlbum?.run() }
                 .keyboardShortcut(.defaultAction)

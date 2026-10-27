@@ -91,12 +91,15 @@ final class AlbumSession {
     enum RefreshOutcome: Equatable {
         case success(RefreshReport)
         case failure(RefreshText.Alert)
+        /// The window was rebound (revert, reload) while the source was read: nothing was applied
+        /// and there is nothing to report.
+        case discarded
     }
 
     /// "Načíst nové fotky ze zdroje": `SourceRefresh.run` on the CURRENT store, then the
     /// background work restarts so the new photos get analysed and their places resolved (without
-    /// automatic recommendations). A rebind meanwhile drops the result's follow-up work (the
-    /// refresh itself was applied to the store it started on, which a rebind leaves behind).
+    /// automatic recommendations). A rebind meanwhile (the store it started on is a dead end) applies
+    /// nothing and reports nothing: `.discarded`.
     func refreshFromSource() async -> RefreshOutcome {
         guard !isRefreshing, let store, store.album.source != nil, let source = sourceProvider(store.album) else {
             return .failure(RefreshText.failure(PhotoSourceError.notAuthorized))
@@ -104,11 +107,13 @@ final class AlbumSession {
         isRefreshing = true
         defer { isRefreshing = false }
         do {
-            let report = try await SourceRefresh.run(store: store, source: source)
+            guard let report = try await SourceRefresh.run(store: store, source: source,
+                                                           shouldApply: { [weak self] in self?.store === store })
+            else { return .discarded }
             if report.added > 0, self.store === store { restartWork(recommends: false) }
             return .success(report)
         } catch {
-            return .failure(RefreshText.failure(error))
+            return self.store === store ? .failure(RefreshText.failure(error)) : .discarded
         }
     }
 

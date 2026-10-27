@@ -292,6 +292,52 @@ struct IssueAnchorTests {
         #expect(tiny.minX == 10 && tiny.width == WarningBadge.size)
     }
 
+    /// Final fix wave A2: a text overflow (no frame, a `textID`) gets its badge in the top-right
+    /// corner of its text box; frames keep theirs.
+    @Test func textOverflowBadgeSitsOnItsTextBox() {
+        let page = Spread(
+            id: "s", kind: .journal, templateID: "journal-3", dayKey: nil,
+            frames: [Frame(id: "photo1", rect: Rect(x: 0, y: 0, width: 100, height: 50), photoID: "p",
+                           offset: Point(x: 0, y: 0), zoom: 1)],
+            texts: [TextBox(id: "body", rect: Rect(x: 120, y: 60, width: 80, height: 40), role: .body, text: "x")],
+            manuallyEdited: false)
+        let overflow = PreflightIssue(id: "textOverflow:s:body", severity: .warning, spreadID: "s", frameID: nil,
+                                      textID: "body", message: "Text se nevejde do rámečku, konec se nevytiskne")
+        let dpi = PreflightIssue(id: "dpi:s:photo1", severity: .error, spreadID: "s", frameID: "photo1",
+                                 message: "Fotka má jen 100 DPI, pro tisk je potřeba 220")
+        #expect(IssueAnchors([overflow], spread: page).byText["body"] == [overflow])
+        let scale = 2.0
+        let placements = WarningBadge.placements(
+            [overflow, dpi], spread: page, bounds: CGRect(x: 0, y: 0, width: 1000, height: 600),
+            frameRect: { $0.rect },
+            viewRect: { CGRect(x: $0.minX * scale, y: $0.minY * scale, width: $0.size.width * scale,
+                               height: $0.size.height * scale) })
+        #expect(placements.count == 2)
+        let text = placements[1]
+        #expect(text.rect == CGRect(x: 400 - WarningBadge.inset - WarningBadge.size, y: 120 + WarningBadge.inset,
+                                    width: WarningBadge.size, height: WarningBadge.size))
+        #expect(text.severity == .warning)
+        #expect(text.tooltip == "Text se nevejde do rámečku, konec se nevytiskne")
+        #expect(placements[0].severity == .error)
+        #expect(placements[0].rect.maxX == 200 - WarningBadge.inset)
+    }
+
+    /// Final fix wave A8: the canvas cache drops the least recently shown photos, never the
+    /// current page's.
+    @Test func canvasCacheEvictsLeastRecentlyUsed() {
+        let cached: Set<PhotoID> = ["a", "b", "c", "d", "e"]
+        let used = ["a": 3, "b": 1, "c": 5, "d": 2, "e": 5]
+        #expect(CanvasImageCache.evictionVictims(cached: cached, lastUsed: used, currentTick: 5, maxEntries: 3)
+                == ["b", "d"])
+        #expect(CanvasImageCache.evictionVictims(cached: cached, lastUsed: used, currentTick: 5, maxEntries: 5).isEmpty)
+        // Never the current page, even when it alone is above the bound.
+        #expect(CanvasImageCache.evictionVictims(cached: cached, lastUsed: used, currentTick: 5, maxEntries: 1)
+                == ["b", "d", "a"])
+        // Unknown use counts as oldest.
+        #expect(CanvasImageCache.evictionVictims(cached: ["x", "y"], lastUsed: ["y": 1], currentTick: 2, maxEntries: 1)
+                == ["x"])
+    }
+
     @Test func badgeShowsTheWorstSeverityAndAllMessages() {
         let issues = [issue("a", frame: "photo1"), issue("b", frame: "photo1", .error)]
         #expect(WarningBadge.severity(issues) == .error)
@@ -303,6 +349,17 @@ struct IssueAnchorTests {
 // MARK: - Strip
 
 struct StripDropTests {
+    /// Final fix wave A7: a drop without this strip's spread drag is refused (false); a readable
+    /// payload naming the dragged spread moves it at once.
+    @Test func dropDecision() {
+        #expect(StripDrop.decision(draggingID: nil, payload: "leporelo-spread:a") == .reject)
+        #expect(StripDrop.decision(draggingID: "a", payload: "leporelo-spread:a") == .move("a"))
+        // Another payload may be a stale pasteboard: the item provider decides (checked async).
+        #expect(StripDrop.decision(draggingID: "a", payload: "leporelo-spread:b") == .loadPayload("a"))
+        #expect(StripDrop.decision(draggingID: "a", payload: "plain text") == .loadPayload("a"))
+        #expect(StripDrop.decision(draggingID: "a", payload: nil) == .loadPayload("a"))
+    }
+
     private let kinds: [SpreadKind] = [.intro, .journal, .gallery, .gallery, .closing]
 
     @Test func introAndClosingStayInPlace() {
@@ -384,6 +441,27 @@ struct UndoRouterTests {
         #expect(UndoRouter.route(mode: .triage, hasEditor: false, hasUndoManager: false) == .responderChain)
         // No album window in front (e.g. the "Nové album" window's text field): its own undo.
         #expect(UndoRouter.route(mode: nil, hasEditor: false, hasUndoManager: false) == .responderChain)
+    }
+
+    /// Final fix wave A1: a sheet of the album window or a foreign text field keeps ⌘Z.
+    @Test func sheetsAndForeignTextFieldsUseTheResponderChain() {
+        let sheet = UndoFocus(keyWindowIsSheet: true, text: .none)
+        let sheetField = UndoFocus(keyWindowIsSheet: true, text: .other)
+        let field = UndoFocus(keyWindowIsSheet: false, text: .other)
+        let overlay = UndoFocus(keyWindowIsSheet: false, text: .canvasOverlay)
+        let plain = UndoFocus(keyWindowIsSheet: false, text: .none)
+        for mode in [WindowMode.editor, .triage] {
+            #expect(UndoRouter.route(mode: mode, hasEditor: true, hasUndoManager: true, focus: sheet) == .responderChain)
+            #expect(UndoRouter.route(mode: mode, hasEditor: true, hasUndoManager: true, focus: sheetField) == .responderChain)
+            #expect(UndoRouter.route(mode: mode, hasEditor: true, hasUndoManager: true, focus: field) == .responderChain)
+        }
+        // The canvas text overlay is the album's own text: the editor's undo.
+        #expect(UndoRouter.route(mode: .editor, hasEditor: true, hasUndoManager: true, focus: overlay) == .editor)
+        #expect(UndoRouter.route(mode: .editor, hasEditor: true, hasUndoManager: true, focus: plain) == .editor)
+        #expect(UndoRouter.route(mode: .triage, hasEditor: true, hasUndoManager: true, focus: plain) == .window)
+        // No key window: as before.
+        #expect(UndoRouter.route(mode: .editor, hasEditor: true, hasUndoManager: true, focus: nil) == .editor)
+        #expect(UndoRouter.route(mode: nil, hasEditor: false, hasUndoManager: false, focus: nil) == .responderChain)
     }
 
     @Test func menuTitlesNameTheAction() {

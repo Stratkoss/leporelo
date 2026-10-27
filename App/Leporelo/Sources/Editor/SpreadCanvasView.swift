@@ -70,6 +70,9 @@ struct SpreadCanvasView: NSViewRepresentable {
 ///
 /// A photo without a thumbnail yet (analysis has not reached it) is retried at the next album
 /// revision (analysis results bump it).
+///
+/// Bounded to `maxEntries` images: above that the least recently shown photos are evicted, never
+/// one of the page shown last (so the current page does not flicker grey).
 @MainActor
 final class CanvasImageCache {
     static let maxEntries = 120
@@ -80,10 +83,15 @@ final class CanvasImageCache {
     private var images: [PhotoID: CGImage] = [:]
     private var inFlight: Set<PhotoID> = []
     private var missingAt: [PhotoID: Int] = [:]
+    /// When each photo was last asked for (`useTick` of that request).
+    private var lastUsed: [PhotoID: Int] = [:]
+    private var useTick = 0
 
     func images(for page: Spread, area: PrintArea, album: Album, revision: Int, geometry: PageGeometry,
                 package: ProjectPackage) -> [PhotoID: CGImage] {
         let ids = Set(page.frames.compactMap(\.photoID))
+        useTick += 1
+        for id in ids { lastUsed[id] = useTick }
         let missing = ids.filter { images[$0] == nil && !inFlight.contains($0) && missingAt[$0] != revision }
         if !missing.isEmpty {
             load(missing, page: page, area: area, album: album, revision: revision, geometry: geometry,
@@ -109,7 +117,6 @@ final class CanvasImageCache {
 
     private func finish(_ ids: Set<PhotoID>, _ loaded: [PhotoID: CGImage], _ revision: Int) {
         inFlight.subtract(ids)
-        if images.count + loaded.count > Self.maxEntries { images.removeAll(keepingCapacity: true) }
         for id in ids {
             if let image = loaded[id] {
                 images[id] = image
@@ -118,7 +125,25 @@ final class CanvasImageCache {
                 missingAt[id] = revision
             }
         }
+        for id in Self.evictionVictims(cached: Set(images.keys), lastUsed: lastUsed, currentTick: useTick,
+                                       maxEntries: Self.maxEntries) {
+            images[id] = nil
+            lastUsed[id] = nil
+        }
         if !loaded.isEmpty { onLoad?() }
+    }
+
+    /// The least recently used photos to drop so at most `maxEntries` stay, oldest first; photos of
+    /// the latest request (`currentTick`) are never dropped (the cache may then stay above the
+    /// bound until the page changes). Ties by id, so the choice is deterministic.
+    nonisolated static func evictionVictims(cached: Set<PhotoID>, lastUsed: [PhotoID: Int], currentTick: Int,
+                                            maxEntries: Int) -> [PhotoID] {
+        let excess = cached.count - maxEntries
+        guard excess > 0 else { return [] }
+        return cached.filter { lastUsed[$0] != currentTick }
+            .sorted { (lastUsed[$0] ?? Int.min, $0) < (lastUsed[$1] ?? Int.min, $1) }
+            .prefix(excess)
+            .map { $0 }
     }
 }
 
@@ -155,6 +180,8 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
     private var arrowSession = false
 
     private var overlay: CanvasTextView?
+    /// The scroll view around `overlay` (a text longer than its box scrolls instead of vanishing).
+    private var overlayScroll: NSScrollView?
     private var overlayTextID: String?
     private var observers: [NSObjectProtocol] = []
 
@@ -321,18 +348,11 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
         badges = []
         removeAllToolTips()
         guard let page, let layout = layoutForBounds, let geometry else { return }
-        let anchors = IssueAnchors(issues, spread: page)
-        for frame in page.frames {
-            guard let list = anchors.byFrame[frame.id] else { continue }
-            let anchor = layout.viewRect(geometry.bleedExtended(frame.rect, area: area))
-            badges.append((WarningBadge.rect(anchor: anchor, bounds: bounds), WarningBadge.severity(list),
-                           WarningBadge.tooltip(list)))
-        }
-        for box in page.texts {
-            guard let list = anchors.byText[box.id] else { continue }
-            badges.append((WarningBadge.rect(anchor: layout.viewRect(box.rect), bounds: bounds),
-                           WarningBadge.severity(list), WarningBadge.tooltip(list)))
-        }
+        let area = self.area
+        badges = WarningBadge.placements(issues, spread: page, bounds: bounds,
+                                         frameRect: { geometry.bleedExtended($0.rect, area: area) },
+                                         viewRect: { layout.viewRect($0) })
+            .map { ($0.rect, $0.severity, $0.tooltip) }
         for badge in badges { addToolTip(badge.rect, owner: self, userData: nil) }
     }
 
@@ -619,31 +639,15 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
         select(nil)
         model.beginTextEditing(textID, in: page.id)
 
-        let view = CanvasTextView(frame: layout.viewRect(box.rect))
-        view.isRichText = false
-        view.importsGraphics = false
-        view.allowsUndo = false  // Undo goes through EditorModel (UndoRouter), never the field's own stack.
-        view.isAutomaticQuoteSubstitutionEnabled = true
+        let (scroll, view) = Self.makeTextOverlay(frame: layout.viewRect(box.rect))
         view.font = font(for: box.role, scale: layout.scale)
-        view.textColor = NSColor(srgbRed: 0.1, green: 0.1, blue: 0.1, alpha: 1)
-        view.insertionPointColor = .controlAccentColor
-        view.drawsBackground = true
-        view.backgroundColor = NSColor.white.withAlphaComponent(0.92)
-        view.textContainerInset = .zero
-        view.textContainer?.lineFragmentPadding = 0
-        view.textContainer?.widthTracksTextView = true
-        view.isVerticallyResizable = false
-        view.isHorizontallyResizable = false
         view.isMultiline = EditorText.isMultiline(box.role)
         view.string = box.text
         view.delegate = self
         view.onFinish = { [weak self] in self?.finishTextEditing() }
         view.onResign = { [weak self] in self?.finishTextEditing(resigning: true) }
-        view.setAccessibilityLabel("Text dvoustrany")
-        view.wantsLayer = true
-        view.layer?.borderColor = NSColor.controlAccentColor.cgColor
-        view.layer?.borderWidth = 1.5
-        addSubview(view)
+        addSubview(scroll)
+        overlayScroll = scroll
         overlay = view
         overlayTextID = textID
         window?.makeFirstResponder(view)
@@ -659,15 +663,17 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
     /// never while AppKit is still inside its resign.
     private func finishTextEditing(resigning: Bool = false) {
         guard let view = overlay else { return }
+        let container: NSView = overlayScroll ?? view
         overlay = nil
+        overlayScroll = nil
         overlayTextID = nil
         view.onFinish = nil
         view.onResign = nil
         view.delegate = nil
         model?.endTextEditing()
         if !resigning, window?.firstResponder === view { window?.makeFirstResponder(self) }
-        view.isHidden = true
-        DispatchQueue.main.async { view.removeFromSuperview() }
+        container.isHidden = true
+        DispatchQueue.main.async { container.removeFromSuperview() }
         needsDisplay = true
     }
 
@@ -686,8 +692,56 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
     private func positionOverlay() {
         guard let view = overlay, let id = overlayTextID, let layout = layoutForBounds,
               let box = page?.texts.first(where: { $0.id == id }) else { return }
-        view.frame = layout.viewRect(box.rect)
+        let rect = layout.viewRect(box.rect)
+        if let scroll = overlayScroll {
+            scroll.frame = rect
+            view.minSize = NSSize(width: scroll.contentSize.width, height: scroll.contentSize.height)
+            view.textContainer?.containerSize = NSSize(width: scroll.contentSize.width,
+                                                       height: CGFloat.greatestFiniteMagnitude)
+        } else {
+            view.frame = rect
+        }
         view.font = font(for: box.role, scale: layout.scale)
+    }
+
+    /// The overlay editor for a text box at `frame` (view coordinates): a `CanvasTextView` in a
+    /// scroll view the size of the box. The text wraps at the box width and grows downwards; when
+    /// it is longer than the box a vertical scroller appears, so the overflowing end stays visible
+    /// and editable (the print cuts it: Preflight warns "Text se nevejde do rámečku").
+    static func makeTextOverlay(frame: CGRect) -> (scroll: NSScrollView, text: CanvasTextView) {
+        let scroll = NSScrollView(frame: frame)
+        scroll.hasVerticalScroller = true
+        scroll.hasHorizontalScroller = false
+        scroll.autohidesScrollers = true
+        scroll.scrollerStyle = .overlay
+        scroll.borderType = .noBorder
+        scroll.drawsBackground = false
+        scroll.wantsLayer = true
+        scroll.layer?.borderColor = NSColor.controlAccentColor.cgColor
+        scroll.layer?.borderWidth = 1.5
+
+        let size = scroll.contentSize
+        let view = CanvasTextView(frame: NSRect(origin: .zero, size: size))
+        view.isRichText = false
+        view.importsGraphics = false
+        view.allowsUndo = false  // Undo goes through EditorModel (UndoRouter), never the field's own stack.
+        view.isAutomaticQuoteSubstitutionEnabled = true
+        view.textColor = NSColor(srgbRed: 0.1, green: 0.1, blue: 0.1, alpha: 1)
+        view.insertionPointColor = .controlAccentColor
+        view.drawsBackground = true
+        view.backgroundColor = NSColor.white.withAlphaComponent(0.92)
+        view.textContainerInset = .zero
+        view.textContainer?.lineFragmentPadding = 0
+        view.textContainer?.widthTracksTextView = true
+        view.textContainer?.containerSize = NSSize(width: size.width, height: CGFloat.greatestFiniteMagnitude)
+        view.minSize = size
+        view.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        view.isVerticallyResizable = true
+        view.isHorizontallyResizable = false
+        view.autoresizingMask = [.width]
+        view.setAccessibilityLabel("Text dvoustrany")
+        scroll.documentView = view
+        return (scroll, view)
     }
 
     func textDidChange(_ notification: Notification) {

@@ -43,7 +43,11 @@ enum BackgroundActivity: Equatable, Sendable {
 ///   if a thumbnail went missing during it (bounded: at most one per work, no loops).
 /// - Recommendations: after an analysis pass that analyzed at least one photo in this session and
 ///   was not cancelled, `AlbumStore.applyRecommendations()` once (it only changes photos the user
-///   has not decided). Reopening an analyzed album therefore never reruns them.
+///   has not decided), and only while the album has no spreads yet (late photos of a drafted album
+///   must not change the selection behind the layout). Reopening an analyzed album therefore never
+///   reruns them.
+/// - Autosave: while a pass runs, `AlbumStore.backgroundAnalysisRunning` is set, so autosave uses
+///   the longer busy delay.
 /// - Places: `GroupingService.resolvePlaces` on a snapshot, off the main actor; then ONE
 ///   synchronous main-actor `AlbumStore.applyPlaceRefinement` on the store's CURRENT album (so
 ///   edits made during geocoding survive). The snapshot is never written back.
@@ -129,6 +133,7 @@ final class BackgroundWork {
         tasks.forEach { $0.cancel() }
         analysisProgress = nil
         isResolvingPlaces = false
+        store?.backgroundAnalysisRunning = false
     }
 
     /// Returns when every started task has ended (finished or cancelled).
@@ -174,10 +179,15 @@ final class BackgroundWork {
 
     private func analyze(with source: any PhotoSource, package: ProjectPackage) async {
         guard let album = store?.album else { return }
+        // Autosave less often while analysing (each save of a large package takes a while).
+        store?.backgroundAnalysisRunning = true
+        defer { if !isCancelled { store?.backgroundAnalysisRunning = false } }
         let work = Self.analysisWork(album, package: package)
         await runPass(over: album, work: work, source: source, package: package)
         guard !isCancelled, !Task.isCancelled, let store else { return }
-        if analyzedCount > 0 && options.recommends {
+        // Only before the first draft: once spreads exist, the recommendations would flip
+        // undecided PLACED photos to deselected while they stay in their frames.
+        if analyzedCount > 0 && options.recommends && store.album.spreads.isEmpty {
             store.applyRecommendations()
             recommendationsApplied = true
         }
