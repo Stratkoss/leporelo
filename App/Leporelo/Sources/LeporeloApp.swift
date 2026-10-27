@@ -56,12 +56,16 @@ struct ExportCommands: Commands {
     }
 }
 
-/// File > "Stáhnout znovu" (originals that could not be downloaded).
+/// File > "Načíst nové fotky ze zdroje" and "Stáhnout znovu" (originals that could not be
+/// downloaded), for the front album window.
 struct SourceCommands: Commands {
+    @FocusedValue(\.albumRefresh) private var refresh
     @FocusedValue(\.albumRetryDownloads) private var retryDownloads
 
     var body: some Commands {
         CommandGroup(after: .saveItem) {
+            Button(RefreshText.command) { refresh?.run() }
+                .disabled(refresh == nil)
             Button(BannerText.retry) { retryDownloads?.run() }
                 .disabled(retryDownloads == nil)
         }

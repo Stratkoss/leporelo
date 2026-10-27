@@ -6,6 +6,8 @@ import os
 /// A flag shown on a grid cell (SF Symbols, top right).
 enum Badge: String, Hashable, Sendable, CaseIterable {
     case blurred, closedEyes, duplicate, video, screenshot, cloud
+    /// The photo is no longer in Photos (`deletedInSource`); it stays in the album.
+    case deletedInSource
 }
 
 /// One cell of the triage grid: a photo, or the head of a (collapsed or expanded) series.
@@ -50,6 +52,7 @@ struct TriageItem: Equatable, Identifiable {
             case .screenshot: parts.append("snímek obrazovky nebo účtenka")
             case .duplicate: parts.append("podobná fotka v sérii")
             case .cloud: parts.append(TriageText.originalDescription(photo.originalState))
+            case .deletedInSource: parts.append("už v Photos není")
             case .video: break
             }
         }
@@ -390,8 +393,9 @@ final class TriageModel {
 
     /// From the stored analysis (no extra Core API needed): sharpness under the Core defect
     /// threshold => blurred; `closedEyes`; `isUtility` => screenshot; videos; a non-head series
-    /// member => duplicate; a SELECTED photo whose original is not stored yet => cloud (downloads
-    /// are Task 23; this only shows the state).
+    /// member => duplicate; a SELECTED photo whose original is not stored yet => cloud (a spinner
+    /// while it downloads, an error symbol when unavailable); a photo gone from Photos =>
+    /// deletedInSource.
     static func badges(_ photo: Photo, duplicate: Bool) -> [Badge] {
         var result: [Badge] = []
         if photo.kind == .video { result.append(.video) }
@@ -404,6 +408,7 @@ final class TriageModel {
         if photo.isSelected {
             if case .stored = photo.originalState {} else { result.append(.cloud) }
         }
+        if photo.deletedInSource { result.append(.deletedInSource) }
         return result
     }
 

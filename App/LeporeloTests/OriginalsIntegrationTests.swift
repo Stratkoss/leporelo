@@ -380,3 +380,164 @@ struct BackgroundAutosaveTests {
         #expect(store.autosaveCount == 1)
     }
 }
+
+// MARK: Refresh from the source, state screens
+
+@MainActor
+struct SourceRefreshTests {
+    /// 2 new photos and 1 gone: counts reported; the new ones get days right away (unselected);
+    /// the gone one is flagged but keeps its stored original and its frame; ONE store write.
+    @Test func refreshUpdatesStoreAndReports() async throws {
+        let store = try await makeOriginalsStore(3, name: "Obnova")
+        let ids = store.sortedIDs()
+        let gone = ids[0]
+        var album = store.album
+        for id in ids { album.photos[id]?.isSelected = true }
+        let (profile, format) = try ProfileCatalog.format(profileID: album.supplierProfileID, formatID: album.formatID)
+        album = Workflow.draft(album: album, profile: profile, format: format)
+        let relative = try store.package.storeOriginal(data: Data([1, 2, 3]), ext: "jpg", for: gone)
+        album.photos[gone]?.originalState = .stored(relativePath: relative)
+        store.replaceWithoutUndo(album: album)
+        #expect(album.placedPhotoIDs.contains(gone))
+        let spreads = store.album.spreads
+        var writes = 0
+        store.markChanged = { writes += 1 }
+
+        let remaining = sourcePhotos(3).dropFirst()
+        let source = FakePhotoSource(photos: Array(remaining) + [.fake("n1", minutes: 9 * 60 + 5),
+                                                                .fake("n2", minutes: 9 * 60 + 15)])
+        let report = try await SourceRefresh.run(store: store, source: source)
+
+        #expect(report == RefreshReport(added: 2, deleted: 1))
+        #expect(RefreshText.summary(report) == "Přidány 2 nové fotky, 1 fotka už v Photos není.")
+        #expect(writes == 1)
+        #expect(store.album.photos.count == 5)
+        let added = store.album.photos.values.filter { $0.sourceIdentifier.hasPrefix("n") }
+        #expect(added.count == 2)
+        #expect(added.allSatisfy { $0.dayKey == DayKey(year: 2026, month: 7, day: 1) && !$0.isSelected })
+        let flagged = try #require(store.album.photos[gone])
+        #expect(flagged.deletedInSource)
+        #expect(flagged.originalState == .stored(relativePath: relative))
+        #expect(store.package.originalURL(for: gone, album: store.album) != nil)
+        #expect(store.album.spreads == spreads)
+        #expect(source.queries == [originalsQuery])
+    }
+
+    /// An empty answer for a non-empty album: the refresh throws and the album stays as it was.
+    @Test func refreshWithAnEmptyResultThrowsAndChangesNothing() async throws {
+        let store = try await makeOriginalsStore(2)
+        let before = store.album
+        var writes = 0
+        store.markChanged = { writes += 1 }
+        await #expect(throws: SourceSyncError.emptyResult) {
+            _ = try await SourceRefresh.run(store: store, source: FakePhotoSource(photos: []))
+        }
+        #expect(store.album == before)
+        #expect(writes == 0)
+        let alert = RefreshText.failure(SourceSyncError.emptyResult)
+        #expect(alert.title == "Zdroj nevrátil žádné fotky. Fotky v albu zůstávají beze změny.")
+        #expect(RefreshText.failure(PhotoSourceError.notAuthorized).title == "Fotky nelze načíst: chybí přístup k Fotkám")
+    }
+
+    /// Edits made while the source is read survive: the result is merged into the CURRENT album.
+    @Test func refreshMergesIntoTheCurrentAlbum() async throws {
+        let store = try await makeOriginalsStore(2)
+        let source = FakePhotoSource(photos: sourcePhotos(2) + [.fake("n1", minutes: 9 * 60 + 1)])
+        source.holdPhotos()
+        let refresh = Task { try await SourceRefresh.run(store: store, source: source) }
+        try await waitFor("held photos") { source.heldCalls > 0 }
+        try store.applyWithoutUndo(.setTitle("Mezitím"))
+        source.releaseAll()
+        let report = try await refresh.value
+        #expect(report == RefreshReport(added: 1, deleted: 0))
+        #expect(store.album.title == "Mezitím")
+        #expect(store.album.photos.count == 3)
+    }
+
+    /// The session's refresh applies the result and analyses the new photos (no automatic
+    /// recommendations: the user's selection is not touched).
+    @Test func sessionRefreshAnalysesTheNewPhotos() async throws {
+        let seed = try await makeOriginalsStore(2, name: "Relace")
+        let url = seed.package.url
+        let source = FakePhotoSource(photos: sourcePhotos(2) + [.fake("n1", minutes: 9 * 60 + 3)])
+        let session = AlbumSession(placeResolver: { InMemoryPlaceResolver([]) })
+        let document = try AlbumDocument(file: FileWrapper(url: url, options: []))
+        session.bind(document: document, fileURL: url, sourceProvider: { _ in source })
+        let store = try #require(session.store)
+        await session.work?.waitUntilFinished()
+        let selection = store.album.photos.mapValues(\.isSelected)
+
+        let outcome = await session.refreshFromSource()
+        #expect(outcome == .success(RefreshReport(added: 1, deleted: 0)))
+        let work = try #require(session.work)
+        await work.waitUntilFinished()
+        #expect(store.album.photos.count == 3)
+        #expect(store.album.photos.values.allSatisfy { $0.analysis != nil })
+        #expect(!work.recommendationsApplied)
+        for (id, selected) in selection { #expect(store.album.photos[id]?.isSelected == selected) }
+        session.close()
+    }
+
+    @Test func summaryPlurals() {
+        #expect(RefreshText.summary(.init(added: 0, deleted: 0)) == "Žádné změny.")
+        #expect(RefreshText.summary(.init(added: 1, deleted: 0)) == "Přidána 1 nová fotka, 0 fotek už v Photos není.")
+        #expect(RefreshText.summary(.init(added: 5, deleted: 3)) == "Přidáno 5 nových fotek, 3 fotky už v Photos nejsou.")
+        #expect(RefreshText.summary(.init(added: 0, deleted: 1)) == "Přidáno 0 nových fotek, 1 fotka už v Photos není.")
+        #expect(RefreshText.summary(.init(added: 3000, deleted: 5)) == "Přidáno 3\u{00A0}000 nových fotek, 5 fotek už v Photos není.")
+    }
+}
+
+@MainActor
+struct AlbumScreenTests {
+    private func album(analysed: Bool, stored: Bool, selected: Bool = true, source: SourceQuery? = originalsQuery) -> Album {
+        var photo = makeTestPhoto("p", state: stored ? .stored(relativePath: "originals/p.jpg") : .missing)
+        photo.isSelected = selected
+        if analysed {
+            photo.analysis = PhotoAnalysis(aesthetic: 0.5, sharpness: 900, isUtility: false, faceRects: [],
+                                           closedEyes: false, featurePrint: nil)
+        }
+        var album = makeTestAlbum(photos: [photo])
+        album.source = source
+        return album
+    }
+
+    /// The permission screen only when work needs the source, access blocks it, and there is
+    /// nothing to browse; a downloaded (or browsable) album opens without Photos access.
+    @Test func screenGating() {
+        let denied = PhotoAccess.denied
+        #expect(AlbumScreenLogic.screen(album: makeTestAlbum(), access: .authorized) == .empty)
+        #expect(AlbumScreenLogic.screen(album: makeTestAlbum(), access: denied) == .empty)
+        // Nothing analysed, needs the source, no access: the permission screen.
+        #expect(AlbumScreenLogic.screen(album: album(analysed: false, stored: false), access: denied) == .noPermission(.denied))
+        #expect(AlbumScreenLogic.screen(album: album(analysed: false, stored: false), access: .limited) == .noPermission(.limited))
+        #expect(AlbumScreenLogic.screen(album: album(analysed: false, stored: false), access: .restricted) == .noPermission(.restricted))
+        // Full access: always the content.
+        #expect(AlbumScreenLogic.screen(album: album(analysed: false, stored: false), access: .authorized) == .content)
+        // Browsable (thumbnails exist) but originals missing: the content (the banner explains).
+        #expect(AlbumScreenLogic.screen(album: album(analysed: true, stored: false), access: denied) == .content)
+        // Fully downloaded: the content, also without access.
+        #expect(AlbumScreenLogic.screen(album: album(analysed: true, stored: true), access: denied) == .content)
+        // No source query (CLI album): nothing could be read anyway.
+        #expect(AlbumScreenLogic.screen(album: album(analysed: false, stored: false, source: nil), access: denied) == .content)
+        #expect(AlbumScreenLogic.needsSource(album(analysed: true, stored: true)) == false)
+        #expect(AlbumScreenLogic.needsSource(album(analysed: true, stored: false)) == true)
+        #expect(AlbumScreenLogic.needsSource(album(analysed: true, stored: false, selected: false)) == false)
+    }
+
+    @Test func emptyStateTitles() {
+        #expect(EmptyStateText.title(for: originalsQuery) == "V tomto rozmezí nejsou žádné fotky")
+        #expect(EmptyStateText.title(for: .album(identifier: "x", name: "Léto")) == "V albu Léto nejsou žádné fotky")
+        #expect(EmptyStateText.title(for: nil) == "V albu nejsou žádné fotky")
+    }
+
+    /// A photo gone from Photos is marked in triage (with a tooltip that says the original stays).
+    @Test func deletedInSourceBadge() {
+        var photo = makeTestPhoto("p", state: .stored(relativePath: "originals/p.jpg"))
+        photo.deletedInSource = true
+        #expect(TriageModel.badges(photo, duplicate: false).contains(.deletedInSource))
+        #expect(PhotoCell.tooltip(.deletedInSource, state: photo.originalState) == "Už v Photos není, originál zůstává v albu")
+        #expect(PhotoCell.tooltip(.deletedInSource, state: .missing) == "Už v Photos není")
+        photo.deletedInSource = false
+        #expect(!TriageModel.badges(photo, duplicate: false).contains(.deletedInSource))
+    }
+}

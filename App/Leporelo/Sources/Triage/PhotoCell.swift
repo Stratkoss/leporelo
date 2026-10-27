@@ -169,6 +169,7 @@ final class PhotoCell: NSCollectionViewItem {
         case .video: "video.fill"
         case .screenshot: "doc.text.viewfinder"
         case .cloud: state == .unavailable ? "exclamationmark.icloud" : "icloud.and.arrow.down"
+        case .deletedInSource: "photo.badge.exclamationmark"
         }
     }
 
@@ -180,6 +181,8 @@ final class PhotoCell: NSCollectionViewItem {
         case .video: "Video, do alba nejde"
         case .screenshot: "Snímek obrazovky nebo účtenka"
         case .cloud: TriageText.originalDescription(state).capitalizedFirst
+        case .deletedInSource:
+            if case .stored = state { "Už v Photos není, originál zůstává v albu" } else { "Už v Photos není" }
         }
     }
 

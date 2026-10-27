@@ -52,6 +52,9 @@ final class BackgroundWork {
         var batchSize = 50
         var flushInterval: Duration = .milliseconds(500)
         var concurrency = 4
+        /// Run the automatic recommendations after a pass that analysed photos. Off for the work
+        /// restarted after a source refresh: the new photos stay unselected (the user picks).
+        var recommends = true
     }
 
     private(set) var analysisProgress: PipelineProgress?
@@ -172,7 +175,7 @@ final class BackgroundWork {
         let work = Self.analysisWork(album, package: package)
         await runPass(over: album, work: work, source: source, package: package)
         guard !isCancelled, !Task.isCancelled, let store else { return }
-        if analyzedCount > 0 {
+        if analyzedCount > 0 && options.recommends {
             store.applyRecommendations()
             recommendationsApplied = true
         }

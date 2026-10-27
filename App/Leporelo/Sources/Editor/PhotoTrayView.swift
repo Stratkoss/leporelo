@@ -117,6 +117,17 @@ private struct TrayCell: View {
                     .help("Vybraná fotka není v albu")
             }
         }
+        .overlay(alignment: .bottomTrailing) {
+            if photo.deletedInSource {
+                Image(systemName: "photo.badge.exclamationmark")
+                    .font(.caption)
+                    .foregroundStyle(.white)
+                    .padding(3)
+                    .background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 4))
+                    .padding(4)
+                    .help(PhotoCell.tooltip(.deletedInSource, state: photo.originalState))
+            }
+        }
         .overlay(RoundedRectangle(cornerRadius: 4)
             .strokeBorder(Color.accentColor, lineWidth: isHighlighted ? 3 : 0))
         .onDrag {
@@ -143,6 +154,7 @@ private struct TrayCell: View {
     private var accessibilityLabel: String {
         var parts = ["Fotka \(EditorText.photoLabel(photo))", photo.isSelected ? "vybraná" : "nevybraná"]
         if isPlaced { parts.append("v albu") } else if photo.isSelected { parts.append("není v albu") }
+        if photo.deletedInSource { parts.append("už v Photos není") }
         return parts.joined(separator: ", ")
     }
 }

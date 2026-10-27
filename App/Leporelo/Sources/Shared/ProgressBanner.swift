@@ -29,7 +29,7 @@ enum BannerText {
     static let resolvingPlaces = "Zjišťuji místa…"
     static let sourceUnavailable = "Fotky nelze načíst: chybí přístup k Fotkám"
     static let retry = "Stáhnout znovu"
-    static let openSettings = "Otevřít Nastavení"
+    static let openSettings = "Otevřít Nastavení systému"
 
     static func analyzing(done: Int, total: Int) -> String {
         "Analyzuji fotky \(czech(done)) / \(czech(total))"

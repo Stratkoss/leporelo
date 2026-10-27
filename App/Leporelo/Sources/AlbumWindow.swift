@@ -1,3 +1,4 @@
+import AppKit
 import LeporeloCore
 import SwiftUI
 
@@ -27,6 +28,9 @@ struct AlbumWindow: View {
     /// Triage or editor as the user chose; nil = by the album (editor when it has spreads). Kept
     /// across rebinds (revert, reload, move) of the same window.
     @State private var requestedMode: WindowMode?
+    /// Photos access, re-read when the app becomes active (the user may come back from Settings).
+    @State private var access = PhotoAccess(PhotoKitAuthorization.currentStatus())
+    @State private var refreshAlert: RefreshText.Alert?
     @Environment(\.photoSourceProvider) private var photoSourceProvider
     /// The document's undo manager (one per window); capped once here for every view of it.
     @Environment(\.undoManager) private var undoManager
@@ -57,6 +61,13 @@ struct AlbumWindow: View {
             session.bind(document: document, fileURL: fileURL, sourceProvider: photoSourceProvider)
         }
         .focusedSceneValue(\.albumRetryDownloads, retryDownloadsAction)
+        .focusedSceneValue(\.albumRefresh, refreshAction)
+        .alert(item: $refreshAlert) { alert in
+            Alert(title: Text(alert.title), message: Text(alert.message), dismissButton: .default(Text("OK")))
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            updateAccess()
+        }
         .onAppear { AlbumStore.configure(undoManager) }
         .onChange(of: undoManager) { _, manager in AlbumStore.configure(manager) }
         .onDisappear { session.close() }
@@ -68,13 +79,45 @@ struct AlbumWindow: View {
         return RetryDownloadsAction { originals.retryFailed() }
     }
 
+    /// File > "Načíst nové fotky ze zdroje": with a source query and a source, not while running.
+    private var refreshAction: RefreshSourceAction? {
+        guard session.canRefresh else { return nil }
+        return RefreshSourceAction { refresh() }
+    }
+
+    private func refresh() {
+        Task {
+            switch await session.refreshFromSource() {
+            case .success(let report): refreshAlert = RefreshText.success(report)
+            case .failure(let alert): refreshAlert = alert
+            }
+        }
+    }
+
+    /// Re-reads the Photos status (never prompts); when access was just granted, the background
+    /// work restarts so analysis and downloads continue (Task 19b minor).
+    private func updateAccess() {
+        let now = PhotoAccess(PhotoKitAuthorization.currentStatus())
+        guard now != access else { return }
+        let granted = now.allowsForm && !access.allowsForm
+        access = now
+        if granted { session.restartWork() }
+    }
+
     @ViewBuilder private var content: some View {
         if let bindError = session.bindError {
             ContentUnavailableView("Album nejde otevřít", systemImage: "exclamationmark.triangle",
                                    description: Text(bindError))
-        } else if let store, !store.album.photos.isEmpty {
-            // A new store (rebind after revert, reload or move) gets a new model.
-            AlbumContent(store: store, requestedMode: $requestedMode).id(ObjectIdentifier(store))
+        } else if let store {
+            switch AlbumScreenLogic.screen(album: store.album, access: access) {
+            case .content:
+                // A new store (rebind after revert, reload or move) gets a new model.
+                AlbumContent(store: store, requestedMode: $requestedMode).id(ObjectIdentifier(store))
+            case .noPermission(let blocked):
+                PermissionStateView(access: blocked, onAccessChanged: updateAccess)
+            case .empty:
+                EmptyAlbumView(source: store.album.source, onRefresh: session.canRefresh ? { refresh() } : nil)
+            }
         } else {
             ContentUnavailableView {
                 Label(store?.album.title ?? document.currentAlbum.title, systemImage: "book.pages")

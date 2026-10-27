@@ -14,10 +14,13 @@ final class AlbumSession {
     /// The originals download of the same store (Task 23), bound and cancelled with `work`.
     private(set) var originals: OriginalsWork?
     private(set) var bindError: String?
+    /// A "Načíst nové fotky ze zdroje" is running.
+    private(set) var isRefreshing = false
 
     @ObservationIgnored private let placeResolver: @Sendable () -> any PlaceResolver
     @ObservationIgnored private let options: BackgroundWork.Options
     @ObservationIgnored private let originalsOptions: OriginalsWork.Options
+    @ObservationIgnored private var sourceProvider: PhotoSourceProvider = { _ in nil }
 
     init(placeResolver: @escaping @Sendable () -> any PlaceResolver = { GeocoderPlaceResolver() },
          options: BackgroundWork.Options = .init(), originalsOptions: OriginalsWork.Options = .init()) {
@@ -31,20 +34,68 @@ final class AlbumSession {
     func bind(document: AlbumDocument, fileURL: URL?, sourceProvider: @escaping PhotoSourceProvider) {
         close()
         store = nil
+        self.sourceProvider = sourceProvider
         guard let fileURL else { return }
         do {
             let store = try document.bind(to: fileURL)
             self.store = store
             bindError = nil
-            let work = BackgroundWork(store: store, sourceProvider: sourceProvider,
-                                      placeResolver: placeResolver, options: options)
-            self.work = work
-            work.start()
-            let originals = OriginalsWork(store: store, sourceProvider: sourceProvider, options: originalsOptions)
-            self.originals = originals
-            originals.start()
+            startWork(for: store, options: options)
         } catch {
             bindError = error.localizedDescription
+        }
+    }
+
+    private func startWork(for store: AlbumStore, options: BackgroundWork.Options) {
+        let work = BackgroundWork(store: store, sourceProvider: sourceProvider,
+                                  placeResolver: placeResolver, options: options)
+        self.work = work
+        work.start()
+        let originals = OriginalsWork(store: store, sourceProvider: sourceProvider, options: originalsOptions)
+        self.originals = originals
+        originals.start()
+    }
+
+    /// Restarts the background work of the bound store (same store, nothing rebound), e.g. after
+    /// Photos access was granted while the window was open. Analysis and downloads resume where
+    /// they stopped.
+    func restartWork(recommends: Bool = true) {
+        guard let store else { return }
+        work?.cancel()
+        originals?.cancel()
+        var options = self.options
+        options.recommends = options.recommends && recommends
+        startWork(for: store, options: options)
+    }
+
+    /// Whether "Načíst nové fotky ze zdroje" can run: a bound album with a source query, a source,
+    /// no refresh running.
+    var canRefresh: Bool {
+        guard !isRefreshing, let store, store.album.source != nil else { return false }
+        return sourceProvider(store.album) != nil
+    }
+
+    enum RefreshOutcome: Equatable {
+        case success(RefreshReport)
+        case failure(RefreshText.Alert)
+    }
+
+    /// "Načíst nové fotky ze zdroje": `SourceRefresh.run` on the CURRENT store, then the
+    /// background work restarts so the new photos get analysed and their places resolved (without
+    /// automatic recommendations). A rebind meanwhile drops the result's follow-up work (the
+    /// refresh itself was applied to the store it started on, which a rebind leaves behind).
+    func refreshFromSource() async -> RefreshOutcome {
+        guard !isRefreshing, let store, store.album.source != nil, let source = sourceProvider(store.album) else {
+            return .failure(RefreshText.failure(PhotoSourceError.notAuthorized))
+        }
+        isRefreshing = true
+        defer { isRefreshing = false }
+        do {
+            let report = try await SourceRefresh.run(store: store, source: source)
+            if report.added > 0, self.store === store { restartWork(recommends: false) }
+            return .success(report)
+        } catch {
+            return .failure(RefreshText.failure(error))
         }
     }
 

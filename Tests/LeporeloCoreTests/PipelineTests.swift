@@ -446,4 +446,22 @@ private func isOriginalStart(_ event: FakePhotoSource.Event) -> Bool {
             _ = try await SourceSync.refresh(album: before, source: source)
         }
     }
+
+    /// Task 15 ruling: an EMPTY answer for a non-empty album (Photos access lost or limited, the
+    /// album removed or renamed) is an error, never "everything was deleted".
+    @Test func emptyResultForANonEmptyAlbumThrows() async throws {
+        let before = album([photo("a"), photo("b")], source: Self.query)
+        let source = FakePhotoSource(photos: [])
+        await #expect(throws: SourceSyncError.emptyResult) {
+            _ = try await SourceSync.refresh(album: before, source: source)
+        }
+    }
+
+    /// An empty album stays empty without an error ("Žádné změny").
+    @Test func emptyResultForAnEmptyAlbumIsNoChange() async throws {
+        let before = album([], source: Self.query)
+        let result = try await SourceSync.refresh(album: before, source: FakePhotoSource(photos: []))
+        #expect(result.album == before)
+        #expect(result.added == 0 && result.deleted == 0)
+    }
 }

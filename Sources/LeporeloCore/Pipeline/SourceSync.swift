@@ -1,5 +1,12 @@
 import Foundation
 
+public enum SourceSyncError: Error, Equatable, Sendable {
+    /// The source returned no photo at all for an album that has photos. That almost always means
+    /// lost or limited Photos access, or an album removed or renamed in Photos, not "every photo
+    /// was deleted": the album is left unchanged instead of flagging everything.
+    case emptyResult
+}
+
 /// "Načíst nové fotky" (spec section 5): the photo source is a snapshot taken when the project was
 /// created; this re-runs the stored query on demand. There is no live library observation.
 public enum SourceSync {
@@ -13,7 +20,8 @@ public enum SourceSync {
     ///
     /// `added` counts new photos, `deleted` counts photos flagged by THIS refresh (not ones
     /// already flagged). Without a stored query the album is returned unchanged with (0, 0).
-    /// Source errors propagate.
+    /// Source errors propagate. An empty result for an album with photos throws
+    /// `SourceSyncError.emptyResult` (Task 15 ruling); for an empty album it is (0, 0).
     ///
     /// Follow-up for the caller: run `GroupingService.assignDays` (it only fills photos whose
     /// `dayKey` is nil, i.e. the new ones), then analysis and originals download for the new ids.
@@ -21,6 +29,7 @@ public enum SourceSync {
         -> (album: Album, added: Int, deleted: Int) {
         guard let query = album.source else { return (album, 0, 0) }
         let found = try await source.photos(matching: query)
+        if found.isEmpty && !album.photos.isEmpty { throw SourceSyncError.emptyResult }
         let foundIdentifiers = Set(found.map(\.identifier))
 
         var result = album

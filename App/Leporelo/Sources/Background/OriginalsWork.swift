@@ -126,7 +126,7 @@ final class OriginalsWork {
 
     /// Non-video photos that are selected or placed (spreads, cover) and whose original is not
     /// stored.
-    static func wanted(in album: Album) -> Set<PhotoID> {
+    nonisolated static func wanted(in album: Album) -> Set<PhotoID> {
         let placed = album.placedPhotoIDs
         var result = Set<PhotoID>()
         for (id, photo) in album.photos where photo.kind != .video && (photo.isSelected || placed.contains(id)) {
@@ -138,7 +138,7 @@ final class OriginalsWork {
 
     /// What to enqueue automatically now: wanted photos that are `.missing` (or `.downloading`
     /// without being in flight here), not in flight, and still within their automatic budget.
-    static func toEnqueue(in album: Album, inFlight: Set<PhotoID>, attempts: [PhotoID: Int],
+    nonisolated static func toEnqueue(in album: Album, inFlight: Set<PhotoID>, attempts: [PhotoID: Int],
                           autoAttempts: Int) -> [PhotoID] {
         wanted(in: album).filter { id in
             guard !inFlight.contains(id), attempts[id, default: 0] < autoAttempts,
