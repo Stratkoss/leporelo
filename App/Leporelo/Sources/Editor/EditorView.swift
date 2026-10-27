@@ -2,14 +2,18 @@ import AppKit
 import LeporeloCore
 import SwiftUI
 
-/// What "Exportovat…" does. Task 22 installs it with `.environment(\.exportAlbum, ...)`; without
-/// it the button is disabled with a tooltip.
+/// What "Exportovat…" does: opens the export sheet. `AlbumContent` installs it with
+/// `.environment(\.exportAlbum, ...)` and publishes it for the File menu; nil without spreads.
 struct ExportAlbumAction {
     let run: @MainActor () -> Void
 }
 
 extension EnvironmentValues {
     @Entry var exportAlbum: ExportAlbumAction? = nil
+}
+
+extension FocusedValues {
+    @Entry var albumExport: ExportAlbumAction? = nil
 }
 
 /// Ladění (spec 6.4): the big spread in the middle (`SpreadCanvasView`) with a banner for the
@@ -193,7 +197,7 @@ struct EditorView: View {
                 exportAlbum?.run()
             }
             .disabled(exportAlbum == nil)
-            .help(exportAlbum == nil ? EditorText.exportUnavailable : EditorText.export)
+            .help(EditorText.export)
         }
     }
 

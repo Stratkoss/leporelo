@@ -19,6 +19,7 @@ struct AlbumContent: View {
     @State private var triage: TriageModel?
     @State private var editor: EditorModel?
     @State private var editorError: String?
+    @State private var exportModel: ExportModel?
     @State private var undoTarget = AlbumUndoTarget()
     @Environment(\.undoManager) private var undoManager
 
@@ -36,6 +37,7 @@ struct AlbumContent: View {
                 case .editor:
                     if let editor, editor.store === store {
                         EditorView(model: editor, onBackToTriage: { switchTo(.triage) })
+                            .environment(\.exportAlbum, exportAction)
                     } else {
                         ContentUnavailableView("Editor nejde otevřít", systemImage: "exclamationmark.triangle",
                                                description: Text(editorError ?? ""))
@@ -56,10 +58,40 @@ struct AlbumContent: View {
             }
         }
         .focusedSceneValue(\.albumUndo, undoTarget)
+        .focusedSceneValue(\.albumExport, exportAction)
+        .sheet(item: $exportModel, onDismiss: { exportModel = nil }) { model in
+            ExportSheet(model: model, onClose: { closeExport() })
+        }
         .onAppear(perform: makeModels)
         .onChange(of: ObjectIdentifier(store)) { makeModels() }
         .onChange(of: undoManager) { _, manager in bindUndo(manager) }
         .onChange(of: mode) { _, mode in undoTarget.mode = mode }
+    }
+
+    /// "Exportovat…" (editor toolbar, File menu): available once the album has spreads.
+    private var exportAction: ExportAlbumAction? {
+        guard editor?.store === store, !store.album.spreads.isEmpty else { return nil }
+        return ExportAlbumAction { openExport() }
+    }
+
+    /// Opens the export sheet (in the editor: its problems jump to spreads there).
+    private func openExport() {
+        guard exportModel == nil, let editor, editor.store === store, !store.album.spreads.isEmpty else { return }
+        editor.commitSessions()
+        if mode != .editor { requestedMode = .editor }
+        exportModel = ExportModel(store: store, geometry: { [weak editor] in editor?.geometry },
+                                  onJump: { [weak editor] spreadID, frameID in
+                                      editor?.currentSpreadID = spreadID
+                                      if let frameID { editor?.selectedFrameID = frameID }
+                                      closeExport()
+                                  })
+    }
+
+    /// Closes the export sheet, never while an export runs (it has to be cancelled first).
+    private func closeExport() {
+        guard exportModel?.isExporting != true else { return }
+        exportModel?.close()
+        exportModel = nil
     }
 
     private func makeModels() {

@@ -397,7 +397,6 @@ enum EditorText {
     static let backToTriage = "Zpět do třídění"
     static let redraft = "Navrhnout znovu"
     static let export = "Exportovat…"
-    static let exportUnavailable = "Dostupné v dalším kroku"
     static let changeTemplate = "Změnit šablonu…"
     static let insertAfter = "Vložit dvoustranu za"
     static let deleteSpread = "Smazat dvoustranu"

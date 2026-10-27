@@ -13,6 +13,7 @@ struct LeporeloApp: App {
         }
         .commands {
             FileCommands()
+            ExportCommands()
             UndoCommands()
         }
 
@@ -36,6 +37,20 @@ struct FileCommands: Commands {
         CommandGroup(replacing: .newItem) {
             Button("Nové album…") { openWindow(id: NewAlbumSheet.windowID) }
                 .keyboardShortcut("n")
+        }
+    }
+}
+
+/// File > "Exportovat…" (⇧⌘E): the front album window's export action, enabled when that album
+/// has spreads.
+struct ExportCommands: Commands {
+    @FocusedValue(\.albumExport) private var export
+
+    var body: some Commands {
+        CommandGroup(after: .saveItem) {
+            Button("Exportovat…") { export?.run() }
+                .keyboardShortcut("e", modifiers: [.command, .shift])
+                .disabled(export == nil)
         }
     }
 }
