@@ -31,13 +31,89 @@ import Foundation
         a.spreads.filter { $0.kind == .journal || $0.kind == .gallery }
     }
 
+    /// An album as the drafter built it before page layouts (`journal-N` / `gallery-N` templates),
+    /// for the updater rules on old books: the journal takes the day's 3-5 best photos, galleries 2
+    /// photos each chronologically (the first gallery of a day without a journal gets the date
+    /// caption); padding splits galleries, then adds blanks before the closing.
+    static func legacyDraft(_ days: [DayGroup], profile: SupplierProfile, format: BookFormat) -> Album {
+        typealias Item = (template: String, day: DayKey?, photos: [Photo], texts: [TextRole: String])
+        let album = D.album(days)
+        let selected = days.sorted { $0.dayKey < $1.dayKey }
+            .map { d in (d, d.photos.filter { $0.isSelected && $0.kind != .video }.sorted(by: Photo.chronological)) }
+            .filter { !$0.1.isEmpty }
+        let all = selected.flatMap(\.1)
+        let ranked = all.sorted(by: TemplateLayout.rank)
+        let introPhoto = ranked.first(where: \.isLandscape) ?? ranked[0]
+        var plan: [Item] = [("intro-1", nil, [introPhoto],
+                             [.title: album.title, .body: AlbumDrafter.introBody(selected.map(\.0))])]
+        for (group, photos) in selected {
+            var rest = photos
+            if photos.count >= 3 {
+                let journal = Array(photos.sorted(by: TemplateLayout.rank).prefix(5))
+                rest = photos.filter { p in !journal.contains { $0.id == p.id } }
+                let title = group.placeNames.isEmpty ? AlbumDrafter.noPlaceTitle : group.placeNames.joined(separator: ", ")
+                plan.append(("journal-\(journal.count)", group.dayKey, journal,
+                             [.date: AlbumDrafter.czechDate(group.dayKey), .title: title, .body: ""]))
+            }
+            for start in stride(from: 0, to: rest.count, by: 2) {
+                let chunk = Array(rest[start..<min(start + 2, rest.count)])
+                let caption = photos.count < 3 && start == 0
+                    ? AlbumDrafter.dayCaption(group.dayKey, placeNames: group.placeNames) : ""
+                plan.append(("gallery-\(chunk.count)", group.dayKey, chunk, [.caption: caption]))
+            }
+        }
+        plan.append(("closing-1", nil, [all.last!], [.caption: ""]))
+        let rule = profile.pageCount
+        while !rule.isSatisfied(by: plan.count * 2) {
+            if let max = rule.max, plan.count * 2 > max { break }
+            if let i = plan.firstIndex(where: { $0.template.hasPrefix("gallery-") && $0.photos.count > 1 }) {
+                let photo = plan[i].photos.removeLast()
+                plan[i].template = "gallery-\(plan[i].photos.count)"
+                plan.insert(("gallery-1", plan[i].day, [photo], [.caption: ""]), at: i + 1)
+            } else {
+                plan.insert(("blank", nil, [], [:]), at: plan.count - 1)
+            }
+        }
+        let geometry = PageGeometry(format: format, profile: profile)
+        var counters: [String: Int] = [:]
+        var result = album
+        result.supplierProfileID = profile.id
+        result.formatID = format.id
+        result.spreads = plan.map { item in
+            let template = TemplateCatalog.template(id: item.template)!
+            let id: String
+            switch template.kind {
+            case .intro: id = "intro"
+            case .closing: id = "closing"
+            case .blank:
+                counters["blank", default: 0] += 1
+                id = "blank-\(counters["blank"]!)"
+            case .journal, .gallery:
+                let base = "\(AlbumDrafter.dayString(item.day))-\(template.kind.rawValue)"
+                counters[base, default: 0] += 1
+                id = template.kind == .journal && counters[base] == 1 ? base : "\(base)-\(counters[base]!)"
+            }
+            var spread = TemplateLayout.instantiate(template, geometry: geometry, dayKey: item.day, id: id,
+                                                    marginMM: album.marginMM)
+            let assignment = TemplateLayout.assign(template.frames, photos: item.photos)
+            for i in spread.frames.indices { spread.frames[i].photoID = assignment[spread.frames[i].id] }
+            for (role, text) in item.texts {
+                if let i = spread.texts.firstIndex(where: { $0.role == role }) { spread.texts[i].text = text }
+            }
+            return spread
+        }
+        result.cover = AlbumDrafter.cover(title: album.title, photoID: introPhoto.id, format: format, profile: profile,
+                                          marginMM: album.marginMM)
+        return result
+    }
+
     // MARK: - photoSelected
 
     @Test func selectedPhotoFillsEmptyFrameOfSameDay() throws {
         let (p, f) = try D.canva(Self.lax)
         // 8 photos: journal-5, gallery-2, gallery-1 (see AlbumDrafterTests).
         let days = [D.day(Self.june18, D.dayPhotos("a", Self.june18, count: 8))]
-        var a = D.draft(days, profile: p, format: f)
+        var a = Self.legacyDraft(days, profile: p, format: f)
         let g2 = try #require(a.spreads.first { $0.templateID == "gallery-2" })
         for id in g2.frames.compactMap(\.photoID) { a = AlbumUpdater.photoDeselected(id, in: a) }
         #expect(a.spreads.first { $0.id == g2.id }?.frames.allSatisfy { $0.photoID == nil } == true)
@@ -67,7 +143,7 @@ import Foundation
         let (p, f) = try D.canva(Self.lax)
         let days = [D.day(Self.june18, D.dayPhotos("a", Self.june18, count: 8)),
                     D.day(Self.june19, D.dayPhotos("b", Self.june19, count: 4))]
-        var a = D.draft(days, profile: p, format: f)
+        var a = Self.legacyDraft(days, profile: p, format: f)
         let lastJune18 = try #require(a.spreads.lastIndex { $0.dayKey == Self.june18 })
         a = Self.adding(D.photo("new", day: Self.june18, minute: 50), to: a)
         let before = a
@@ -120,7 +196,7 @@ import Foundation
     @Test func deselectedPhotoClearsFrameKeepsSpread() throws {
         let (p, f) = try D.canva(Self.lax)
         let days = [D.day(Self.june18, D.dayPhotos("a", Self.june18, count: 8))]
-        var a = D.draft(days, profile: p, format: f)
+        var a = Self.legacyDraft(days, profile: p, format: f)
         // a4 is the best photo: in the intro, the journal and on the cover.
         let jIndex = try #require(a.spreads.firstIndex { $0.kind == .journal })
         let fIndex = try #require(a.spreads[jIndex].frames.firstIndex { $0.photoID == "a4" })
@@ -149,7 +225,7 @@ import Foundation
         let (p, f) = try D.canva()   // min 20 pages
         let days = [D.day(Self.june18, D.dayPhotos("a", Self.june18, count: 8), places: ["Ravello"]),
                     D.day(Self.june19, D.dayPhotos("b", Self.june19, count: 6))]
-        var a = D.draft(days, profile: p, format: f)
+        var a = Self.legacyDraft(days, profile: p, format: f)
         let journal18 = try #require(a.spreads.first { $0.kind == .journal && $0.dayKey == Self.june18 })
         a = try a.applying(.setText(spreadID: journal18.id, textID: "body", text: "Výlet lodí")).album
         // A manual gallery of June 19 whose photos are then all deselected: it must survive.
@@ -195,7 +271,7 @@ import Foundation
         let (p, f) = try D.canva()   // min 20 pages
         let days = [D.day(Self.june18, D.dayPhotos("a", Self.june18, count: 8)),
                     D.day(Self.june19, D.dayPhotos("b", Self.june19, count: 4))]
-        var a = D.draft(days, profile: p, format: f)
+        var a = Self.legacyDraft(days, profile: p, format: f)
         for s in Self.daySpreads(a) {
             a = try a.applying(.setText(spreadID: s.id, textID: s.texts[0].id, text: "ručně")).album
         }
@@ -218,7 +294,7 @@ import Foundation
     @Test func redraftWithKeptJournalAddsHeaderlessGalleries() throws {
         let (p, f) = try D.canva(Self.lax)
         let days = [D.day(Self.june18, D.dayPhotos("a", Self.june18, count: 8), places: ["Ravello"])]
-        var a = D.draft(days, profile: p, format: f)
+        var a = Self.legacyDraft(days, profile: p, format: f)
         let journal = try #require(a.spreads.first { $0.kind == .journal })
         #expect(journal.templateID == "journal-5")
         a = try a.applying(.setText(spreadID: journal.id, textID: "body", text: "Loď")).album
@@ -239,11 +315,12 @@ import Foundation
         #expect(placed.count == 3 && Set(placed) == leftover)
     }
 
-    // Fix round 1, item 2: a kept gallery with a date caption suppresses captions of new galleries.
+    // Fix round 1, item 2: a kept gallery with a date caption gets no second caption (new spreads
+    // leave every caption empty).
     @Test func redraftWithKeptCaptionedGalleryAddsNoSecondCaption() throws {
         let (p, f) = try D.canva(Self.lax)
         let days = [D.day(Self.june18, D.dayPhotos("a", Self.june18, count: 2), places: ["Ravello"])]
-        var a = D.draft(days, profile: p, format: f)
+        var a = Self.legacyDraft(days, profile: p, format: f)
         let first = try #require(Self.daySpreads(a).first)
         #expect(D.text(first, .caption) == "čtvrtek 18. června 2026, Ravello")
         // Keep the captioned gallery but move one photo out of it into the pool.
@@ -254,7 +331,9 @@ import Foundation
         let (r, _) = AlbumUpdater.redraft(album: a, days: days, profile: p, format: f)
         let generated = Self.daySpreads(r).filter { !$0.manuallyEdited }
         #expect(D.placed(generated) == [moved])
-        for g in generated { #expect(D.text(g, .caption) == "", "\(g.id)") }
+        for g in generated {
+            #expect(g.texts.filter { $0.role == .caption }.allSatisfy { $0.text.isEmpty }, "\(g.id)")
+        }
     }
 
     @Test func redraftWithoutManualMatchesDraft() throws {
@@ -273,7 +352,7 @@ import Foundation
         let (p, f) = try D.canva()
         let square = try #require(p.formats.first { $0.id == "square-21" })
         let days = [D.day(Self.june18, D.dayPhotos("a", Self.june18, count: 8))]
-        var a = D.draft(days, profile: p, format: f)
+        var a = Self.legacyDraft(days, profile: p, format: f)
         let j = try #require(a.spreads.firstIndex { $0.kind == .journal })
         a = try a.applying(.setFrameTransform(spreadID: a.spreads[j].id, frameID: "photo1",
                                               offset: Point(x: 0.3, y: -0.2), zoom: 1.4)).album
@@ -314,7 +393,7 @@ import Foundation
         let (p, f) = try D.canva()
         let square = try #require(p.formats.first { $0.id == "square-21" })
         let days = [D.day(Self.june18, D.dayPhotos("a", Self.june18, count: 8))]
-        var a = D.draft(days, profile: p, format: f)
+        var a = Self.legacyDraft(days, profile: p, format: f)
         let j = try #require(a.spreads.firstIndex { $0.kind == .journal })
         a.spreads[j].customLayout = true
         a.spreads[j].frames[0].rect = Rect(x: 320, y: 40, width: 100, height: 100)
@@ -350,7 +429,7 @@ import Foundation
     @Test func changeFormatRelaysTemplateSpreads() throws {
         let (p, f) = try D.canva()
         let square = try #require(p.formats.first { $0.id == "square-21" })
-        var a = D.draft([D.day(Self.june18, D.dayPhotos("a", Self.june18, count: 8))], profile: p, format: f)
+        var a = Self.legacyDraft([D.day(Self.june18, D.dayPhotos("a", Self.june18, count: 8))], profile: p, format: f)
         a.marginMM = 20
         let b = AlbumUpdater.changeFormat(album: a, to: square, profile: p)
         let g = PageGeometry(format: square, profile: p)
@@ -400,7 +479,7 @@ import Foundation
     @Test func settingMarginBackRestoresTemplateLayouts() throws {
         let (p, f) = try D.canva()
         let days = [D.day(Self.june18, D.dayPhotos("a", Self.june18, count: 8))]
-        var a = D.draft(days, profile: p, format: f)
+        var a = Self.legacyDraft(days, profile: p, format: f)
         let s = try #require(a.spreads.firstIndex { $0.kind == .journal })
         a.spreads[s].frames[0].offset = Point(x: 0.3, y: -0.2)
         a.spreads[s].frames[0].zoom = 1.7

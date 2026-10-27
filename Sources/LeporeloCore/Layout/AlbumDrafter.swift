@@ -2,32 +2,40 @@ import Foundation
 
 public struct DraftOptions: Sendable, Equatable {
     public var includeClosing: Bool
-    /// Photos per gallery spread before padding (clamped to the gallery templates, 1...3).
-    public var galleryPhotosPerSpread: Int
+    /// The page planner's target photos per page (at least 1). Above the supplier's page maximum the
+    /// days are planned again with `AlbumDrafter.denserTargets`.
+    public var photosPerPage: Int
+    /// How strongly the design prefers each layout (the user's liked layouts, spec 6).
+    public var layoutWeights: LayoutWeights
 
-    public init(includeClosing: Bool = true, galleryPhotosPerSpread: Int = 2) {
+    public init(includeClosing: Bool = true, photosPerPage: Int = 3, layoutWeights: LayoutWeights = .init()) {
         self.includeClosing = includeClosing
-        self.galleryPhotosPerSpread = galleryPhotosPerSpread
+        self.photosPerPage = photosPerPage
+        self.layoutWeights = layoutWeights
     }
 }
 
-/// Builds a first draft of the album from the selected photos (spec 6.3).
+/// Builds a first draft of the album from the selected photos (spec 6.3; pages: page-layouts spec 4).
 ///
 /// Pure and deterministic: photo order ties are broken by `capturedAt`, then `id`, and spread ids
 /// are derived from the spread's role (`intro`, `closing`, `2026-06-18-journal`,
 /// `2026-06-18-gallery-2`, `blank-1`, `cover-front`, `cover-back`).
 ///
+/// Each day is planned page by page (`PagePlanner.planDay`, hero candidates computed once from the
+/// whole selection without the intro, closing and cover photos) and its pages are paired into
+/// spreads (`PageSpread.compose`): the first spread is the day's `journal` when it starts with an
+/// opener page, the others are `gallery`.
+///
 /// Invariant: no spread other than `blank` has an empty frame (preflight blocks empty frames).
 /// Videos are never laid out (only `.photo`/`.livePhoto` kinds), even when selected.
 ///
 /// Page maximum: when the planned spreads (intro, days, closing and `reservedSpreads`) exceed the
-/// profile's `pageCount.max`, the days are planned again with 3 photos per gallery spread instead
-/// of `DraftOptions.galleryPhotosPerSpread`; nothing is dropped, so a very long trip can still be
-/// above the maximum (the preflight reports it).
+/// profile's `pageCount.max`, all days are planned again with 4, then 5 photos per page; nothing is
+/// dropped, so a very long trip can still be above the maximum (the preflight reports it).
 public enum AlbumDrafter {
     public static let noPlaceTitle = "Bez místa"
-    /// The most photos a gallery template holds (`gallery-3`).
-    static let maxGalleryPhotosPerSpread = 3
+    /// Targets tried in order, after `DraftOptions.photosPerPage`, while the plan exceeds the maximum.
+    static let denserTargets = [4, 5]
 
     public static func pageCount(of album: Album) -> Int {
         album.spreads.count * 2
@@ -42,15 +50,14 @@ public enum AlbumDrafter {
     /// `draft` with knobs for `AlbumUpdater.redraft`:
     /// - `includeIntro: false` plans no intro spread (the cover is still built);
     /// - `reservedSpreads` counts spreads the caller will add (kept manual spreads) when padding;
-    /// - `excludedFromDays`: photos that per-day planning (journal/gallery) skips. The intro, closing
-    ///   and cover photos, the intro body and the empty-selection guard still use the FULL selection.
-    ///   A day left with no photos gets no spreads;
-    /// - `galleryOnlyDays`: days planned without a journal and with empty gallery captions;
-    /// - `captionlessDays`: days whose galleries get an empty caption (no date/place text).
+    /// - `excludedFromDays`: photos that per-day planning skips. The intro, closing and cover
+    ///   photos, the hero candidates, the intro body and the empty-selection guard still use the
+    ///   FULL selection. A day left with no photos gets no spreads;
+    /// - `galleryOnlyDays`: days planned without an opener page (so only `gallery` spreads, all
+    ///   texts empty).
     static func draft(album: Album, days: [DayGroup], profile: SupplierProfile, format: BookFormat,
                       options: DraftOptions, includeIntro: Bool, reservedSpreads: Int,
-                      excludedFromDays: Set<PhotoID> = [], galleryOnlyDays: Set<DayKey> = [],
-                      captionlessDays: Set<DayKey> = []) -> Album {
+                      excludedFromDays: Set<PhotoID> = [], galleryOnlyDays: Set<DayKey> = []) -> Album {
         var result = album
         result.supplierProfileID = profile.id
         result.formatID = format.id
@@ -75,152 +82,185 @@ public enum AlbumDrafter {
         }
         let ranked = allSelected.sorted(by: rank)
         let introPhoto = ranked.first(where: \.isLandscape) ?? ranked[0]
+        // The intro photo is also the cover photo, so it is never a hero, even without an intro.
+        let heroes = PagePlanner.heroCandidates(
+            allSelected, excluding: options.includeClosing ? [introPhoto.id, lastPhoto.id] : [introPhoto.id])
+        let weights = options.layoutWeights
 
-        // 1. Plan the spreads. When the plan has more pages than the supplier's maximum, plan
-        //    again with 3 photos per gallery spread (the most a gallery template holds; the spec's
-        //    1-2 photos per page). Still too many pages: leave it, the preflight reports it.
-        let introBody = self.introBody(selectedDays.map(\.group))
-        func makePlan(perGallery: Int) -> [Planned] {
-            var plan: [Planned] = []
-            if includeIntro {
-                plan.append(Planned(templateID: "intro-1", dayKey: nil, photos: [introPhoto],
-                                    texts: [.title: album.title, .body: introBody]))
-            }
-            for (group, photos) in selectedDays {
-                let dayPhotos = photos.filter { !excludedFromDays.contains($0.id) }
-                if dayPhotos.isEmpty { continue }
-                let galleryOnly = galleryOnlyDays.contains(group.dayKey)
-                plan += planDay(group, photos: dayPhotos, perGallery: perGallery, allowJournal: !galleryOnly,
-                                caption: !galleryOnly && !captionlessDays.contains(group.dayKey))
-            }
-            if options.includeClosing {
-                plan.append(Planned(templateID: "closing-1", dayKey: nil, photos: [lastPhoto],
-                                    texts: [.caption: ""]))
-            }
-            return plan
+        // 1. Plan the days. When the book has more pages than the supplier's maximum, plan every
+        //    day again with a denser target. Still too many pages: leave it, the preflight reports it.
+        let start = max(1, options.photosPerPage)
+        var plans = selectedDays.compactMap { group, photos -> DayPlan? in
+            let dayPhotos = photos.filter { !excludedFromDays.contains($0.id) }
+            if dayPhotos.isEmpty { return nil }
+            return DayPlan(group: group, photos: dayPhotos, opener: !galleryOnlyDays.contains(group.dayKey))
+                .planned(target: start, heroes: heroes, weights: weights)
         }
-        let perGallery = min(max(options.galleryPhotosPerSpread, 1), maxGalleryPhotosPerSpread)
-        var plan = makePlan(perGallery: perGallery)
-        if let max = profile.pageCount.max, (plan.count + reservedSpreads) * 2 > max,
-           perGallery < maxGalleryPhotosPerSpread {
-            plan = makePlan(perGallery: maxGalleryPhotosPerSpread)
+        let fixedSpreads = (includeIntro ? 1 : 0) + (options.includeClosing ? 1 : 0) + reservedSpreads
+        func pages(_ plans: [DayPlan]) -> Int {
+            (fixedSpreads + plans.map { ($0.pages.count + 1) / 2 }.reduce(0, +)) * 2
+        }
+        let rule = profile.pageCount
+        if let max = rule.max {
+            for target in denserTargets where target > start && pages(plans) > max {
+                plans = plans.map { $0.planned(target: target, heroes: heroes, weights: weights) }
+            }
         }
 
-        // 2. Pad to the supplier's page-count rule.
-        pad(&plan, rule: profile.pageCount, hasClosing: options.includeClosing, reserved: reservedSpreads)
+        // 2. Pad to the supplier's page-count rule: give the densest days more pages, then add
+        //    blank spreads before the closing.
+        var blanks = 0
+        while !rule.isSatisfied(by: pages(plans) + blanks * 2) {
+            let count = pages(plans) + blanks * 2
+            if let max = rule.max, count > max { break }
+            if !grow(&plans, room: rule.max.map { $0 - count }, heroes: heroes, weights: weights) {
+                blanks += 1
+            }
+        }
 
-        // 3. Instantiate templates.
+        // 3. Build the spreads.
         let geometry = PageGeometry(format: format, profile: profile)
-        result.spreads = instantiate(plan, geometry: geometry, marginMM: album.marginMM)
+        let margin = album.marginMM
+        var spreads: [Spread] = []
+        if includeIntro {
+            spreads.append(templateSpread("intro-1", id: "intro", photos: [introPhoto],
+                                          texts: [.title: album.title, .body: introBody(selectedDays.map(\.group))],
+                                          geometry: geometry, marginMM: margin))
+        }
+        for plan in plans {
+            spreads += daySpreads(plan, geometry: geometry, marginMM: margin)
+        }
+        for k in stride(from: 1, through: blanks, by: 1) {
+            spreads.append(templateSpread("blank", id: "blank-\(k)", photos: [], texts: [:],
+                                          geometry: geometry, marginMM: margin))
+        }
+        if options.includeClosing {
+            spreads.append(templateSpread("closing-1", id: "closing", photos: [lastPhoto], texts: [.caption: ""],
+                                          geometry: geometry, marginMM: margin))
+        }
+        result.spreads = spreads
         result.cover = cover(title: album.title, photoID: introPhoto.id, format: format, profile: profile,
-                             marginMM: album.marginMM)
+                             marginMM: margin)
         return result
     }
 
     // MARK: - Planning
 
-    private struct Planned {
-        var templateID: String
-        var dayKey: DayKey?
+    /// One day's photos (chronological) and its planned pages.
+    private struct DayPlan {
+        var group: DayGroup
         var photos: [Photo]
-        var texts: [TextRole: String]
+        var opener: Bool
+        var target = 0
+        var pages: [PlannedPage] = []
 
-        var kind: SpreadKind { TemplateCatalog.template(id: templateID)!.kind }
+        func planned(target: Int, heroes: Set<PhotoID>, weights: LayoutWeights) -> DayPlan {
+            var plan = self
+            plan.target = target
+            plan.pages = PagePlanner.planDay(photos, heroCandidates: heroes, opener: opener, target: target,
+                                             weights: weights)
+            return plan
+        }
+
+        /// Photos per page, not counting the opener and `full` pages; 0 without such pages.
+        var density: Double {
+            let ordinary = pages.filter {
+                $0.layoutID != "full" && PageLayoutCatalog.layout(id: $0.layoutID)?.role != .opener
+            }
+            return ordinary.isEmpty ? 0 : Double(ordinary.map(\.photos.count).reduce(0, +)) / Double(ordinary.count)
+        }
     }
 
     /// Best score first; ties by `capturedAt`, then `id` (shared with the frame assignment).
     private static func rank(_ a: Photo, _ b: Photo) -> Bool { TemplateLayout.rank(a, b) }
 
-    /// Journal with the day's N best-scoring photos (N = 3...5), then the rest chronologically in
-    /// galleries. The journal takes the best photos (not the first N) because the spec wants the
-    /// day's best photo in the big frame; as a consequence gallery photos may be earlier in time
-    /// than some journal photos.
-    ///
-    /// A day with only 1-2 selected photos gets gallery-only spreads (no journal): every journal
-    /// template has at least 3 frames and a journal must not have empty frames. The date and place
-    /// go into the first gallery's caption instead.
-    ///
-    /// `allowJournal: false` plans galleries only; `caption: false` leaves every gallery caption empty
-    /// (used by a redraft when a kept spread already carries the day's header).
-    private static func planDay(_ group: DayGroup, photos: [Photo], perGallery: Int,
-                                allowJournal: Bool = true, caption: Bool = true) -> [Planned] {
-        let key = group.dayKey
-        let title = group.placeNames.isEmpty ? noPlaceTitle : group.placeNames.joined(separator: ", ")
-        var spreads: [Planned] = []
-        var rest = photos
-        if allowJournal && photos.count >= 3 {
-            let n = min(5, max(3, photos.count))
-            let journal = Array(photos.sorted(by: rank).prefix(n))
-            let ids = Set(journal.map(\.id))
-            rest = photos.filter { !ids.contains($0.id) }
-            spreads.append(Planned(templateID: "journal-\(n)", dayKey: key, photos: journal,
-                                   texts: [.date: czechDate(key), .title: title, .body: ""]))
+    /// Padding: the day with the most photos per page (ties: the earlier day) is planned again with
+    /// target − 1, target − 2, ... ≥ 1, and the first plan with at least 2 more pages (and at most
+    /// `room` more, when given) replaces it. A day that cannot grow yields to the next densest.
+    /// False when no day can grow.
+    private static func grow(_ plans: inout [DayPlan], room: Int?, heroes: Set<PhotoID>,
+                             weights: LayoutWeights) -> Bool {
+        let order = plans.indices.sorted { a, b in
+            let da = plans[a].density, db = plans[b].density
+            return da != db ? da > db : a < b
         }
-        var start = 0
-        while start < rest.count {
-            let chunk = Array(rest[start..<min(start + perGallery, rest.count)])
-            let text = caption && spreads.isEmpty ? dayCaption(key, placeNames: group.placeNames) : ""
-            spreads.append(Planned(templateID: "gallery-\(chunk.count)", dayKey: key, photos: chunk,
-                                   texts: [.caption: text]))
-            start += perGallery
-        }
-        return spreads
-    }
-
-    /// Pages = spreads x 2. While the rule is not met: first peel the last photo off a multi-photo
-    /// gallery into a new gallery-1 right after it (more spreads, no empty frames); when no gallery
-    /// can be split, insert a `blank` spread before the closing spread.
-    ///
-    /// If the draft already has more pages than the rule's maximum, content is not deleted: the
-    /// loop stops and the preflight reports the page count to the user.
-    private static func pad(_ plan: inout [Planned], rule: PageCountRule, hasClosing: Bool, reserved: Int) {
-        while !rule.isSatisfied(by: (plan.count + reserved) * 2) {
-            if let max = rule.max, (plan.count + reserved) * 2 > max { return }
-            if let i = plan.firstIndex(where: { $0.kind == .gallery && $0.photos.count > 1 }) {
-                let photo = plan[i].photos.removeLast()
-                plan[i].templateID = "gallery-\(plan[i].photos.count)"
-                plan.insert(Planned(templateID: "gallery-1", dayKey: plan[i].dayKey, photos: [photo],
-                                    texts: [.caption: ""]), at: i + 1)
-            } else {
-                let blank = Planned(templateID: "blank", dayKey: nil, photos: [], texts: [:])
-                plan.insert(blank, at: hasClosing ? plan.count - 1 : plan.count)
+        for i in order {
+            let current = plans[i].pages.count
+            for target in stride(from: plans[i].target - 1, through: 1, by: -1) {
+                let next = plans[i].planned(target: target, heroes: heroes, weights: weights)
+                let added = next.pages.count - current
+                if added >= 2 && room.map({ added <= $0 }) ?? true {
+                    plans[i] = next
+                    return true
+                }
             }
         }
+        return false
     }
 
     // MARK: - Instantiation
 
-    private static func instantiate(_ plan: [Planned], geometry: PageGeometry, marginMM: Double) -> [Spread] {
-        var counters: [String: Int] = [:]
-        return plan.map { item in
-            let template = TemplateCatalog.template(id: item.templateID)!
-            let id = spreadID(item, counters: &counters)
-            var spread = TemplateLayout.instantiate(template, geometry: geometry, dayKey: item.dayKey, id: id,
-                                                    marginMM: marginMM)
-            let assignment = TemplateLayout.assign(template.frames, photos: item.photos)
-            for i in spread.frames.indices {
-                spread.frames[i].photoID = assignment[spread.frames[i].id]
+    /// A spread from a `TemplateCatalog` template (intro, closing, blank), photos assigned by score.
+    private static func templateSpread(_ templateID: String, id: String, photos: [Photo], texts: [TextRole: String],
+                                       geometry: PageGeometry, marginMM: Double) -> Spread {
+        let template = TemplateCatalog.template(id: templateID)!
+        var spread = TemplateLayout.instantiate(template, geometry: geometry, dayKey: nil, id: id, marginMM: marginMM)
+        let assignment = TemplateLayout.assign(template.frames, photos: photos)
+        for i in spread.frames.indices {
+            spread.frames[i].photoID = assignment[spread.frames[i].id]
+        }
+        for (role, text) in texts {
+            if let i = spread.texts.firstIndex(where: { $0.role == role }) {
+                spread.texts[i].text = text
             }
-            for (role, text) in item.texts {
-                if let i = spread.texts.firstIndex(where: { $0.role == role }) {
-                    spread.texts[i].text = text
+        }
+        return spread
+    }
+
+    /// The day's pages paired into spreads (left, right); frame `L.photoK` / `R.photoK` gets the
+    /// page's K-th photo. The first spread is the `journal` when it starts with an opener page,
+    /// whose texts get the day's date and places (body empty); every other spread is a `gallery`
+    /// and all other texts (captions) stay empty. Ids: `2026-06-18-journal`, then
+    /// `2026-06-18-gallery-1`, `-gallery-2`, ...
+    private static func daySpreads(_ plan: DayPlan, geometry: PageGeometry, marginMM: Double) -> [Spread] {
+        let key = plan.group.dayKey
+        let base = dayString(key)
+        let title = plan.group.placeNames.isEmpty ? noPlaceTitle : plan.group.placeNames.joined(separator: ", ")
+        let empty = PlannedPage(layoutID: "empty", photos: [])
+        var galleries = 0
+        return stride(from: 0, to: plan.pages.count, by: 2).map { i in
+            let left = plan.pages[i]
+            let right = i + 1 < plan.pages.count ? plan.pages[i + 1] : empty
+            let journal = i == 0 && PageLayoutCatalog.layout(id: left.layoutID)?.role == .opener
+            let id: String
+            if journal {
+                id = "\(base)-journal"
+            } else {
+                galleries += 1
+                id = "\(base)-gallery-\(galleries)"
+            }
+            var spread = PageSpread.compose(left: PageLayoutCatalog.layout(id: left.layoutID)!,
+                                            right: PageLayoutCatalog.layout(id: right.layoutID)!,
+                                            kind: journal ? .journal : .gallery, dayKey: key, id: id,
+                                            geometry: geometry, marginMM: marginMM)
+            for (side, page) in [(PageSide.left, left), (.right, right)] {
+                for (k, photo) in page.photos.enumerated() {
+                    let frameID = PageSpread.prefix(side) + "photo\(k + 1)"
+                    if let f = spread.frames.firstIndex(where: { $0.id == frameID }) {
+                        spread.frames[f].photoID = photo.id
+                    }
+                }
+            }
+            if journal {
+                for t in spread.texts.indices {
+                    switch spread.texts[t].role {
+                    case .date: spread.texts[t].text = czechDate(key)
+                    case .title: spread.texts[t].text = title
+                    default: break
+                    }
                 }
             }
             return spread
-        }
-    }
-
-    private static func spreadID(_ item: Planned, counters: inout [String: Int]) -> String {
-        switch item.kind {
-        case .intro: return "intro"
-        case .closing: return "closing"
-        case .blank:
-            counters["blank", default: 0] += 1
-            return "blank-\(counters["blank"]!)"
-        case .journal, .gallery:
-            let base = "\(dayString(item.dayKey))-\(item.kind.rawValue)"
-            counters[base, default: 0] += 1
-            return item.kind == .journal && counters[base] == 1 ? base : "\(base)-\(counters[base]!)"
         }
     }
 
@@ -259,7 +299,8 @@ public enum AlbumDrafter {
         key.map { String(format: "%04d-%02d-%02d", $0.year, $0.month, $0.day) } ?? "day"
     }
 
-    /// Caption of the first spread of a day that has no journal: "čtvrtek 18. června 2026, Ravello".
+    /// Caption of a day's first spread without the day's texts (`AlbumUpdater`'s new `gallery-1`):
+    /// "čtvrtek 18. června 2026, Ravello".
     static func dayCaption(_ key: DayKey, placeNames: [String]) -> String {
         czechDate(key) + (placeNames.isEmpty ? "" : ", " + placeNames.joined(separator: ", "))
     }

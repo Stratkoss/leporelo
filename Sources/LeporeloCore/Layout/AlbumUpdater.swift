@@ -154,12 +154,11 @@ public enum AlbumUpdater {
     /// spread; the intro, closing and cover photos and the intro body use the full selection (they
     /// may repeat a day photo, as in a first draft). A day left with no photos gets no new spreads.
     /// No intro when a manual intro is kept, no closing when a manual closing is kept or the album
-    /// had no closing; the kept spreads are reserved in the drafter's page-count padding (it splits
-    /// its galleries / adds blanks before its closing as in a first draft).
+    /// had no closing; the kept spreads are reserved in the drafter's page-count padding (it gives
+    /// days more pages / adds blanks before its closing as in a first draft).
     ///
-    /// Day headers are not duplicated: a day with a kept `.journal` spread gets galleries only, with
-    /// empty captions; a day with a kept `.gallery` whose caption text is non-empty gets new spreads
-    /// (a journal too, if 3+ photos are left) but their gallery captions are empty.
+    /// Day headers are not duplicated: a day with a kept `.journal` spread gets galleries only (no
+    /// opener page). New spreads leave every caption empty.
     ///
     /// Merge order:
     /// 1. kept manual intro spreads (album order), or else the generated intro;
@@ -187,14 +186,11 @@ public enum AlbumUpdater {
         let hadClosing = base.spreads.isEmpty || base.spreads.contains { $0.kind == .closing }
 
         let journalDays = Set(kept.filter { $0.kind == .journal }.compactMap(\.dayKey))
-        let captionedDays = Set(kept.filter { spread in
-            spread.kind == .gallery && spread.texts.contains { $0.role == .caption && !$0.text.isEmpty }
-        }.compactMap(\.dayKey))
         let generated = AlbumDrafter.draft(
             album: base, days: days, profile: profile, format: format,
             options: DraftOptions(includeClosing: hadClosing && !hasManualClosing),
             includeIntro: !hasManualIntro, reservedSpreads: kept.count,
-            excludedFromDays: keptPhotos, galleryOnlyDays: journalDays, captionlessDays: captionedDays)
+            excludedFromDays: keptPhotos, galleryOnlyDays: journalDays)
 
         // Merge.
         let gen = generated.spreads

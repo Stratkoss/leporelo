@@ -62,19 +62,140 @@ import Foundation
         s.texts.first { $0.role == role }?.text
     }
 
-    // Ruling 1: 8 selected per day, rule min 2 / multipleOf 2 so padding does not change the order.
-    @Test func draftProducesIntroJournalGalleriesClosing() throws {
-        let (p, f) = try Self.canva(PageCountRule(min: 2, max: nil, multipleOf: 2))
-        let days = [Self.day(Self.june18, Self.dayPhotos("a", Self.june18, count: 8)),
-                    Self.day(Self.june19, Self.dayPhotos("b", Self.june19, count: 8))]
+    static let june20 = DayKey(year: 2026, month: 6, day: 20)
+
+    /// The day spreads (journal and gallery), in book order.
+    static func daySpreads(_ a: Album) -> [Spread] {
+        a.spreads.filter { $0.kind == .journal || $0.kind == .gallery }
+    }
+
+    /// Every page of `spreads`: its layout id ("" without one) and its frames' photos in frame order.
+    static func pages(_ spreads: [Spread]) -> [(layout: String, photos: [PhotoID])] {
+        spreads.flatMap { s in
+            [PageSide.left, .right].enumerated().map { i, side in
+                let layout = i < s.pageLayouts.count ? s.pageLayouts[i] ?? "" : ""
+                return (layout, s.frames.filter { $0.id.hasPrefix(PageSpread.prefix(side)) }.compactMap(\.photoID))
+            }
+        }
+    }
+
+    /// Mixed orientations (every third photo portrait), aesthetic 0.2 + (i * 7 % 8) * 0.1.
+    static func mixedPhotos(_ prefix: String, _ key: DayKey, count: Int) -> [Photo] {
+        (0..<count).map {
+            photo("\(prefix)\($0)", day: key, minute: $0, landscape: $0 % 3 != 2,
+                  aesthetic: 0.2 + Double($0 * 7 % 8) * 0.1)
+        }
+    }
+
+    /// Photos on pages whose frame wants the other orientation.
+    static func misfits(_ a: Album) -> [PhotoID] {
+        pages(daySpreads(a)).flatMap { page -> [PhotoID] in
+            guard let layout = PageLayoutCatalog.layout(id: page.layout) else { return [] }
+            return zip(page.photos, layout.frames).filter { id, frame in
+                !TemplateLayout.fits(a.photos[id]!, frame.orientation)
+            }.map(\.0)
+        }
+    }
+
+    // Ruling 1, page by page: intro, the days in order (each starting with its journal), closing.
+    @Test func draftProducesIntroDaySpreadsClosing() throws {
+        let (p, f) = try Self.canva(PageCountRule(min: 2, max: nil, multipleOf: 2), formatID: "landscape-8x6in")
+        let days = [Self.day(Self.june18, Self.mixedPhotos("a", Self.june18, count: 8)),
+                    Self.day(Self.june19, Self.mixedPhotos("b", Self.june19, count: 8))]
         let a = Self.draft(days, profile: p, format: f)
-        #expect(a.spreads.map(\.kind) == [.intro, .journal, .gallery, .gallery, .journal, .gallery, .gallery, .closing])
-        #expect(a.spreads.map(\.templateID) == ["intro-1", "journal-5", "gallery-2", "gallery-1",
-                                                "journal-5", "gallery-2", "gallery-1", "closing-1"])
-        #expect(a.spreads[1...3].allSatisfy { $0.dayKey == Self.june18 })
-        #expect(a.spreads[4...6].allSatisfy { $0.dayKey == Self.june19 })
-        #expect(AlbumDrafter.pageCount(of: a) == 16)
+        #expect(a.spreads.first?.kind == .intro && a.spreads.first?.templateID == "intro-1")
+        #expect(a.spreads.last?.kind == .closing && a.spreads.last?.templateID == "closing-1")
+        let middle = Array(a.spreads.dropFirst().dropLast())
+        #expect(middle == Self.daySpreads(a))
+        let keys = middle.compactMap(\.dayKey)
+        #expect(keys.count == middle.count && keys == keys.sorted())
+        for key in [Self.june18, Self.june19] {
+            let ofDay = middle.filter { $0.dayKey == key }
+            #expect(ofDay.map(\.kind) == [.journal] + Array(repeating: .gallery, count: ofDay.count - 1))
+            let base = AlbumDrafter.dayString(key)
+            #expect(ofDay.map(\.id) == ["\(base)-journal"] + (1..<ofDay.count).map { "\(base)-gallery-\($0)" })
+        }
         #expect(Set(a.spreads.map(\.id)).count == a.spreads.count)
+    }
+
+    @Test func daySpreadsAreComposedPages() throws {
+        let (p, f) = try Self.canva(formatID: "landscape-8x6in")
+        let days = [Self.day(Self.june18, Self.mixedPhotos("a", Self.june18, count: 10), places: ["Ravello", "Minori"]),
+                    Self.day(Self.june19, Self.mixedPhotos("b", Self.june19, count: 7))]
+        let a = Self.draft(days, profile: p, format: f)
+        let spreads = Self.daySpreads(a)
+        #expect(!spreads.isEmpty)
+        for s in spreads {
+            #expect(s.templateID == "pages", "\(s.id)")
+            #expect(s.pageLayouts.count == 2, "\(s.id)")
+            #expect(s.pageLayouts.allSatisfy { $0.flatMap(PageLayoutCatalog.layout(id:)) != nil }, "\(s.id)")
+        }
+        for key in [Self.june18, Self.june19] {
+            let ofDay = spreads.filter { $0.dayKey == key }
+            let first = try #require(ofDay.first)
+            #expect(first.kind == .journal)
+            #expect(first.pageLayouts.first??.hasPrefix("opener-") == true)
+            #expect(Self.text(first, .date) == AlbumDrafter.czechDate(key))
+            #expect(Self.text(first, .body) == "")
+            #expect(ofDay.dropFirst().allSatisfy { $0.kind == .gallery })
+            // Only the opener page has the day's texts.
+            #expect(Self.pages(ofDay).dropFirst().allSatisfy { !$0.layout.hasPrefix("opener-") })
+        }
+        #expect(Self.text(spreads.first { $0.dayKey == Self.june18 }!, .title) == "Ravello, Minori")
+        #expect(Self.text(spreads.first { $0.dayKey == Self.june19 }!, .title) == "Bez místa")
+    }
+
+    // Spec 8: 40 photos of mixed orientations and scores in 3 days.
+    @Test func noEmptyFramesAndEveryPhotoPlaced() throws {
+        let (p, f) = try Self.canva(formatID: "landscape-8x6in")
+        #expect(p.pageCount.min == 20)
+        let days = [Self.day(Self.june18, Self.mixedPhotos("a", Self.june18, count: 15)),
+                    Self.day(Self.june19, Self.mixedPhotos("b", Self.june19, count: 13)),
+                    Self.day(Self.june20, Self.mixedPhotos("c", Self.june20, count: 12))]
+        let a = Self.draft(days, profile: p, format: f)
+        #expect(Self.daySpreads(a).allSatisfy { $0.templateID == "pages" })
+        for s in a.spreads where s.kind != .blank {
+            #expect(!s.frames.isEmpty, "\(s.id)")
+            #expect(s.frames.allSatisfy { $0.photoID != nil }, "\(s.id)")
+        }
+        let selected = Set(days.flatMap(\.photos).map(\.id))
+        let placed = Self.placed(Self.daySpreads(a))
+        #expect(placed.count == selected.count)
+        #expect(Set(placed) == selected)
+        #expect(p.pageCount.isSatisfied(by: AlbumDrafter.pageCount(of: a)))
+        #expect(Self.misfits(a).isEmpty)
+    }
+
+    @Test func introPhotoIsNotAHero() throws {
+        let (p, f) = try Self.canva(formatID: "landscape-8x6in")
+        // Scores below the hero minimum except "star" (the intro photo) and "hero".
+        var photos = (0..<12).map {
+            Self.photo("a\($0)", day: Self.june18, minute: $0, aesthetic: 0.1 + Double($0 % 3) * 0.1)
+        }
+        photos[3] = Self.photo("star", day: Self.june18, minute: 3, aesthetic: 0.95)
+        photos[8] = Self.photo("hero", day: Self.june18, minute: 8, aesthetic: 0.9)
+        let a = Self.draft([Self.day(Self.june18, photos)], profile: p, format: f)
+        #expect(a.spreads.first?.frames.first?.photoID == "star")
+        let pages = Self.pages(Self.daySpreads(a))
+        #expect(pages.filter { $0.layout == "full" }.flatMap(\.photos) == ["hero"])
+        #expect(pages.contains { $0.photos.contains("star") })
+    }
+
+    @Test func galleryOnlyDayHasNoOpenerAndSkipsExcludedPhotos() throws {
+        let (p, f) = try Self.canva(PageCountRule(min: 2, max: nil, multipleOf: 2), formatID: "landscape-8x6in")
+        let days = [Self.day(Self.june18, Self.mixedPhotos("a", Self.june18, count: 7)),
+                    Self.day(Self.june19, Self.mixedPhotos("b", Self.june19, count: 5))]
+        let a = AlbumDrafter.draft(album: Self.album(days), days: days, profile: p, format: f, options: .init(),
+                                   includeIntro: true, reservedSpreads: 0, excludedFromDays: ["a0", "b1"],
+                                   galleryOnlyDays: [Self.june18])
+        let june18 = Self.daySpreads(a).filter { $0.dayKey == Self.june18 }
+        #expect(!june18.isEmpty && june18.allSatisfy { $0.kind == .gallery && $0.templateID == "pages" })
+        #expect(Self.pages(june18).allSatisfy { !$0.layout.hasPrefix("opener-") })
+        #expect(june18.allSatisfy { $0.texts.allSatisfy(\.text.isEmpty) })
+        #expect(Self.daySpreads(a).first { $0.dayKey == Self.june19 }?.kind == .journal)
+        let placed = Self.placed(Self.daySpreads(a))
+        #expect(Set(placed) == Set(days.flatMap(\.photos).map(\.id)).subtracting(["a0", "b1"]))
+        #expect(placed.count == 10)
     }
 
     // Review focus 2.
@@ -145,40 +266,37 @@ import Foundation
         #expect(cover.front.texts.allSatisfy { page.contains($0.rect) })
     }
 
-    @Test func portraitPhotosPreferPortraitFrames() throws {
-        // Lax rule so padding does not split the gallery-2 under test.
-        let (p, f) = try Self.canva(PageCountRule(min: 2, max: nil, multipleOf: 2))
-        // Journal-4: three good landscape photos and one weaker portrait photo.
+    @Test func portraitPhotosGoToPortraitFrames() throws {
+        let (p, f) = try Self.canva(PageCountRule(min: 2, max: nil, multipleOf: 2), formatID: "landscape-8x6in")
         let d1 = [Self.photo("l0", day: Self.june18, minute: 0, aesthetic: 0.9),
                   Self.photo("p0", day: Self.june18, minute: 1, landscape: false, aesthetic: 0.2),
                   Self.photo("l1", day: Self.june18, minute: 2, aesthetic: 0.8),
-                  Self.photo("l2", day: Self.june18, minute: 3, aesthetic: 0.7)]
-        // Journal-5 takes the five best; the gallery-2 gets a landscape then a portrait photo.
-        var d2 = (0..<5).map { Self.photo("j\($0)", day: Self.june19, minute: $0, aesthetic: 0.9) }
-        d2 += [Self.photo("gl", day: Self.june19, minute: 10, aesthetic: 0.1),
-               Self.photo("gp", day: Self.june19, minute: 11, landscape: false, aesthetic: 0.1)]
+                  Self.photo("l2", day: Self.june18, minute: 3, aesthetic: 0.7),
+                  Self.photo("p1", day: Self.june18, minute: 4, landscape: false, aesthetic: 0.6),
+                  Self.photo("l3", day: Self.june18, minute: 5, aesthetic: 0.5),
+                  Self.photo("l4", day: Self.june18, minute: 6, aesthetic: 0.4)]
+        let d2 = Self.mixedPhotos("b", Self.june19, count: 9)
         let a = Self.draft([Self.day(Self.june18, d1), Self.day(Self.june19, d2)], profile: p, format: f)
-        let j4 = try #require(a.spreads.first { $0.templateID == "journal-4" })
-        #expect(j4.frames.first { $0.id == "photo4" }?.photoID == "p0")   // portrait slot
-        #expect(j4.frames.first { $0.id == "photo1" }?.photoID == "l0")   // best photo on the main frame
-        let g2 = try #require(a.spreads.first { $0.templateID == "gallery-2" && $0.dayKey == Self.june19 })
-        #expect(g2.frames.first { $0.id == "photo1" }?.photoID == "gp")
-        #expect(g2.frames.first { $0.id == "photo2" }?.photoID == "gl")
+        #expect(Self.misfits(a).isEmpty)
+        #expect(Set(Self.placed(Self.daySpreads(a))) == Set((d1 + d2).map(\.id)))
     }
 
-    @Test func portraitMainFrameOfJournal3() throws {
-        let (p, f) = try Self.canva()
+    // Spec 4.2: the day's portrait photo gets a portrait frame, not a crop into a landscape one.
+    @Test func lonePortraitGetsPortraitFrame() throws {
+        let (p, f) = try Self.canva(formatID: "landscape-8x6in")
         let d = [Self.photo("l0", day: Self.june18, minute: 0, aesthetic: 0.9),
                  Self.photo("p0", day: Self.june18, minute: 1, landscape: false, aesthetic: 0.5),
                  Self.photo("l1", day: Self.june18, minute: 2, aesthetic: 0.8)]
         let a = Self.draft([Self.day(Self.june18, d)], profile: p, format: f)
-        let j3 = try #require(a.spreads.first { $0.templateID == "journal-3" })
-        #expect(j3.frames.first { $0.id == "photo1" }?.photoID == "p0")
-        #expect(j3.frames.allSatisfy { $0.photoID != nil })
+        let page = try #require(Self.pages(Self.daySpreads(a)).first { $0.photos.contains("p0") })
+        let layout = try #require(PageLayoutCatalog.layout(id: page.layout))
+        let frame = layout.frames[page.photos.firstIndex(of: "p0")!]
+        #expect(frame.orientation == .portrait)
+        #expect(Self.daySpreads(a).allSatisfy { $0.frames.allSatisfy { $0.photoID != nil } })
     }
 
     @Test func smallDayHasNoEmptyFrames() throws {
-        let (p, f) = try Self.canva()
+        let (p, f) = try Self.canva(formatID: "landscape-8x6in")
         let days = [Self.day(Self.june18, Self.dayPhotos("a", Self.june18, count: 2), places: ["Ravello"]),
                     Self.day(Self.june19, Self.dayPhotos("b", Self.june19, count: 1))]
         let a = Self.draft(days, profile: p, format: f)
@@ -186,51 +304,95 @@ import Foundation
             #expect(s.frames.allSatisfy { $0.photoID != nil }, "\(s.id)")
         }
         let first = try #require(a.spreads.first { $0.dayKey == Self.june18 })
-        #expect(Self.text(first, .caption) == "čtvrtek 18. června 2026, Ravello")
+        #expect(first.kind == .journal)
+        #expect(Self.text(first, .date) == "čtvrtek 18. června 2026")
+        #expect(Self.text(first, .title) == "Ravello")
+        let second = try #require(a.spreads.first { $0.dayKey == Self.june19 })
+        #expect(second.pageLayouts.first == "opener-text")
+        #expect(Set(Self.placed(Self.daySpreads(a))) == ["a0", "a1", "b0"])
         #expect(p.pageCount.isSatisfied(by: AlbumDrafter.pageCount(of: a)))
     }
 
-    @Test func paddingSplitsGalleriesBeforeAddingBlank() throws {
-        let (p, f) = try Self.canva(PageCountRule(min: 14, max: nil, multipleOf: 2))
-        // intro + journal-5 + gallery-2 + gallery-2 + closing = 10 pages; 14 needs two splits.
-        let days = [Self.day(Self.june18, Self.dayPhotos("a", Self.june18, count: 9))]
-        let a = Self.draft(days, profile: p, format: f)
-        #expect(a.spreads.map(\.templateID) == ["intro-1", "journal-5", "gallery-1", "gallery-1",
-                                                "gallery-1", "gallery-1", "closing-1"])
-        #expect(Set(Self.placed(Array(a.spreads[1...5]))).count == 9)
-        // The journal takes the five best (a4, a3, a8, a2, a7); the rest stays chronological.
-        #expect(Self.placed(Array(a.spreads[2...5])) == ["a0", "a1", "a5", "a6"])
+    // Padding: the day with the most photos per page (no opener, no full; ties: the earlier day) is
+    // planned again with a lower target until it has 2 more pages, before any blank spread. Starts
+    // at 5 photos per page, where the 40-photo day gets 2 more pages at 4.
+    @Test func paddingReplansTheDensestDayBeforeAddingBlank() throws {
+        let (lax, f) = try Self.canva(PageCountRule(min: 2, max: nil, multipleOf: 2), formatID: "landscape-8x6in")
+        let days = [Self.day(Self.june18, Self.mixedPhotos("a", Self.june18, count: 9)),
+                    Self.day(Self.june19, Self.mixedPhotos("b", Self.june19, count: 40))]
+        let five = DraftOptions(photosPerPage: 5)
+        let loose = Self.draft(days, profile: lax, format: f, options: five)
+        func dayPages(_ a: Album, _ key: DayKey) -> [(layout: String, photos: [PhotoID])] {
+            Self.pages(Self.daySpreads(a).filter { $0.dayKey == key })
+        }
+        func average(_ pages: [(layout: String, photos: [PhotoID])]) -> Double {
+            let ordinary = pages.filter { !$0.layout.hasPrefix("opener-") && $0.layout != "full" }
+            return Double(ordinary.map(\.photos.count).reduce(0, +)) / Double(max(ordinary.count, 1))
+        }
+        let densest = average(dayPages(loose, Self.june19)) > average(dayPages(loose, Self.june18))
+            ? Self.june19 : Self.june18
+        let other = densest == Self.june18 ? Self.june19 : Self.june18
+        let min = AlbumDrafter.pageCount(of: loose) + 2
+        let (p, _) = try Self.canva(PageCountRule(min: min, max: nil, multipleOf: 2), formatID: "landscape-8x6in")
+        let a = Self.draft(days, profile: p, format: f, options: five)
+        #expect(!a.spreads.contains { $0.kind == .blank })
+        #expect(AlbumDrafter.pageCount(of: a) >= min)
+        #expect(dayPages(a, densest).count >= dayPages(loose, densest).count + 2)
+        #expect(dayPages(a, other).map(\.layout) == dayPages(loose, other).map(\.layout))
+        #expect(Self.placed(Self.daySpreads(a)).count == 49)
         #expect(Set(a.spreads.map(\.id)).count == a.spreads.count)
     }
 
+    // A day of one photo cannot get more pages: blank spreads go before the closing.
     @Test func blankPaddingGoesBeforeClosing() throws {
-        let (p, f) = try Self.canva(PageCountRule(min: 12, max: nil, multipleOf: 4))
-        let days = [Self.day(Self.june18, Self.dayPhotos("a", Self.june18, count: 5))]
+        let (p, f) = try Self.canva(PageCountRule(min: 12, max: nil, multipleOf: 4), formatID: "landscape-8x6in")
+        let days = [Self.day(Self.june18, Self.dayPhotos("a", Self.june18, count: 1))]
         let a = Self.draft(days, profile: p, format: f)
         #expect(a.spreads.map(\.kind) == [.intro, .journal, .blank, .blank, .blank, .closing])
+        #expect(a.spreads.filter { $0.kind == .blank }.map(\.id) == ["blank-1", "blank-2", "blank-3"])
         #expect(AlbumDrafter.pageCount(of: a) == 12)
     }
 
     @Test func overMaximumKeepsContent() throws {
-        let (p, f) = try Self.canva(PageCountRule(min: 2, max: 6, multipleOf: 2))
-        let days = [Self.day(Self.june18, Self.dayPhotos("a", Self.june18, count: 9))]
+        let (p, f) = try Self.canva(PageCountRule(min: 2, max: 6, multipleOf: 2), formatID: "landscape-8x6in")
+        let days = [Self.day(Self.june18, Self.mixedPhotos("a", Self.june18, count: 30))]
         let a = Self.draft(days, profile: p, format: f)
-        #expect(Self.placed(a.spreads.filter { $0.kind == .journal || $0.kind == .gallery }).count == 9)
-        #expect(AlbumDrafter.pageCount(of: a) == 10)
+        #expect(Self.placed(Self.daySpreads(a)).count == 30)
+        #expect(AlbumDrafter.pageCount(of: a) > 6)
+        #expect(!a.spreads.contains { $0.kind == .blank })
     }
 
     @Test func noClosingOption() throws {
-        let (p, f) = try Self.canva(PageCountRule(min: 2, max: nil, multipleOf: 2))
+        let (p, f) = try Self.canva(PageCountRule(min: 2, max: nil, multipleOf: 2), formatID: "landscape-8x6in")
         let days = [Self.day(Self.june18, Self.dayPhotos("a", Self.june18, count: 3))]
         let a = Self.draft(days, profile: p, format: f, options: DraftOptions(includeClosing: false))
-        #expect(a.spreads.map(\.kind) == [.intro, .journal])
+        #expect(a.spreads.first?.kind == .intro)
+        #expect(a.spreads.dropFirst().allSatisfy { $0.kind == .journal || $0.kind == .gallery })
+        #expect(a.spreads.dropFirst().first?.kind == .journal)
     }
 
     @Test func deterministic() throws {
-        let (p, f) = try Self.canva()
-        let days = [Self.day(Self.june18, Self.dayPhotos("a", Self.june18, count: 8)),
-                    Self.day(Self.june19, Self.dayPhotos("b", Self.june19, count: 5))]
+        let (p, f) = try Self.canva(formatID: "landscape-8x6in")
+        let days = [Self.day(Self.june18, Self.mixedPhotos("a", Self.june18, count: 8)),
+                    Self.day(Self.june19, Self.mixedPhotos("b", Self.june19, count: 5))]
         #expect(Self.draft(days, profile: p, format: f) == Self.draft(days, profile: p, format: f))
+    }
+
+    // The day's pages are the planner's, with the liked weights; frame L.photoK / R.photoK holds
+    // the page's K-th photo.
+    @Test func dayPagesComeFromThePlannerWithTheLikedWeights() throws {
+        let (p, f) = try Self.canva(PageCountRule(min: 2, max: nil, multipleOf: 2), formatID: "landscape-8x6in")
+        let photos = Self.mixedPhotos("a", Self.june18, count: 14)
+        let weights = LayoutWeights(liked: ["mosaic-5", "portraits-2"])
+        let a = Self.draft([Self.day(Self.june18, photos)], profile: p, format: f,
+                           options: DraftOptions(layoutWeights: weights))
+        let intro = try #require(a.spreads.first?.frames.first?.photoID)
+        let closing = try #require(a.spreads.last?.frames.first?.photoID)
+        let planned = PagePlanner.planDay(photos, heroCandidates: PagePlanner.heroCandidates(photos, excluding: [intro, closing]),
+                                          opener: true, target: 3, weights: weights)
+        let pages = Self.pages(Self.daySpreads(a))
+        #expect(pages.map(\.layout) == planned.map(\.layoutID))
+        #expect(pages.map(\.photos) == planned.map { $0.photos.map(\.id) })
     }
 
     // Ruling 5.
@@ -283,47 +445,50 @@ import Foundation
         #expect(cover.back.kind == .blank && cover.back.frames.isEmpty)
     }
 
-    // Final fix wave C3: a 10-day trip with 220 selected photos is above Canva's 98 pages with 2
-    // photos per gallery (~204 pages); the drafter plans again with 3 per gallery.
-    @Test func longTripReplansWithThreePhotosPerGallery() throws {
-        let (p, f) = try Self.canva()
+    // Review focus 4: 400 photos in 10 days are above Canva's 98 pages at 3 photos per page; the
+    // drafter plans again with 4, then 5 photos per page, and drops nothing.
+    @Test func overMaximumReplansDenser() throws {
+        let (p, f) = try Self.canva(formatID: "landscape-8x6in")
         #expect(p.pageCount.max == 98)
         let days = (0..<10).map { i -> DayGroup in
             let key = DayKey(year: 2026, month: 6, day: 10 + i)
-            return Self.day(key, Self.dayPhotos("d\(i)-", key, count: 22))
+            return Self.day(key, Self.mixedPhotos("d\(i)-", key, count: 40))
         }
         let a = Self.draft(days, profile: p, format: f)
-        let two = Self.draft(days, profile: try Self.canva(PageCountRule(min: 20, max: nil, multipleOf: 2)).0,
-                             format: f)
-        let galleries = a.spreads.filter { $0.kind == .gallery }
-        #expect(galleries.contains { $0.templateID == "gallery-3" })
-        #expect(!two.spreads.contains { $0.templateID == "gallery-3" })
-        #expect(AlbumDrafter.pageCount(of: two) == 204)
-        // Per day: journal-5 + 17 photos in 6 galleries (3,3,3,3,3,2) = 7 spreads; + intro + closing.
-        #expect(AlbumDrafter.pageCount(of: a) == (10 * 7 + 2) * 2)
-        #expect(AlbumDrafter.pageCount(of: a) < AlbumDrafter.pageCount(of: two))
-        // Nothing dropped.
-        #expect(Self.placed(a.spreads.filter { $0.kind == .journal || $0.kind == .gallery }).count == 220)
+        let (noMax, _) = try Self.canva(PageCountRule(min: 20, max: nil, multipleOf: 2), formatID: "landscape-8x6in")
+        let three = Self.draft(days, profile: noMax, format: f, options: DraftOptions(photosPerPage: 3))
+        let four = Self.draft(days, profile: noMax, format: f, options: DraftOptions(photosPerPage: 4))
+        let five = Self.draft(days, profile: noMax, format: f, options: DraftOptions(photosPerPage: 5))
+        #expect(AlbumDrafter.pageCount(of: three) > 98)
+        #expect(AlbumDrafter.pageCount(of: a) < AlbumDrafter.pageCount(of: three))
+        #expect(a.spreads == (AlbumDrafter.pageCount(of: four) <= 98 ? four : five).spreads)
+        let placed = Self.placed(Self.daySpreads(a))
+        #expect(placed.count == 400)
+        #expect(Set(placed).count == 400)
     }
 
-    @Test func tripThatFitsWithThreePerGalleryIsUnderTheMaximum() throws {
-        let (p, f) = try Self.canva(PageCountRule(min: 2, max: 20, multipleOf: 2))
-        // 2 days x 13 photos: 2 per gallery = 1 + 2 x (1 + 4) + 1 = 12 spreads (24 pages);
-        // 3 per gallery = 1 + 2 x (1 + 3) + 1 = 10 spreads (20 pages).
-        let days = [Self.day(Self.june18, Self.dayPhotos("a", Self.june18, count: 13)),
-                    Self.day(Self.june19, Self.dayPhotos("b", Self.june19, count: 13))]
+    @Test func tripThatFitsAtFourPerPageIsUnderTheMaximum() throws {
+        let (lax, f) = try Self.canva(PageCountRule(min: 2, max: nil, multipleOf: 2), formatID: "landscape-8x6in")
+        let days = [Self.day(Self.june18, Self.mixedPhotos("a", Self.june18, count: 20)),
+                    Self.day(Self.june19, Self.mixedPhotos("b", Self.june19, count: 20))]
+        let three = Self.draft(days, profile: lax, format: f)
+        let four = Self.draft(days, profile: lax, format: f, options: DraftOptions(photosPerPage: 4))
+        #expect(AlbumDrafter.pageCount(of: four) < AlbumDrafter.pageCount(of: three))
+        let max = AlbumDrafter.pageCount(of: four)
+        let (p, _) = try Self.canva(PageCountRule(min: 2, max: max, multipleOf: 2), formatID: "landscape-8x6in")
         let a = Self.draft(days, profile: p, format: f)
-        #expect(AlbumDrafter.pageCount(of: a) == 20)
+        #expect(a.spreads == four.spreads)
         #expect(p.pageCount.isSatisfied(by: AlbumDrafter.pageCount(of: a)))
     }
 
-    @Test func normalTripKeepsTwoPerGallery() throws {
-        let (p, f) = try Self.canva()
-        let days = [Self.day(Self.june18, Self.dayPhotos("a", Self.june18, count: 12)),
-                    Self.day(Self.june19, Self.dayPhotos("b", Self.june19, count: 12))]
+    @Test func normalTripKeepsThreePerPage() throws {
+        let (p, f) = try Self.canva(formatID: "landscape-8x6in")
+        let days = [Self.day(Self.june18, Self.mixedPhotos("a", Self.june18, count: 12)),
+                    Self.day(Self.june19, Self.mixedPhotos("b", Self.june19, count: 12))]
         let a = Self.draft(days, profile: p, format: f)
-        #expect(!a.spreads.contains { $0.templateID == "gallery-3" })
-        #expect(a.spreads.filter { $0.kind == .gallery }.allSatisfy { $0.frames.count <= 2 })
+        let (noMax, _) = try Self.canva(PageCountRule(min: 20, max: nil, multipleOf: 2), formatID: "landscape-8x6in")
+        #expect(AlbumDrafter.pageCount(of: a) <= 98)
+        #expect(a.spreads == Self.draft(days, profile: noMax, format: f).spreads)
     }
 
     // Final fix wave C7: videos are never laid out, even when selected.

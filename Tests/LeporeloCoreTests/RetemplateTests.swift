@@ -107,14 +107,23 @@ import Foundation
         #expect(r.unplacedPhotoIDs.isEmpty)
     }
 
-    @Test func drafterUsesTheSharedAssignment() throws {
-        let (p, f) = try D.canva(Self.lax)
-        let ps = (0..<4).map { D.photo("p\($0)", day: D.june18, minute: $0, landscape: $0 != 2,
-                                       aesthetic: 0.2 + Double($0) * 0.1) }
+    // The drafter's pages give the main frame (photo1) the page's best photo that fits it, like
+    // `TemplateLayout.assign` on templates.
+    @Test func drafterPutsTheBestFittingPhotoInEachMainFrame() throws {
+        let (p, f) = try D.canva(Self.lax, formatID: "landscape-8x6in")
+        let ps = D.mixedPhotos("p", D.june18, count: 12)
         let a = D.draft([D.day(D.june18, ps)], profile: p, format: f)
-        let journal = try #require(a.spreads.first { $0.kind == .journal })
-        let t = try #require(TemplateCatalog.template(id: journal.templateID))
-        #expect(Self.assignment(journal) == TemplateLayout.assign(t.frames, photos: ps))
+        let pages = D.pages(D.daySpreads(a)).filter { !$0.photos.isEmpty }
+        #expect(!pages.isEmpty)
+        let byID = Self.byID(ps)
+        for page in pages {
+            let layout = try #require(PageLayoutCatalog.layout(id: page.layout))
+            let main = layout.frames[0]
+            #expect(main.priority == 0)
+            let best = page.photos.map { byID[$0]! }.filter { TemplateLayout.fits($0, main.orientation) }
+                .sorted(by: TemplateLayout.rank).first
+            #expect(page.photos.first == best?.id, "\(page.layout)")
+        }
     }
 
     @Test func retemplateClearsCustomLayout() throws {

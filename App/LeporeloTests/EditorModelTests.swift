@@ -77,9 +77,35 @@ private func frameMap(_ s: Spread) -> [String: PhotoID] {
     Dictionary(uniqueKeysWithValues: s.frames.compactMap { f in f.photoID.map { (f.id, $0) } })
 }
 
-/// Two days: day1 with 8 photos (journal-5, gallery-2, gallery-1), day2 with 4 (journal-4).
+/// Two days as the drafter built them before page layouts (an old book of `TemplateCatalog`
+/// spreads): day1 with 8 photos (journal-5, gallery-2, gallery-1), day2 with 4 (journal-4).
 private func standardAlbum() throws -> Album {
-    try drafted(makeAlbum(dayPhotos("a", day1, count: 8) + dayPhotos("b", day2, count: 4)))
+    let g = try laxGeometry()
+    var album = makeAlbum(dayPhotos("a", day1, count: 8) + dayPhotos("b", day2, count: 4))
+    func make(_ templateID: String, _ id: String, _ day: DayKey?, _ photos: [PhotoID],
+              _ texts: [TextRole: String]) throws -> Spread {
+        let template = try #require(TemplateCatalog.template(id: templateID))
+        var spread = TemplateLayout.instantiate(template, geometry: g, dayKey: day, id: id, marginMM: album.marginMM)
+        let assignment = TemplateLayout.assign(template.frames, photos: photos.compactMap { album.photos[$0] })
+        for i in spread.frames.indices { spread.frames[i].photoID = assignment[spread.frames[i].id] }
+        for i in spread.texts.indices { spread.texts[i].text = texts[spread.texts[i].role] ?? "" }
+        return spread
+    }
+    // The journal takes the day's best photos, the galleries the rest chronologically, 2 per spread.
+    func journal(_ day: DayKey) -> [TextRole: String] {
+        [.date: AlbumDrafter.czechDate(day), .title: AlbumDrafter.noPlaceTitle, .body: ""]
+    }
+    album.spreads = [
+        try make("intro-1", "intro", nil, ["a4"], [.title: "Amalfi", .body: "18. 6. – 19. 6. 2026"]),
+        try make("journal-5", "2026-06-18-journal", day1, ["a4", "a3", "a2", "a7", "a1"], journal(day1)),
+        try make("gallery-2", "2026-06-18-gallery-1", day1, ["a0", "a5"], [:]),
+        try make("gallery-1", "2026-06-18-gallery-2", day1, ["a6"], [:]),
+        try make("journal-4", "2026-06-19-journal", day2, ["b0", "b1", "b2", "b3"], journal(day2)),
+        try make("closing-1", "closing", nil, ["b3"], [:]),
+    ]
+    album.cover = AlbumDrafter.cover(title: album.title, photoID: "a4", format: g.format, profile: g.profile,
+                                     marginMM: album.marginMM)
+    return album
 }
 
 @MainActor
