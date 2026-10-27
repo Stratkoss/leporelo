@@ -25,11 +25,6 @@ struct StartView: View {
         .frame(minWidth: 760, minHeight: 480)
         // Reloads when access changes (e.g. granted from the detail's prompt or in Settings).
         .task(id: access) { await model.load() }
-        .onChange(of: model.selection) { old, new in
-            guard case .book(let url) = new else { return }
-            model.selection = old  // a book is opened, not shown here
-            open(url)
-        }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             refreshAccess()  // the user may come back from System Settings
         }
@@ -62,8 +57,13 @@ struct StartView: View {
                 if model.books.isEmpty {
                     Text("Zatím žádná kniha").foregroundStyle(.secondary)
                 }
+                // Selecting a book (arrow keys) only shows it; a click, a double-click or Return
+                // opens it (`primaryAction` below).
                 ForEach(model.books, id: \.self) { url in
-                    Label(url.deletingPathExtension().lastPathComponent, systemImage: "book.closed")
+                    Label(Self.bookName(url), systemImage: "book.closed")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                        .onTapGesture { open(url) }
                         .help(url.path)
                         .tag(StartItem.book(url))
                 }
@@ -79,6 +79,19 @@ struct StartView: View {
             }
         }
         .listStyle(.sidebar)
+        .contextMenu(forSelectionType: StartItem.self) { items in
+            if case .book(let url)? = items.first, items.count == 1 {
+                Button("Otevřít") { open(url) }
+            }
+        } primaryAction: { items in
+            // Return or a double-click; only a single book opens.
+            guard items.count == 1, case .book(let url)? = items.first else { return }
+            open(url)
+        }
+    }
+
+    private static func bookName(_ url: URL) -> String {
+        url.deletingPathExtension().lastPathComponent
     }
 
     @ViewBuilder private func albumRow(_ album: SourceAlbum) -> some View {
@@ -125,7 +138,17 @@ struct StartView: View {
                     Divider()
                     photos
                 }
-            case .book, nil:
+            case .book(let url):
+                ContentUnavailableView {
+                    Label(Self.bookName(url), systemImage: "book.closed")
+                } description: {
+                    Text(url.deletingLastPathComponent().path)
+                } actions: {
+                    // No default-button shortcut: Return in the sidebar already opens the
+                    // book (the list's `primaryAction`), and must not open it twice.
+                    Button("Otevřít") { open(url) }
+                }
+            case nil:
                 ContentUnavailableView("Vyberte album", systemImage: "photo.on.rectangle",
                                        description: Text("Vlevo vyberte album z Fotek nebo rozmezí dat."))
             }
