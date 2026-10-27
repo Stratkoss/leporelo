@@ -266,7 +266,9 @@ public struct SpreadRenderer: Sendable {
         ctx.draw(image, in: CGRect(x: 0, y: 0, width: fit.size.width, height: fit.size.height))
     }
 
-    private func font(for role: TextRole) -> (name: String, size: Double) {
+    /// The font of a text role: PostScript/family name and size in MILLIMETRES (the drawing space
+    /// is mm; multiply by the points per mm of a view for an on-screen editor that matches).
+    public static func font(for role: TextRole) -> (name: String, size: Double) {
         switch role {
         case .title: return (FontRegistry.titleFont, 9.9)
         case .date: return (FontRegistry.textFont, 3.2)
@@ -277,7 +279,7 @@ public struct SpreadRenderer: Sendable {
 
     private func drawText(_ box: TextBox, in ctx: CGContext, pageWidth: Double, isSpread: Bool) {
         guard !box.text.isEmpty, box.rect.size.width > 0, box.rect.size.height > 0 else { return }
-        let spec = font(for: box.role)
+        let spec = Self.font(for: box.role)
         let ctFont = CTFontCreateWithName(spec.name as CFString, spec.size, nil)
         let rightAligned = box.role == .pageNumber && isSpread && (box.rect.minX + box.rect.size.width / 2) >= pageWidth
 

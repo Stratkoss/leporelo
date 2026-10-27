@@ -231,6 +231,13 @@ final class EditorModel {
         return photos.filter(\.isSelected) + photos.filter { !$0.isSelected }
     }
 
+    /// Shows `photoID` in the tray (from the "not in the album" list): its day, not "Celý výběr".
+    func showInTray(_ photoID: PhotoID) {
+        guard let photo = store.album.photos[photoID] else { return }
+        trayShowsAll = false
+        if let day = photo.dayKey { trayDay = day }
+    }
+
     // MARK: Draft, redraft, format
 
     /// "Navrhnout album": drafts the selection as it is (`Workflow.draft`) when the album has no
@@ -396,6 +403,40 @@ final class EditorModel {
         guard let id = spreadID ?? currentSpreadID else { return }
         perform([.setFrameTransform(spreadID: id, frameID: frameID, offset: clampedOffset, zoom: clampedZoom)],
                 "Posunout fotku")
+    }
+
+    /// Whether a crop gesture is running (`beginTransform` ... `endTransform`).
+    var isTransforming: Bool { transformSession != nil }
+
+    /// Whether a text or crop session holds edits that are not stored as an undo step yet. The
+    /// Undo menu is enabled for it: `undo()` commits the session, then undoes it.
+    var hasPendingSession: Bool { textSession != nil || transformSession != nil }
+
+    /// "Obnovit výřez" (double-click on a photo): offset 0, zoom 1 as one step. False (nothing
+    /// changes) for an empty frame or a crop that is already reset.
+    @discardableResult
+    func resetCrop(frame frameID: String, in spreadID: String? = nil) -> Bool {
+        commitSessions()
+        guard let id = spreadID ?? currentSpreadID,
+              let frame = store.album.spreads.first(where: { $0.id == id })?.frames.first(where: { $0.id == frameID }),
+              frame.photoID != nil, frame.offset != Point(x: 0, y: 0) || frame.zoom != 1 else { return false }
+        return perform([.setFrameTransform(spreadID: id, frameID: frameID, offset: Point(x: 0, y: 0), zoom: 1)],
+                       "Obnovit výřez")
+    }
+
+    /// "Odebrat fotku" (Delete on a selected frame): empties the frame and resets its crop, as one
+    /// step; the spread becomes manually edited. The photo stays selected but unplaced (tray,
+    /// preflight). False for an empty or unknown frame.
+    @discardableResult
+    func clearFrame(_ frameID: String, in spreadID: String? = nil) -> Bool {
+        commitSessions()
+        guard let id = spreadID ?? currentSpreadID,
+              var spread = store.album.spreads.first(where: { $0.id == id }),
+              let i = spread.frames.firstIndex(where: { $0.id == frameID }),
+              spread.frames[i].photoID != nil else { return false }
+        spread.frames[i].photoID = nil
+        Self.resetCrop(&spread.frames[i])
+        return perform([.replaceSpread(spread)], "Odebrat fotku")
     }
 
     /// Ends the crop gesture: stores its final crop as one step (nothing if unchanged).

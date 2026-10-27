@@ -177,6 +177,13 @@ private func px(_ mm: Double, includeBleed: Bool) -> Int {
         // Corner pixel inside the bleed is red (full-page photo is stretched into bleed on all sides).
         #expect(data[0] == 255 && data[1] == 0 && data[2] == 0)
     }
+
+    /// The editor's text overlay styles itself with the renderer's font table (sizes in mm).
+    @Test func fontTableIsPublicForTheEditor() {
+        #expect(SpreadRenderer.font(for: .title) == (FontRegistry.titleFont, 9.9))
+        #expect(SpreadRenderer.font(for: .body) == (FontRegistry.textFont, 3.5))
+        #expect(SpreadRenderer.font(for: .pageNumber) == (FontRegistry.textFont, 3.0))
+    }
 }
 
 // MARK: - Fix round 1

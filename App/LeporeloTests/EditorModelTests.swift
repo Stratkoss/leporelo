@@ -764,3 +764,94 @@ struct EditorSessionTests {
         #expect(document.currentAlbum == store.album)
     }
 }
+
+/// Model pieces the editor views (21b) need.
+@MainActor
+struct EditorViewSupportTests {
+    @Test func clearFrameEmptiesTheFrameAsOneUndoableStep() throws {
+        let (model, store, undo) = try makeModel(try standardAlbum())
+        let journal = try #require(store.album.spreads.first { $0.kind == .journal })
+        model.currentSpreadID = journal.id
+        let frame = journal.frames[1]
+        let photoID = try #require(frame.photoID)
+        step(undo) { model.nudge(frame: frame.id, offset: Point(x: 0.4, y: 0), zoom: 2) }
+
+        #expect(step(undo) { model.clearFrame(frame.id) })
+        let after = try #require(spread(store.album, journal.id))
+        #expect(after.frames[1].photoID == nil)
+        #expect(after.frames[1].zoom == 1 && after.frames[1].offset == Point(x: 0, y: 0))
+        #expect(after.manuallyEdited)
+        #expect(store.album.photos[photoID]?.isSelected == true)  // selected but unplaced
+        #expect(model.unplacedSelectedPhotos.map(\.id).contains(photoID))
+        #expect(undo.undoActionName == "Odebrat fotku")
+
+        // An empty frame: nothing to do, no step.
+        let revision = store.revision
+        #expect(!model.clearFrame(frame.id))
+        #expect(store.revision == revision)
+
+        undo.undo()
+        #expect(spread(store.album, journal.id)?.frames[1].photoID == photoID)
+        #expect(spread(store.album, journal.id)?.frames[1].zoom == 2)
+    }
+
+    @Test func resetCropIsOneStepAndANoOpWhenAlreadyReset() throws {
+        let (model, store, undo) = try makeModel(try standardAlbum())
+        let journal = try #require(store.album.spreads.first { $0.kind == .journal })
+        model.currentSpreadID = journal.id
+        let frameID = journal.frames[0].id
+        let revision = store.revision
+        #expect(!model.resetCrop(frame: frameID))
+        #expect(store.revision == revision)
+
+        step(undo) { model.nudge(frame: frameID, offset: Point(x: -0.5, y: 0.2), zoom: 1.8) }
+        #expect(step(undo) { model.resetCrop(frame: frameID) })
+        #expect(spread(store.album, journal.id)?.frames[0].offset == Point(x: 0, y: 0))
+        #expect(spread(store.album, journal.id)?.frames[0].zoom == 1)
+        #expect(undo.undoActionName == "Obnovit výřez")
+        undo.undo()
+        #expect(spread(store.album, journal.id)?.frames[0].zoom == 1.8)
+    }
+
+    @Test func pendingSessionIsReported() throws {
+        let (model, store, _) = try makeModel(try standardAlbum())
+        let journal = try #require(store.album.spreads.first { $0.kind == .journal })
+        model.currentSpreadID = journal.id
+        #expect(!model.hasPendingSession)
+        model.beginTransform(frame: journal.frames[0].id)
+        #expect(model.hasPendingSession && model.isTransforming)
+        model.endTransform()
+        #expect(!model.hasPendingSession)
+        model.beginTextEditing("body")
+        #expect(model.hasPendingSession)
+        model.commitSessions()
+        #expect(!model.hasPendingSession)
+    }
+
+    @Test func updateTextOutsideASessionIsIgnoredUntilEditingBeginsAgain() throws {
+        let (model, store, undo) = try makeModel(try standardAlbum())
+        let journal = try #require(store.album.spreads.first { $0.kind == .journal })
+        model.currentSpreadID = journal.id
+        model.beginTextEditing("body")
+        model.updateText("Pláž")
+        model.undo()  // commits the session, then undoes it
+        model.updateText("Pláž a moře")  // the overlay must begin again first
+        #expect(!model.isEditingText)
+        #expect(spread(store.album, journal.id)?.texts.first { $0.id == "body" }?.text == "")
+        model.beginTextEditing("body")
+        model.updateText("Pláž a moře")
+        model.endTextEditing()
+        #expect(spread(store.album, journal.id)?.texts.first { $0.id == "body" }?.text == "Pláž a moře")
+        #expect(undo.undoActionName == "Upravit text")
+    }
+
+    @Test func showInTrayJumpsToThePhotosDay() throws {
+        let (model, store, _) = try makeModel(try standardAlbum())
+        model.trayShowsAll = true
+        model.currentSpreadID = store.album.spreads.first { $0.dayKey == day1 }?.id
+        model.showInTray("b2")
+        #expect(!model.trayShowsAll)
+        #expect(model.trayDay == day2)
+        #expect(model.trayPhotos.contains { $0.id == "b2" })
+    }
+}
