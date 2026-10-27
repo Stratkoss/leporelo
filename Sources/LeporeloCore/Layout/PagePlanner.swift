@@ -112,6 +112,24 @@ public enum PagePlanner {
         return pages
     }
 
+    /// Padding (spec 4.3): `pages` (one day's plan) with exactly `extra` more pages, or nil when that
+    /// is not possible. Each step splits the page with the most photos (ties: the earlier page; not
+    /// an opener, not `full`, at least 2 photos) into two pages, like the odd-page rule: its photos,
+    /// chronological, planned again with half the target into exactly 2 pages, else cut
+    /// chronologically in two (see `splitting`). 1-photo pages follow the rescue rule (`full` for
+    /// a ▭/square with a long side of 1800 px or more, else `framed-1`; ▯ `portrait-text`). A split
+    /// must keep orientations matching; a page that cannot split so yields to the next one.
+    /// Layouts repeat only where a split forces it.
+    public static func expand(_ pages: [PlannedPage], by extra: Int, weights: LayoutWeights) -> [PlannedPage]? {
+        let planner = Planner(target: 1, weights: weights)
+        var result = pages
+        for _ in 0..<max(0, extra) {
+            guard let split = planner.splitting(result, clean: true) else { return nil }
+            result = split
+        }
+        return result
+    }
+
     /// At most `max(1, count / 6)` best-ranked candidates; a hero right after another hero is an
     /// ordinary photo.
     static func dayHeroes(_ photos: [Photo], candidates: Set<PhotoID>) -> Set<PhotoID> {
@@ -418,31 +436,58 @@ private struct Planner {
 
     // MARK: Even page count
 
-    /// Spec 4.3: while the day has an odd page count, split a page (most photos first; not the
-    /// opener, not `full`) into two planned with half the target; failing that, turn a photo opener
-    /// into `opener-text` and plan its photos as ordinary pages right after it. As a last resort
-    /// (no opener and nothing splits) an `empty` page ends the day.
-    func makeEven(_ pages: inout [PlannedPage]) {
+    /// `pages` with one page split into two: the page with the most photos first (ties: the
+    /// earlier page; not an opener, not `full`, at least 2 photos), its photos (chronological)
+    /// planned with half the target into exactly 2 pages between its neighbours. With `clean`
+    /// (padding) both new pages must have matching orientations, and when the page does not split
+    /// that way its photos are cut chronologically in two (cuts nearest the middle first), each
+    /// part one page with matching orientations; e.g. `grid-4` of ▭ becomes `landscape-2` twice.
+    /// Nil when no page splits.
+    func splitting(_ pages: [PlannedPage], clean: Bool) -> [PlannedPage]? {
         func role(_ page: PlannedPage) -> PageLayoutRole? { PageLayoutCatalog.layout(id: page.layoutID)?.role }
-        while pages.count % 2 == 1 {
-            let splittable = pages.indices
-                .filter { role(pages[$0]) != .opener && pages[$0].layoutID != "full" && pages[$0].photos.count >= 2 }
-                .sorted { (pages[$0].photos.count, -$0) > (pages[$1].photos.count, -$1) }
-            var split: (Int, [PlannedPage])?
-            for i in splittable {
-                let photos = pages[i].photos.sorted(by: Photo.chronological)
-                let half = Planner(target: max(1, photos.count / 2), weights: weights)
-                let two = half.plan(photos, opener: false,
-                                    before: pages[..<i].map(\.layoutID),
-                                    after: i + 1 < pages.count ? pages[i + 1].layoutID : nil, goal: .exactly(2),
-                                    strict: true)
-                if two.count == 2 {
-                    split = (i, two)
+        let splittable = pages.indices
+            .filter { role(pages[$0]) != .opener && pages[$0].layoutID != "full" && pages[$0].photos.count >= 2 }
+            .sorted { (pages[$0].photos.count, -$0) > (pages[$1].photos.count, -$1) }
+        for i in splittable {
+            let photos = pages[i].photos.sorted(by: Photo.chronological)
+            let before = pages[..<i].map(\.layoutID)
+            let after = i + 1 < pages.count ? pages[i + 1].layoutID : nil
+            let half = Planner(target: max(1, photos.count / 2), weights: weights)
+            let two = half.plan(photos, opener: false, before: before, after: after, goal: .exactly(2), strict: true)
+            var split: [PlannedPage]?
+            if two.count == 2 && (!clean || two.allSatisfy { mismatches($0) == 0 }) {
+                split = two
+            } else if clean {
+                let cuts = (1..<photos.count).sorted { (abs(2 * $0 - photos.count), $0) < (abs(2 * $1 - photos.count), $1) }
+                for cut in cuts {
+                    guard let first = onePage(Array(photos[..<cut]), before: before, after: nil),
+                          let second = onePage(Array(photos[cut...]), before: before + [first.layoutID], after: after)
+                    else { continue }
+                    split = [first, second]
                     break
                 }
             }
-            if let (i, two) = split {
-                pages.replaceSubrange(i...i, with: two)
+            if let split {
+                var result = pages
+                result.replaceSubrange(i...i, with: split)
+                return result
+            }
+        }
+        return nil
+    }
+
+    /// `photos` as exactly one page with matching orientations, or nil.
+    private func onePage(_ photos: [Photo], before: [String], after: String?) -> PlannedPage? {
+        let planner = Planner(target: photos.count, weights: weights)
+        let pages = planner.plan(photos, opener: false, before: before, after: after, goal: .exactly(1), strict: true)
+        return pages.count == 1 && mismatches(pages[0]) == 0 ? pages[0] : nil
+    }
+
+    func makeEven(_ pages: inout [PlannedPage]) {
+        func role(_ page: PlannedPage) -> PageLayoutRole? { PageLayoutCatalog.layout(id: page.layoutID)?.role }
+        while pages.count % 2 == 1 {
+            if let split = splitting(pages, clean: false) {
+                pages = split
             } else if let first = pages.first, role(first) == .opener, !first.photos.isEmpty {
                 let photos = first.photos.sorted(by: Photo.chronological)
                 // An odd number of pages for the opener's photos evens the day.

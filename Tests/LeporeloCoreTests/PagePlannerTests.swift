@@ -39,6 +39,31 @@ import Foundation
         #expect(pages.allSatisfy { $0.photos.count == layout($0).photoCount })
     }
 
+    // Padding (spec 4.3): splitting the page with the most photos adds exactly the pages asked for,
+    // down to one photo per page; the opener is never split.
+    @Test func expandSplitsTheFullestPageDownToSinglePhotos() throws {
+        let photos = (0..<4).map { T.photo("p\($0)", day: Self.day, minute: $0, pixels: (1024, 768)) }
+        let start = [PlannedPage(layoutID: "opener-text", photos: []),
+                     PlannedPage(layoutID: "grid-4", photos: photos)]
+        let two = try #require(PagePlanner.expand(start, by: 2, weights: .init()))
+        #expect(two.count == 4)
+        #expect(two[0].layoutID == "opener-text")
+        #expect(two.flatMap(\.photos).map(\.id).sorted() == photos.map(\.id))
+        #expect(two.allSatisfy { $0.photos.count == Self.layout($0).photoCount })
+        #expect(Self.placements(two).allSatisfy { TemplateLayout.fits($0.photo, $0.slot) })
+        #expect(two.dropFirst().map(\.photos.count).max() == 2)
+
+        let singles = try #require(PagePlanner.expand(two, by: 1, weights: .init()))
+        #expect(singles.count == 5)
+        #expect(singles.dropFirst().allSatisfy { $0.photos.count == 1 && $0.layoutID == "framed-1" })
+        #expect(singles.flatMap(\.photos).map(\.id) == photos.map(\.id))   // chronological
+        #expect(PagePlanner.expand(singles, by: 1, weights: .init()) == nil)
+        // Two photos split only once: by 2 is nil, not a partial expansion.
+        let pair = [start[0], PlannedPage(layoutID: "landscape-2", photos: Array(photos.prefix(2)))]
+        #expect(PagePlanner.expand(pair, by: 1, weights: .init())?.count == 3)
+        #expect(PagePlanner.expand(pair, by: 2, weights: .init()) == nil)
+    }
+
     @Test func twelveLandscapesEvenNoRepeatsNoMismatch() {
         let photos = Self.photos(Array(repeating: true, count: 12))
         let pages = Self.plan(photos)

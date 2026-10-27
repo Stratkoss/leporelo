@@ -177,7 +177,9 @@ import Foundation
         let a = Self.draft([Self.day(Self.june18, photos)], profile: p, format: f)
         #expect(a.spreads.first?.frames.first?.photoID == "star")
         let pages = Self.pages(Self.daySpreads(a))
-        #expect(pages.filter { $0.layout == "full" }.flatMap(\.photos) == ["hero"])
+        let full = pages.filter { $0.layout == "full" }.flatMap(\.photos)
+        #expect(full.contains("hero"))
+        #expect(!full.contains("star"))
         #expect(pages.contains { $0.photos.contains("star") })
     }
 
@@ -313,15 +315,13 @@ import Foundation
         #expect(p.pageCount.isSatisfied(by: AlbumDrafter.pageCount(of: a)))
     }
 
-    // Padding: the day with the most photos per page (no opener, no full; ties: the earlier day) is
-    // planned again with a lower target until it has 2 more pages, before any blank spread. Starts
-    // at 5 photos per page, where the 40-photo day gets 2 more pages at 4.
-    @Test func paddingReplansTheDensestDayBeforeAddingBlank() throws {
+    // Padding: the day with the most photos per page (no opener, no full; ties: the earlier day)
+    // gets exactly 2 more pages by splitting its fullest pages, before any blank spread.
+    @Test func paddingSplitsTheDensestDayBeforeAddingBlank() throws {
         let (lax, f) = try Self.canva(PageCountRule(min: 2, max: nil, multipleOf: 2), formatID: "landscape-8x6in")
         let days = [Self.day(Self.june18, Self.mixedPhotos("a", Self.june18, count: 9)),
                     Self.day(Self.june19, Self.mixedPhotos("b", Self.june19, count: 40))]
-        let five = DraftOptions(photosPerPage: 5)
-        let loose = Self.draft(days, profile: lax, format: f, options: five)
+        let loose = Self.draft(days, profile: lax, format: f)
         func dayPages(_ a: Album, _ key: DayKey) -> [(layout: String, photos: [PhotoID])] {
             Self.pages(Self.daySpreads(a).filter { $0.dayKey == key })
         }
@@ -334,13 +334,38 @@ import Foundation
         let other = densest == Self.june18 ? Self.june19 : Self.june18
         let min = AlbumDrafter.pageCount(of: loose) + 2
         let (p, _) = try Self.canva(PageCountRule(min: min, max: nil, multipleOf: 2), formatID: "landscape-8x6in")
-        let a = Self.draft(days, profile: p, format: f, options: five)
+        let a = Self.draft(days, profile: p, format: f)
         #expect(!a.spreads.contains { $0.kind == .blank })
-        #expect(AlbumDrafter.pageCount(of: a) >= min)
-        #expect(dayPages(a, densest).count >= dayPages(loose, densest).count + 2)
+        #expect(AlbumDrafter.pageCount(of: a) == min)
+        #expect(dayPages(a, densest).count == dayPages(loose, densest).count + 2)
         #expect(dayPages(a, other).map(\.layout) == dayPages(loose, other).map(\.layout))
         #expect(Self.placed(Self.daySpreads(a)).count == 49)
+        #expect(Self.misfits(a).isEmpty)
         #expect(Set(a.spreads.map(\.id)).count == a.spreads.count)
+    }
+
+    // Spec 4.3: a small book reaches Canva's 20 pages with photo pages first; blanks only once no
+    // day has a page of 2+ photos left to split.
+    @Test func smallBookFillsPhotoPagesBeforeBlanks() throws {
+        let (p, f) = try Self.canva(formatID: "landscape-8x6in")
+        let photos = Self.mixedPhotos("a", Self.june18, count: 12)
+        let a = Self.draft([Self.day(Self.june18, photos)], profile: p, format: f)
+        #expect(AlbumDrafter.pageCount(of: a) == 20)
+        let days = Self.daySpreads(a)
+        let pages = Self.pages(days)
+        // Before splitting: 6 day pages and 5 blank spreads.
+        #expect(pages.count > 6)
+        #expect(a.spreads.filter { $0.kind == .blank }.count < 5)
+        // Blanks only because the day cannot get 2 more pages.
+        if a.spreads.contains(where: { $0.kind == .blank }) {
+            let planned = pages.map { PlannedPage(layoutID: $0.layout, photos: $0.photos.map { a.photos[$0]! }) }
+            #expect(PagePlanner.expand(planned, by: 2, weights: .init()) == nil)
+        }
+        for s in a.spreads where s.kind != .blank { #expect(s.frames.allSatisfy { $0.photoID != nil }, "\(s.id)") }
+        let placed = Self.placed(days)
+        #expect(placed.count == 12 && Set(placed) == Set(photos.map(\.id)))
+        #expect(pages.count % 2 == 0)
+        #expect(Self.misfits(a).isEmpty)
     }
 
     // A day of one photo cannot get more pages: blank spreads go before the closing.

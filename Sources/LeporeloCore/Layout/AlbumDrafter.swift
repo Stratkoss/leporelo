@@ -107,13 +107,13 @@ public enum AlbumDrafter {
             }
         }
 
-        // 2. Pad to the supplier's page-count rule: give the densest days more pages, then add
+        // 2. Pad to the supplier's page-count rule: split pages of the densest days, then add
         //    blank spreads before the closing.
         var blanks = 0
         while !rule.isSatisfied(by: pages(plans) + blanks * 2) {
             let count = pages(plans) + blanks * 2
             if let max = rule.max, count > max { break }
-            if !grow(&plans, room: rule.max.map { $0 - count }, heroes: heroes, weights: weights) {
+            if rule.max.map({ count + 2 > $0 }) ?? false || !grow(&plans, weights: weights) {
                 blanks += 1
             }
         }
@@ -151,12 +151,10 @@ public enum AlbumDrafter {
         var group: DayGroup
         var photos: [Photo]
         var opener: Bool
-        var target = 0
         var pages: [PlannedPage] = []
 
         func planned(target: Int, heroes: Set<PhotoID>, weights: LayoutWeights) -> DayPlan {
             var plan = self
-            plan.target = target
             plan.pages = PagePlanner.planDay(photos, heroCandidates: heroes, opener: opener, target: target,
                                              weights: weights)
             return plan
@@ -174,25 +172,18 @@ public enum AlbumDrafter {
     /// Best score first; ties by `capturedAt`, then `id` (shared with the frame assignment).
     private static func rank(_ a: Photo, _ b: Photo) -> Bool { TemplateLayout.rank(a, b) }
 
-    /// Padding: the day with the most photos per page (ties: the earlier day) is planned again with
-    /// target − 1, target − 2, ... ≥ 1, and the first plan with at least 2 more pages (and at most
-    /// `room` more, when given) replaces it. A day that cannot grow yields to the next densest.
-    /// False when no day can grow.
-    private static func grow(_ plans: inout [DayPlan], room: Int?, heroes: Set<PhotoID>,
-                             weights: LayoutWeights) -> Bool {
+    /// Padding (spec 4.3): the day with the most photos per page (ties: the earlier day) among the
+    /// days that can still grow gets exactly 2 more pages (`PagePlanner.expand`, which splits its
+    /// fullest pages). False when no day can grow.
+    private static func grow(_ plans: inout [DayPlan], weights: LayoutWeights) -> Bool {
         let order = plans.indices.sorted { a, b in
             let da = plans[a].density, db = plans[b].density
             return da != db ? da > db : a < b
         }
         for i in order {
-            let current = plans[i].pages.count
-            for target in stride(from: plans[i].target - 1, through: 1, by: -1) {
-                let next = plans[i].planned(target: target, heroes: heroes, weights: weights)
-                let added = next.pages.count - current
-                if added >= 2 && room.map({ added <= $0 }) ?? true {
-                    plans[i] = next
-                    return true
-                }
+            if let pages = PagePlanner.expand(plans[i].pages, by: 2, weights: weights) {
+                plans[i].pages = pages
+                return true
             }
         }
         return false
