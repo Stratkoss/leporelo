@@ -87,4 +87,39 @@ import Testing
             }
         }
     }
+
+    /// True when no edge of `rect` lies strictly inside the band (0, margin) from a page edge.
+    static func hasNoEdgeInBand(_ rect: Rect, edgesX: [Double], height: Double, margin: Double) -> Bool {
+        let eps = 1e-6
+        func inBand(_ v: Double, _ edges: [Double]) -> Bool {
+            edges.contains { abs(v - $0) > eps && abs(v - $0) < margin - eps }
+        }
+        return ![rect.minX, rect.maxX].contains { inBand($0, edgesX) }
+            && ![rect.minY, rect.maxY].contains { inBand($0, [0, height]) }
+    }
+
+    @Test func instantiateConformsTemplateToMargin() throws {
+        let (p, f) = try ProfileCatalog.format(profileID: "canva-photobook", formatID: "landscape-8x6in")
+        let g = PageGeometry(format: f, profile: p)
+        let rule = MarginRule(geometry: g, marginMM: 10)
+        let edges = rule.pageEdgesX(.spread)
+        let journal = TemplateLayout.instantiate(try #require(TemplateCatalog.template(id: "journal-3")),
+                                                 geometry: g, dayKey: nil, id: "s", marginMM: 10)
+        #expect(journal.texts.count == 3 && journal.frames.count == 3)
+        for r in journal.frames.map(\.rect) + journal.texts.map(\.rect) {
+            #expect(Self.hasNoEdgeInBand(r, edgesX: edges, height: g.format.pageHeightMM, margin: 10), "\(r)")
+        }
+        let gallery = TemplateLayout.instantiate(try #require(TemplateCatalog.template(id: "gallery-1")),
+                                                 geometry: g, dayKey: nil, id: "s", marginMM: 10)
+        let frame = try #require(gallery.frames.first).rect
+        #expect(abs(frame.minX - 203.2) < 1e-9 && abs(frame.maxX - 406.4) < 1e-9)
+        #expect(frame.minY == 0 && abs(frame.maxY - 152.4) < 1e-9)
+    }
+
+    @Test func instantiateDefaultMarginIsTheAlbumDefault() throws {
+        let g = try Self.canva()
+        let t = try #require(TemplateCatalog.template(id: "journal-3"))
+        #expect(TemplateLayout.instantiate(t, geometry: g, dayKey: nil, id: "s")
+                == TemplateLayout.instantiate(t, geometry: g, dayKey: nil, id: "s", marginMM: Album.defaultMarginMM))
+    }
 }

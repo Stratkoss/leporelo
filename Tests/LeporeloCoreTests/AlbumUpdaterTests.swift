@@ -310,6 +310,91 @@ import Foundation
         #expect(AlbumUpdater.changeFormat(album: b, to: f, profile: p) == a)
     }
 
+    @Test func changeFormatScalesCustomLayout() throws {
+        let (p, f) = try D.canva()
+        let square = try #require(p.formats.first { $0.id == "square-21" })
+        let days = [D.day(Self.june18, D.dayPhotos("a", Self.june18, count: 8))]
+        var a = D.draft(days, profile: p, format: f)
+        let j = try #require(a.spreads.firstIndex { $0.kind == .journal })
+        a.spreads[j].customLayout = true
+        a.spreads[j].frames[0].rect = Rect(x: 320, y: 40, width: 100, height: 100)
+        a.spreads[j].frames[0].offset = Point(x: 0.3, y: -0.2)
+        a.spreads[j].frames[0].zoom = 1.5
+        a = try a.applying(.setText(spreadID: a.spreads[j].id, textID: "body", text: "Ahoj")).album
+        let old = a.spreads[j]
+
+        let b = AlbumUpdater.changeFormat(album: a, to: square, profile: p)
+        let new = b.spreads[j]
+        #expect(new.customLayout)
+        #expect(new.templateID == old.templateID && new.id == old.id)
+        let sx = 420.0 / 594.0, sy = 210.0 / 210.0
+        let expected = Rect(x: 320 * sx, y: 40 * sy, width: 100 * sx, height: 100 * sy)
+        #expect(new.frames[0].rect == MarginRule(geometry: PageGeometry(format: square, profile: p), marginMM: 10)
+            .conformFrame(expected, area: .spread))
+        // This rect needs no conform, so it is exactly the proportional one.
+        #expect(abs(new.frames[0].rect.minX - expected.minX) < 1e-9)
+        #expect(abs(new.frames[0].rect.size.width - expected.size.width) < 1e-9)
+        #expect(new.frames[0].rect.minY == 40 && new.frames[0].rect.size.height == 100)
+        #expect(new.frames.map(\.photoID) == old.frames.map(\.photoID))
+        #expect(new.frames[0].offset == Point(x: 0.3, y: -0.2) && new.frames[0].zoom == 1.5)
+        #expect(new.texts.map(\.text) == old.texts.map(\.text))
+        #expect(new.texts.first { $0.id == "body" }?.text == "Ahoj")
+        // The other spreads still follow their templates.
+        let g = PageGeometry(format: square, profile: p)
+        let other = try #require(b.spreads.firstIndex { $0.kind == .gallery })
+        let fresh = TemplateLayout.instantiate(try #require(TemplateCatalog.template(id: b.spreads[other].templateID)),
+                                               geometry: g, dayKey: b.spreads[other].dayKey, id: "x")
+        #expect(b.spreads[other].frames.map(\.rect) == fresh.frames.map(\.rect))
+    }
+
+    @Test func changeFormatRelaysTemplateSpreads() throws {
+        let (p, f) = try D.canva()
+        let square = try #require(p.formats.first { $0.id == "square-21" })
+        var a = D.draft([D.day(Self.june18, D.dayPhotos("a", Self.june18, count: 8))], profile: p, format: f)
+        a.marginMM = 20
+        let b = AlbumUpdater.changeFormat(album: a, to: square, profile: p)
+        let g = PageGeometry(format: square, profile: p)
+        for s in b.spreads {
+            let fresh = TemplateLayout.instantiate(try #require(TemplateCatalog.template(id: s.templateID)),
+                                                   geometry: g, dayKey: s.dayKey, id: s.id, marginMM: 20)
+            #expect(s.frames.map(\.rect) == fresh.frames.map(\.rect), "\(s.id)")
+            #expect(s.texts.map(\.rect) == fresh.texts.map(\.rect), "\(s.id)")
+        }
+    }
+
+    // MARK: - settingMargin
+
+    @Test func settingMarginConformsAllSpreadsAndCover() throws {
+        let (p, f) = try D.canva()
+        let days = [D.day(Self.june18, D.dayPhotos("a", Self.june18, count: 8))]
+        var a = D.draft(days, profile: p, format: f)
+        a.spreads[1].manuallyEdited = true
+        a.spreads[2].customLayout = true
+        let g = Self.geometry(p, f)
+
+        let b = AlbumUpdater.settingMargin(25, in: a, profile: p, format: f)
+        #expect(b.marginMM == 25)
+        #expect(b.spreads.map(\.manuallyEdited) == a.spreads.map(\.manuallyEdited))
+        #expect(b.spreads.map(\.customLayout) == a.spreads.map(\.customLayout))
+        #expect(b.spreads.map { $0.frames.map(\.photoID) } == a.spreads.map { $0.frames.map(\.photoID) })
+        let rule = MarginRule(geometry: g, marginMM: 25)
+        let edges = rule.pageEdgesX(.spread)
+        for s in b.spreads {
+            for r in s.frames.map(\.rect) + s.texts.map(\.rect) {
+                #expect(TemplatesTests.hasNoEdgeInBand(r, edgesX: edges, height: f.pageHeightMM, margin: 25), "\(s.id) \(r)")
+            }
+        }
+        let cover = try #require(b.cover)
+        let coverEdges = rule.pageEdgesX(.cover)
+        for s in [cover.front, cover.back] {
+            for r in s.frames.map(\.rect) + s.texts.map(\.rect) {
+                #expect(TemplatesTests.hasNoEdgeInBand(r, edgesX: coverEdges, height: f.pageHeightMM, margin: 25))
+            }
+        }
+        #expect(AlbumUpdater.settingMargin(3, in: a, profile: p, format: f).marginMM == 6)
+        #expect(AlbumUpdater.settingMargin(99, in: a, profile: p, format: f).marginMM == 30)
+    }
+
     // MARK: - photoMoved (Task 21a)
 
     @Test func movedPhotoLeavesItsDaySpreadAndJoinsTheNewDay() throws {

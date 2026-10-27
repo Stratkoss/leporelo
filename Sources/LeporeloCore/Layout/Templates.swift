@@ -156,22 +156,26 @@ public enum TemplateCatalog {
 }
 
 public enum TemplateLayout {
-    /// Converts normalized slots to millimetres. Frame and text ids come from the slot ids, so
+    /// Converts normalized slots to millimetres, then conforms the result to the page margin
+    /// (`MarginRule.conform`, area `.spread`), so no frame edge lies in the band next to a page
+    /// edge and texts stay inside the margin box. Frame and text ids come from the slot ids, so
     /// they are stable across formats; the spread id is injectable for tests.
     public static func instantiate(_ t: SpreadTemplate, geometry: PageGeometry, dayKey: DayKey?,
-                                   id: String = UUID().uuidString) -> Spread {
+                                   id: String = UUID().uuidString,
+                                   marginMM: Double = Album.defaultMarginMM) -> Spread {
         let size = geometry.spreadSize
         func scaled(_ r: Rect) -> Rect {
             Rect(x: r.minX * size.width, y: r.minY * size.height,
                  width: r.size.width * size.width, height: r.size.height * size.height)
         }
-        return Spread(
+        let spread = Spread(
             id: id, kind: t.kind, templateID: t.id, dayKey: dayKey,
             frames: t.frames.map {
                 Frame(id: $0.id, rect: scaled($0.rect), photoID: nil, offset: Point(x: 0, y: 0), zoom: 1)
             },
             texts: t.texts.map { TextBox(id: $0.id, rect: scaled($0.rect), role: $0.role, text: "") },
             manuallyEdited: false)
+        return MarginRule(geometry: geometry, marginMM: marginMM).conform(spread, area: .spread)
     }
 }
 
@@ -252,13 +256,17 @@ extension TemplateLayout {
     ///   Offsets and zooms reset (the frame shapes change). Extra photos go to
     ///   `unplacedPhotoIDs`; extra frames stay empty (the preflight blocks the export until the
     ///   user fills them, deletes the spread or switches back).
+    /// - `customLayout` is false again: the layout is the template's, conformed to `marginMM`.
     /// - Texts: each new slot takes the old text with the same id, else the first not yet used old
     ///   text with the same role. Old texts that are not whitespace-only and found no slot are
     ///   returned in `droppedTexts`; nothing is lost silently.
     public static func retemplate(_ spread: Spread, to template: SpreadTemplate, geometry: PageGeometry,
-                                  photos: [PhotoID: Photo]) -> RetemplateResult {
-        var result = instantiate(template, geometry: geometry, dayKey: spread.dayKey, id: spread.id)
+                                  photos: [PhotoID: Photo],
+                                  marginMM: Double = Album.defaultMarginMM) -> RetemplateResult {
+        var result = instantiate(template, geometry: geometry, dayKey: spread.dayKey, id: spread.id,
+                                 marginMM: marginMM)
         result.manuallyEdited = true
+        result.customLayout = false
 
         var seen = Set<PhotoID>()
         let old = spread.frames.compactMap(\.photoID).filter { seen.insert($0).inserted }.compactMap { photos[$0] }

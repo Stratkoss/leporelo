@@ -94,7 +94,8 @@ public enum AlbumUpdater {
         let template = TemplateCatalog.template(id: "gallery-1")!
         let spreadID = freeID(prefix: "\(AlbumDrafter.dayString(key))-gallery", bareFirst: false,
                               taken: Set(result.spreads.map(\.id)))
-        var spread = TemplateLayout.instantiate(template, geometry: geometry, dayKey: key, id: spreadID)
+        var spread = TemplateLayout.instantiate(template, geometry: geometry, dayKey: key, id: spreadID,
+                                                marginMM: result.marginMM)
         spread.frames[0].photoID = id
         let index: Int
         if let last = result.spreads.lastIndex(where: { $0.dayKey == key }) {
@@ -225,7 +226,7 @@ public enum AlbumUpdater {
             let blankID = freeID(prefix: "blank", bareFirst: false, taken: Set(merged.map(\.id)))
             let blank = TemplateLayout.instantiate(TemplateCatalog.template(id: "blank")!,
                                                    geometry: PageGeometry(format: format, profile: profile),
-                                                   dayKey: nil, id: blankID)
+                                                   dayKey: nil, id: blankID, marginMM: base.marginMM)
             merged.insert(blank, at: merged.last?.kind == .closing ? merged.count - 1 : merged.count)
         }
 
@@ -238,7 +239,8 @@ public enum AlbumUpdater {
             ?? generated.cover?.front.frames.first?.photoID
             ?? selected.first?.id
         result.cover = selected.isEmpty ? nil
-            : AlbumDrafter.cover(title: base.title, photoID: coverPhoto, format: format, profile: profile)
+            : AlbumDrafter.cover(title: base.title, photoID: coverPhoto, format: format, profile: profile,
+                                 marginMM: base.marginMM)
         return (result, kept.count)
     }
 
@@ -246,12 +248,17 @@ public enum AlbumUpdater {
 
     /// Recomputes the layout for `format`, keeping content and order.
     ///
-    /// Each spread is re-instantiated from `TemplateCatalog.template(id: spread.templateID)` for the
+    /// Spreads with `customLayout == true` are NOT re-instantiated: their frame and text rects scale
+    /// proportionally (`x * newWidth / oldWidth`, `y * newHeight / oldHeight`, sizes likewise; the old
+    /// size is the album's current format, looked up in `profile` or, for another supplier, in the
+    /// catalog; if it cannot be found the rects are only conformed), then photos, crops, zooms and
+    /// texts stay as they are. Every other spread is re-instantiated from `TemplateCatalog.template(id: spread.templateID)` for the
     /// new geometry, keeping id, kind, dayKey and `manuallyEdited`; frames take over photoID, offset and
     /// zoom by frame id (FrameFit offsets are relative to the slack, so they carry over verbatim), texts
     /// take over their text by text id. A template slot without an old counterpart gets an empty
-    /// frame/text; old frames/texts with no slot in the template are dropped. Spreads whose
-    /// templateID is not in the catalog are kept unchanged.
+    /// frame/text; old frames/texts with no slot in the template are dropped. Template layouts and
+    /// scaled custom layouts are conformed to `album.marginMM`. Spreads whose templateID is not in
+    /// the catalog (and are not custom) are kept unchanged.
     ///
     /// The cover is not a catalog template: it is rebuilt through `AlbumDrafter.cover` with the
     /// existing cover photo (with its offset and zoom) and the cover's title text (album title if it
@@ -260,9 +267,25 @@ public enum AlbumUpdater {
         var result = album
         result.formatID = format.id
         let geometry = PageGeometry(format: format, profile: profile)
+        let rule = MarginRule(geometry: geometry, marginMM: album.marginMM)
+        let oldFormat = currentFormat(of: album, in: profile)
         result.spreads = album.spreads.map { old in
+            if old.customLayout {
+                var scaled = old
+                if let oldFormat {
+                    let sx = format.pageWidthMM / oldFormat.pageWidthMM
+                    let sy = format.pageHeightMM / oldFormat.pageHeightMM
+                    func scale(_ r: Rect) -> Rect {
+                        Rect(x: r.minX * sx, y: r.minY * sy, width: r.size.width * sx, height: r.size.height * sy)
+                    }
+                    for i in scaled.frames.indices { scaled.frames[i].rect = scale(scaled.frames[i].rect) }
+                    for i in scaled.texts.indices { scaled.texts[i].rect = scale(scaled.texts[i].rect) }
+                }
+                return rule.conform(scaled, area: .spread)
+            }
             guard let template = TemplateCatalog.template(id: old.templateID) else { return old }
-            var spread = TemplateLayout.instantiate(template, geometry: geometry, dayKey: old.dayKey, id: old.id)
+            var spread = TemplateLayout.instantiate(template, geometry: geometry, dayKey: old.dayKey, id: old.id,
+                                                    marginMM: album.marginMM)
             spread.kind = old.kind
             spread.manuallyEdited = old.manuallyEdited
             for i in spread.frames.indices {
@@ -279,7 +302,8 @@ public enum AlbumUpdater {
         if let old = album.cover {
             let oldFrame = old.front.frames.first
             let title = old.front.texts.first { $0.role == .title }?.text ?? album.title
-            var cover = AlbumDrafter.cover(title: title, photoID: oldFrame?.photoID, format: format, profile: profile)
+            var cover = AlbumDrafter.cover(title: title, photoID: oldFrame?.photoID, format: format, profile: profile,
+                                           marginMM: album.marginMM)
             if let oldFrame, !cover.front.frames.isEmpty {
                 cover.front.frames[0].offset = oldFrame.offset
                 cover.front.frames[0].zoom = oldFrame.zoom
@@ -289,7 +313,34 @@ public enum AlbumUpdater {
         return result
     }
 
+    // MARK: - Margin
+
+    /// `album` with the margin set to `mm` (limited to the profile's safe zone and the maximum, see
+    /// `MarginRule.clampedMargin`) and every spread and both cover pages conformed to it. Photos,
+    /// crops, texts, `manuallyEdited` and `customLayout` are untouched; only rects move. Pure.
+    public static func settingMargin(_ mm: Double, in album: Album, profile: SupplierProfile,
+                                     format: BookFormat) -> Album {
+        var result = album
+        result.marginMM = MarginRule.clampedMargin(mm, profile: profile)
+        let rule = MarginRule(geometry: PageGeometry(format: format, profile: profile), marginMM: result.marginMM)
+        result.spreads = album.spreads.map { rule.conform($0, area: .spread) }
+        if let cover = album.cover {
+            result.cover = Cover(front: rule.conform(cover.front, area: .cover),
+                                 back: rule.conform(cover.back, area: .cover))
+        }
+        return result
+    }
+
     // MARK: - Helpers
+
+    /// The format `album` currently has: from `profile` when it is the album's supplier, else
+    /// from the profile catalog; nil when it cannot be found.
+    private static func currentFormat(of album: Album, in profile: SupplierProfile) -> BookFormat? {
+        if album.supplierProfileID == profile.id {
+            return profile.formats.first { $0.id == album.formatID }
+        }
+        return (try? ProfileCatalog.format(profileID: album.supplierProfileID, formatID: album.formatID))?.1
+    }
 
     private static func slotOrientation(_ spread: Spread, frameID: String) -> Orientation {
         TemplateCatalog.template(id: spread.templateID)?.frames.first { $0.id == frameID }?.orientation ?? .any

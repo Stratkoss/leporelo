@@ -116,4 +116,25 @@ import Foundation
         let t = try #require(TemplateCatalog.template(id: journal.templateID))
         #expect(Self.assignment(journal) == TemplateLayout.assign(t.frames, photos: ps))
     }
+
+    @Test func retemplateClearsCustomLayout() throws {
+        let ps = [D.photo("a", day: D.june18, minute: 0), D.photo("b", day: D.june18, minute: 1)]
+        var old = try Self.spread("gallery-2", ps)
+        old.customLayout = true
+        let target = try #require(TemplateCatalog.template(id: "gallery-3"))
+        let r = TemplateLayout.retemplate(old, to: target, geometry: try Self.geometry(), photos: Self.byID(ps))
+        #expect(!r.spread.customLayout)
+        #expect(r.spread.manuallyEdited)
+    }
+
+    @Test func retemplateConformsToTheMargin() throws {
+        let ps = [D.photo("a", day: D.june18, minute: 0)]
+        let old = try Self.spread("gallery-1", ps)
+        let target = try #require(TemplateCatalog.template(id: "journal-3"))
+        let g = try Self.geometry()
+        let r = TemplateLayout.retemplate(old, to: target, geometry: g, photos: Self.byID(ps), marginMM: 25)
+        let fresh = TemplateLayout.instantiate(target, geometry: g, dayKey: D.june18, id: "x", marginMM: 25)
+        #expect(r.spread.frames.map(\.rect) == fresh.frames.map(\.rect))
+        #expect(r.spread.texts.map(\.rect) == fresh.texts.map(\.rect))
+    }
 }

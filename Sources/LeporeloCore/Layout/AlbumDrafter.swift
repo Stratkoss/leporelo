@@ -111,8 +111,9 @@ public enum AlbumDrafter {
 
         // 3. Instantiate templates.
         let geometry = PageGeometry(format: format, profile: profile)
-        result.spreads = instantiate(plan, geometry: geometry)
-        result.cover = cover(title: album.title, photoID: introPhoto.id, format: format, profile: profile)
+        result.spreads = instantiate(plan, geometry: geometry, marginMM: album.marginMM)
+        result.cover = cover(title: album.title, photoID: introPhoto.id, format: format, profile: profile,
+                             marginMM: album.marginMM)
         return result
     }
 
@@ -189,12 +190,13 @@ public enum AlbumDrafter {
 
     // MARK: - Instantiation
 
-    private static func instantiate(_ plan: [Planned], geometry: PageGeometry) -> [Spread] {
+    private static func instantiate(_ plan: [Planned], geometry: PageGeometry, marginMM: Double) -> [Spread] {
         var counters: [String: Int] = [:]
         return plan.map { item in
             let template = TemplateCatalog.template(id: item.templateID)!
             let id = spreadID(item, counters: &counters)
-            var spread = TemplateLayout.instantiate(template, geometry: geometry, dayKey: item.dayKey, id: id)
+            var spread = TemplateLayout.instantiate(template, geometry: geometry, dayKey: item.dayKey, id: id,
+                                                    marginMM: marginMM)
             let assignment = TemplateLayout.assign(template.frames, photos: item.photos)
             for i in spread.frames.indices {
                 spread.frames[i].photoID = assignment[spread.frames[i].id]
@@ -230,8 +232,9 @@ public enum AlbumDrafter {
     /// The cover for `format`, built directly from the page size (one page, origin 0,0).
     /// Front: the photo fills the page (bleed is added by the exporter) and the title sits near the
     /// top inside the safe zone. Back: blank. Used by `draft` and by anything that rebuilds the cover.
+    /// The result is conformed to `marginMM` (`MarginRule.conform`, area `.cover`).
     public static func cover(title: String, photoID: PhotoID?, format: BookFormat,
-                             profile: SupplierProfile) -> Cover {
+                             profile: SupplierProfile, marginMM: Double = Album.defaultMarginMM) -> Cover {
         let w = format.pageWidthMM, h = format.pageHeightMM
         let safe = Rect(x: 0, y: 0, width: w, height: h).insetBy(profile.safeMM)
         let x = max(0.1 * w, safe.minX), y = max(0.08 * h, safe.minY)
@@ -245,7 +248,8 @@ public enum AlbumDrafter {
             manuallyEdited: false)
         let back = Spread(id: "cover-back", kind: .blank, templateID: "blank", dayKey: nil,
                           frames: [], texts: [], manuallyEdited: false)
-        return Cover(front: front, back: back)
+        let rule = MarginRule(geometry: PageGeometry(format: format, profile: profile), marginMM: marginMM)
+        return Cover(front: rule.conform(front, area: .cover), back: rule.conform(back, area: .cover))
     }
 
     // MARK: - Texts
