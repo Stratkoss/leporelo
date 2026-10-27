@@ -174,11 +174,19 @@ final class AlbumStore {
         if updated != album { replaceWithoutUndo(album: updated) }
     }
 
-    /// Points the store at the package's new location after a rename or move.
+    /// Points the store at the package's new location after a rename or move. The write
+    /// coordinator stays (it finds the document by the package URL at write time).
     func packageMoved(to url: URL) throws {
         guard url != package.url else { return }
-        package = try ProjectPackage.open(url).0
+        package = try ProjectPackage.open(url).0.coordinated(by: package.writeCoordinator)
         publish()
+    }
+
+    /// Makes every original and thumbnail written into `package` go through `coordinator` (the
+    /// document's `DocumentPackageWrites`). Background work takes `package` from the store when it
+    /// starts, so this is set at bind time, before the work is created.
+    func coordinateWrites(with coordinator: any PackageWriteCoordinator) {
+        package = package.coordinated(by: coordinator)
     }
 
     private func apply(_ edit: AlbumEdit, actionName: String, undoManager: UndoManager?) throws {

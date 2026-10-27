@@ -133,9 +133,22 @@ final class AlbumDocument: ReferenceFileDocument {
     /// edited for changes without undo (`AlbumStore.applyWithoutUndo` / `replaceWithoutUndo`).
     /// The NSDocument is looked up lazily, never while menus are built (an early
     /// `NSDocumentController.shared` crashes the launch), and found again after a move.
+    ///
+    /// It also makes the store's package coordinate its original and thumbnail writes with this
+    /// NSDocument's saves (`DocumentPackageWrites`, Task 17 contract). The NSDocument is looked up
+    /// now and again (on the main actor) whenever a write found none, e.g. after a move.
     func bind(to url: URL) throws -> AlbumStore {
         let store = try store(for: url)
         weak var cached: NSDocument?
+        let documents = DocumentBox()
+        let lookUp: @MainActor () -> Void = { [weak store] in
+            guard let url = store?.package.url else { return }
+            documents.set(Self.platformDocument(for: url))
+        }
+        lookUp()
+        store.coordinateWrites(with: DocumentPackageWrites(documents: documents, onMissingDocument: {
+            Task { @MainActor in lookUp() }
+        }))
         store.markChanged = { [weak store] in
             if cached == nil, let url = store?.package.url { cached = Self.platformDocument(for: url) }
             cached?.updateChangeCount(.changeDone)

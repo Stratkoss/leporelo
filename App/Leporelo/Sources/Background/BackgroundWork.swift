@@ -28,16 +28,14 @@ enum BackgroundActivity: Equatable, Sendable {
 ///   every store change publishes a snapshot of the whole album and marks the document edited.
 ///   Progress goes to the cheap `activity` counter only the banner observes.
 /// - Thumbnail self-heal: an analysed photo whose thumbnail file is missing is processed again.
-///   `AnalysisPipeline` writes thumbnails straight into the package, not coordinated with
-///   NSDocument's save, so a thumbnail renamed into `thumbs/` between the save's directory listing
-///   and its package swap is dropped; its photo already has `analysis`, so nothing else would ever
-///   regenerate it. The pipeline gets a COPY of the album in which those photos have no analysis
+///   Since Task 23 the pipeline writes through the store's coordinated package
+///   (`DocumentPackageWrites`), so a save can no longer drop a thumbnail; the repair still covers
+///   packages damaged before that (or by anything outside the app): such a photo already has
+///   `analysis`, so nothing else would ever regenerate its thumbnail. The pipeline gets a COPY of the album in which those photos have no analysis
 ///   (the copy is only its input, never written back); their new results go through the normal
 ///   batched flush. A repair is not an analysis: it does not count toward the recommendations
 ///   trigger, but it does count in the banner's total. After the pass, ONE extra repair pass runs
 ///   if a thumbnail went missing during it (bounded: at most one per work, no loops).
-///   TODO(Task 23): the proper fix is NSFileCoordinator-coordinated thumbnail writes through an
-///   injectable package writer; then this repair only covers older packages.
 /// - Recommendations: after an analysis pass that analyzed at least one photo in this session and
 ///   was not cancelled, `AlbumStore.applyRecommendations()` once (it only changes photos the user
 ///   has not decided). Reopening an analyzed album therefore never reruns them.
@@ -199,8 +197,8 @@ final class BackgroundWork {
         let pipeline = AnalysisPipeline(source: source, package: package, analyzer: ImageAnalyzer(),
                                         concurrency: options.concurrency)
         lastFlush = .now
-        // The pipeline stores each thumbnail with `package.storeThumbnail`, uncoordinated with
-        // NSDocument saves; see "Thumbnail self-heal" and the TODO(Task 23) above.
+        // The pipeline stores each thumbnail with `package.storeThumbnail`, coordinated with the
+        // document's saves through the store's package (`AlbumDocument.bind`).
         await pipeline.run(
             album: input,
             onPhotoAnalyzed: { id, analysis in await self.received(analysis, for: id) },

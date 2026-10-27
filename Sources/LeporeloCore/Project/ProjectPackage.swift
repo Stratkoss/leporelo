@@ -51,7 +51,13 @@ extension ProjectError: LocalizedError {
 /// JSON goes through `AlbumCoding` (lossless fractional-second dates); Task 17's `AlbumDocument`
 /// must use it too.
 ///
-/// The struct holds only the URL and performs stateless file operations, hence it is `Sendable`.
+/// Writes of originals and thumbnails go through `writeCoordinator` (default: direct writes). The
+/// app gives a package that a document has open an `NSFileCoordinator`-based one
+/// (`coordinated(by:)`), so those writes cannot race the document's save; see
+/// `PackageWriteCoordinator`.
+///
+/// The struct holds only the URL and the coordinator and performs stateless file operations, hence
+/// it is `Sendable`.
 public struct ProjectPackage: Sendable {
     public static let albumFileName = "album.json"
     static let originalsDirectory = "originals"
@@ -60,8 +66,17 @@ public struct ProjectPackage: Sendable {
     public static let thumbnailMaxPixelSize = 1024
 
     public let url: URL
+    /// What `storeOriginal` and `storeThumbnail` write through.
+    public private(set) var writeCoordinator: any PackageWriteCoordinator = DirectPackageWrites()
 
     init(url: URL) { self.url = url }
+
+    /// This package with its original and thumbnail writes going through `coordinator`.
+    public func coordinated(by coordinator: any PackageWriteCoordinator) -> ProjectPackage {
+        var package = self
+        package.writeCoordinator = coordinator
+        return package
+    }
 
     // MARK: JSON
 
@@ -144,7 +159,7 @@ public struct ProjectPackage: Sendable {
         let ext = ext.lowercased()
         try Self.validate(ext: ext)
         let relative = "\(Self.originalsDirectory)/\(id).\(ext)"
-        try writeAtomically(data, to: url.appendingPathComponent(relative))
+        try writeCoordinated(data, to: url.appendingPathComponent(relative))
         return relative
     }
 
@@ -194,7 +209,7 @@ public struct ProjectPackage: Sendable {
         guard CGImageDestinationFinalize(destination) else {
             throw ProjectError.writeFailed("cannot encode thumbnail")
         }
-        try writeAtomically(buffer as Data, to: thumbnailURL(for: id))
+        try writeCoordinated(buffer as Data, to: thumbnailURL(for: id))
     }
 
     /// The stored thumbnail, upright, or nil when missing or unreadable.
@@ -256,14 +271,42 @@ public struct ProjectPackage: Sendable {
             .appendingPathComponent(".\(UUID().uuidString).tmp")
         do {
             try data.write(to: temp, options: [])
-            if fm.fileExists(atPath: destination.path) {
-                _ = try fm.replaceItemAt(destination, withItemAt: temp, backupItemName: nil, options: [])
-            } else {
-                try fm.moveItem(at: temp, to: destination)
-            }
+            try Self.moveIntoPlace(temp, destination)
         } catch {
             try? fm.removeItem(at: temp)
             throw error
+        }
+    }
+
+    /// An original or thumbnail: the bytes are staged in a temporary file OUTSIDE the package (an
+    /// item replacement directory on the same volume, so the final step is a rename), then moved
+    /// into place inside ONE `writeCoordinator` block on the destination URL. The slow part (writing
+    /// possibly tens of MB) happens before the coordination, the block itself is quick, and the
+    /// package never holds a half-written or temporary file that a document save could list. Falls
+    /// back to a temporary file next to the destination when no replacement directory is available.
+    /// The staging directory is removed afterwards, on success and on failure.
+    private func writeCoordinated(_ data: Data, to destination: URL) throws {
+        let fm = FileManager.default
+        let staging = try? fm.url(for: .itemReplacementDirectory, in: .userDomainMask,
+                                  appropriateFor: destination.deletingLastPathComponent(), create: true)
+        let temp = (staging ?? destination.deletingLastPathComponent())
+            .appendingPathComponent(".\(UUID().uuidString).tmp")
+        defer {
+            try? fm.removeItem(at: temp)
+            if let staging { try? fm.removeItem(at: staging) }
+        }
+        try data.write(to: temp, options: [])
+        try writeCoordinator.coordinateWriting(at: destination) { [temp] target in
+            try Self.moveIntoPlace(temp, target)
+        }
+    }
+
+    private static func moveIntoPlace(_ temp: URL, _ destination: URL) throws {
+        let fm = FileManager.default
+        if fm.fileExists(atPath: destination.path) {
+            _ = try fm.replaceItemAt(destination, withItemAt: temp, backupItemName: nil, options: [])
+        } else {
+            try fm.moveItem(at: temp, to: destination)
         }
     }
 }
