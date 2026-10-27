@@ -137,6 +137,27 @@ import Foundation
         #expect(pages.contains(PlannedPage(layoutID: "framed-1", photos: [photos[6]])))
     }
 
+    // A square ranks first (earliest of equal scores) but must not take the ▯ frame the ▯ needs.
+    @Test func squaresLeaveFramesToOrientedPhotos() {
+        let square = T.photo("s", day: Self.day, minute: 0, pixels: (3000, 3000))
+        let tall = T.photo("t", day: Self.day, minute: 1, landscape: false)
+        let photos = [square, tall] + (2..<7).map { T.photo("l\($0)", day: Self.day, minute: $0) }
+        let pages = Self.plan(photos, opener: false)
+        Self.checkCommon(pages, photos)
+        #expect(pages.first?.layoutID == "portrait-left-2l")
+        #expect(pages.first?.photos.first == tall)
+        #expect(Self.placements(pages).allSatisfy { TemplateLayout.fits($0.photo, $0.slot) })
+    }
+
+    // The odd-page rule splits mosaic-6 although the split repeats grid-4; no empty page while
+    // the day has an opener.
+    @Test func oddDayWithOpenerSplitsInsteadOfEmpty() {
+        let photos = Self.photos(Array(repeating: true, count: 12))
+        let pages = Self.plan(photos, heroes: ["p0", "p11"])
+        Self.checkCommon(pages, photos)
+        #expect(pages.map(\.layoutID) == ["opener-text", "full", "grid-4", "grid-4", "landscape-2", "full"])
+    }
+
     @Test func noOpenerWhenDisabled() {
         let days = [Self.photos([true]), Self.photos([false]), Self.photos([false, false, false]),
                     Self.photos(Array(repeating: true, count: 12)),

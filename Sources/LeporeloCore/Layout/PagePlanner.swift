@@ -161,9 +161,13 @@ private struct Planner {
 
     /// The pages of `run` (ordinary photos between two heroes) between the pages `before` and the
     /// page `after`: the greedy plan if clean and meeting `goal`; else the first such plan in
-    /// greedy order, searched first with the brief's pages only and then with `extras`; else the
-    /// greedy plan if clean, else the first clean plan seen, else the greedy plan.
-    func plan(_ run: [Photo], opener: Bool, before: [String], after: String?, goal: Goal) -> [PlannedPage] {
+    /// greedy order, searched first with the brief's pages only and then with `extras`. With
+    /// `strict` (the odd-page rule, where only the goal makes the plan useful) the goal outranks
+    /// variety: next the first plan meeting it with matching orientations but repeated layouts,
+    /// then the greedy plan if it meets it. Otherwise: the greedy plan if clean, else the first
+    /// clean plan seen, else the greedy plan.
+    func plan(_ run: [Photo], opener: Bool, before: [String], after: String?, goal: Goal,
+              strict: Bool = false) -> [PlannedPage] {
         var greedy: [PlannedPage] = []
         var queue = run
         while !isComplete(queue, greedy, opener: opener) {
@@ -175,7 +179,8 @@ private struct Planner {
         if greedyIsClean && goal.accepts(greedy.count) { return greedy }
 
         var firstClean: [PlannedPage]?
-        for extras in [false, true] {
+        let phases: [(extras: Bool, variety: Bool)] = [(false, true), (true, true)] + (strict ? [(true, false)] : [])
+        for (extras, variety) in phases {
             var budget = PagePlanner.searchBudget
             // States known to lead nowhere. A state is the page count (as far as `goal` cares),
             // the last two layouts and the queue; the queue is its count plus its first 6 photos,
@@ -187,15 +192,16 @@ private struct Planner {
                     + queue.prefix(PagePlanner.windowSize).map(\.id)).joined(separator: "|")
                 if deadEnds.contains(key) { return nil }
                 if isComplete(queue, pages, opener: opener) {
-                    guard pages.last?.layoutID != after else { return nil }
+                    guard !variety || pages.last?.layoutID != after else { return nil }
                     if goal.accepts(pages.count) { return pages }
-                    if firstClean == nil { firstClean = pages }
+                    if variety && firstClean == nil { firstClean = pages }
                     return nil
                 }
                 for (page, rest) in options(queue, pages, opener: opener, before: before, extras: extras) {
                     guard budget > 0 else { return nil }
                     budget -= 1
-                    if mismatches(page) > 0 || page.layoutID == (pages.last?.layoutID ?? before.last) { continue }
+                    if mismatches(page) > 0 { continue }
+                    if variety && page.layoutID == (pages.last?.layoutID ?? before.last) { continue }
                     if let found = search(rest, pages + [page]) { return found }
                 }
                 deadEnds.insert(key)
@@ -203,6 +209,7 @@ private struct Planner {
             }
             if let found = search(run, []) { return found }
         }
+        if strict && goal.accepts(greedy.count) { return greedy }
         return greedyIsClean ? greedy : firstClean ?? greedy
     }
 
@@ -317,7 +324,11 @@ private struct Planner {
 
     /// Frames by orientation: landscape, portrait, any.
     private static func capacity(_ layout: PageLayout) -> (landscape: Int, portrait: Int, any: Int) {
-        let o = layout.frames.map(\.orientation)
+        capacity(layout.frames)
+    }
+
+    private static func capacity(_ frames: [PageFrameSlot]) -> (landscape: Int, portrait: Int, any: Int) {
+        let o = frames.map(\.orientation)
         return (o.filter { $0 == .landscape }.count, o.filter { $0 == .portrait }.count, o.filter { $0 == .any }.count)
     }
 
@@ -325,7 +336,10 @@ private struct Planner {
     /// (squares fit any frame).
     private static func canHold(_ photos: [Photo], in layout: PageLayout,
                                 capacity c: (landscape: Int, portrait: Int, any: Int)? = nil) -> Bool {
-        let c = c ?? capacity(layout)
+        canHold(photos, capacity: c ?? capacity(layout))
+    }
+
+    private static func canHold(_ photos: [Photo], capacity c: (landscape: Int, portrait: Int, any: Int)) -> Bool {
         let wide = photos.filter { !TemplateLayout.fits($0, .portrait) }.count
         let tall = photos.filter { !TemplateLayout.fits($0, .landscape) }.count
         return wide <= c.landscape + c.any && tall <= c.portrait + c.any
@@ -373,16 +387,33 @@ private struct Planner {
         return (forced + fitting + extra, forced.count + extra.count)
     }
 
-    /// `photos` assigned to the frames of `layout` (`TemplateLayout.assign`), in frame order.
+    /// `photos` in the frames of `layout`, in frame order. When every photo can fit its frame,
+    /// frames in priority order take the best-ranked photo that fits and leaves the others a
+    /// fitting frame each: like `TemplateLayout.assign`, but a square never takes the frame a ▯ or
+    /// ▭ needs. Otherwise (a rescue page) `TemplateLayout.assign` decides.
     private static func page(_ layout: PageLayout, _ photos: [Photo]) -> PlannedPage {
-        let slots = layout.frames.map {
-            FrameSlot(id: $0.id, rect: Rect(x: 0, y: 0, width: 1, height: 1), orientation: $0.orientation,
-                      priority: $0.priority)
+        let frames = layout.frames.sorted { ($0.priority, $0.id) < ($1.priority, $1.id) }
+        var assignment: [String: Photo] = [:]
+        if photos.count == layout.photoCount && canHold(photos, in: layout) {
+            var remaining = photos.sorted(by: TemplateLayout.rank)
+            for (k, frame) in frames.enumerated() {
+                let later = capacity(Array(frames[(k + 1)...]))
+                let i = remaining.indices.first { i in
+                    var rest = remaining
+                    rest.remove(at: i)
+                    return TemplateLayout.fits(remaining[i], frame.orientation) && canHold(rest, capacity: later)
+                }!
+                assignment[frame.id] = remaining.remove(at: i)
+            }
+        } else {
+            let slots = frames.map {
+                FrameSlot(id: $0.id, rect: Rect(x: 0, y: 0, width: 1, height: 1), orientation: $0.orientation,
+                          priority: $0.priority)
+            }
+            let byID = Dictionary(photos.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+            assignment = TemplateLayout.assign(slots, photos: photos).compactMapValues { byID[$0] }
         }
-        let assignment = TemplateLayout.assign(slots, photos: photos)
-        let byID = Dictionary(photos.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
-        return PlannedPage(layoutID: layout.id,
-                           photos: layout.frames.compactMap { assignment[$0.id].flatMap { byID[$0] } })
+        return PlannedPage(layoutID: layout.id, photos: layout.frames.compactMap { assignment[$0.id] })
     }
 
     // MARK: Even page count
@@ -403,7 +434,8 @@ private struct Planner {
                 let half = Planner(target: max(1, photos.count / 2), weights: weights)
                 let two = half.plan(photos, opener: false,
                                     before: pages[..<i].map(\.layoutID),
-                                    after: i + 1 < pages.count ? pages[i + 1].layoutID : nil, goal: .exactly(2))
+                                    after: i + 1 < pages.count ? pages[i + 1].layoutID : nil, goal: .exactly(2),
+                                    strict: true)
                 if two.count == 2 {
                     split = (i, two)
                     break
@@ -415,7 +447,8 @@ private struct Planner {
                 let photos = first.photos.sorted(by: Photo.chronological)
                 // An odd number of pages for the opener's photos evens the day.
                 let ordinary = plan(photos, opener: false, before: ["opener-text"],
-                                    after: pages.count > 1 ? pages[1].layoutID : nil, goal: .even(offset: pages.count))
+                                    after: pages.count > 1 ? pages[1].layoutID : nil, goal: .even(offset: pages.count),
+                                    strict: true)
                 pages.replaceSubrange(0...0, with: [PlannedPage(layoutID: "opener-text", photos: [])] + ordinary)
             } else {
                 pages.append(PlannedPage(layoutID: "empty", photos: []))
