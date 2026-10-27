@@ -22,7 +22,7 @@ Všechny příkazy se spouštějí v kořeni repozitáře. `make help` vypíše 
 | `make run-app` | otevře `App/DerivedData/Build/Products/Debug/Leporelo.app` (nejdřív `make build-app`) |
 | `make all` | `test`, `test-app`, `build-app` za sebou |
 
-Aplikace není podepsaná (ad hoc, bez týmu). Při prvním spuštění systém požádá o přístup k Fotkám; potřebný je plný přístup.
+Aplikace není podepsaná (ad hoc, bez týmu). O přístup k Fotkám systém požádá až po kliknutí na „Povolit přístup k Fotkám“ v dialogu „Nové album“ (ne při spuštění); potřebný je plný přístup.
 
 ### Příkazový řádek
 
@@ -52,10 +52,12 @@ Návratové kódy: `0` hotovo, `1` kontrola před tiskem našla chyby (PDF se ne
 Projekt je balík `<název>.leporelo` (standardní dokument macOS s automatickým ukládáním a Verzemi):
 
 - `album.json`: celé album (dny, fotky, dvoustrany, texty, výřezy). Kóduje se společným kodérem z jádra (ISO 8601 s milisekundami).
-- `originals/`: kopie originálů fotek, které jsou v albu. Stahují se z Photos na pozadí; stav každé fotky je vidět v mřížce a export nezačne, dokud nejsou všechny originály uložené. Díky kopiím export nezávisí na iCloudu ani na tom, jestli fotku někdo mezitím smazal z Photos.
+- `originals/`: kopie originálů fotek, které jsou v albu. Stahují se z Fotek na pozadí; u vybraných fotek mřížka ukazuje odznak mraku, dokud originál není uložený (při chybě s vykřičníkem), nevybrané fotky odznak nemají. Banner ukazuje průběh a export nezačne, dokud nejsou originály všech fotek v albu uložené. Výpadek iCloudu nebo sítě se zkouší znovu (automaticky jednou, pak „Stáhnout znovu“); trvale nedostupná je jen fotka, která ve Fotkách už není. Díky kopiím export nezávisí na iCloudu ani na tom, jestli fotku někdo mezitím smazal z Fotek. Když originál v balíku chybí nebo nejde přečíst, export skončí chybou a nic nezapíše (nikdy nevytiskne náhled nebo šedý rámeček).
 - `thumbs/`: náhledy, nad kterými běží třídění a analýza.
 
-Zápisy na pozadí (náhledy, originály) jdou přes `NSFileCoordinator` a dokument, aby je automatické ukládání nepřepsalo. Fotky v projektu mají i identifikátor z Photos, aby šlo originál znovu dohledat a aby fungovalo „Načíst nové fotky ze zdroje“.
+Zápisy na pozadí (náhledy, originály) jdou přes `NSFileCoordinator` a dokument, aby je automatické ukládání nepřepsalo. Fotky v projektu mají i identifikátor z Fotek, aby šlo originál znovu dohledat a aby fungovalo „Načíst nové fotky ze zdroje“.
+
+**Pozor na Verze:** Soubor > Vrátit se k > Poslední otevřená verze i „Procházet všechny verze…“ > Obnovit nahradí celý balík včetně složky `originals/`. Originály stažené po té verzi se tím smažou z disku, a pokud fotka mezitím zmizela z Fotek, byla to její jediná kopie. Nevracejte projekt ke starší verzi, pokud jste mezitím stáhli originály z Fotek.
 
 ## Jak přidat profil dodavatele
 
@@ -120,6 +122,11 @@ Co profil sám nepokryje a co je v kódu:
 - Obálka se v editoru jen zobrazuje, nejde na ní upravovat fotku ani text.
 - Systémové nabídky macOS jsou anglicky (aplikace nemá lokalizační balík).
 - Není ověřeno, zda Canva při importu PDF nepřekomprimuje fotky; postup zkoušky je v `docs/manual-verification.md`.
+- Návrh alba dává do galerie 2 fotky na dvoustranu; když by album přesáhlo maximum stran dodavatele (Canva 98), navrhne 3 fotky na dvoustranu. Dlouhou cestu s velkým výběrem to nemusí stačit zkrátit: třídění pak ukáže „Přesahuje maximum 98 stran“ a export je zablokovaný, dokud se výběr nezmenší.
+- Vrácení ke starší verzi (Soubor > Vrátit se k, Verze) obnoví i složku `originals/` a smaže originály stažené později (viz výše).
+- Balík alba smazaný z disku, zatímco je otevřený (například `rm -rf` v Terminálu), už nejde uložit; práce od posledního uložení se ztratí.
+- Tlačítko „Nový dokument“ v panelu pro otevření při spuštění vytvoří prázdné okno bez názvu, ve kterém nejde nic dělat. Album se zakládá přes Soubor > Nové album (Cmd-N).
+- Text delší než jeho rámeček se do tisku nevejde a konec se ořízne. Editor ho ukáže (překryv při psaní roluje, na plátně je u textu varování) a kontrola před exportem varuje „Text se nevejde do rámečku“; zkrátit ho musí člověk.
 
 ## Licence a písma
 

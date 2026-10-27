@@ -43,10 +43,12 @@ Dosud nikdo neprošel PhotoKit proti skutečné knihovně. Nejjednodušší je d
 - [ ] Přetažení fotky na jiný den v levém seznamu ji přesune a řádek dne se při tažení orámuje. Tažení fotku nesmí zároveň přepnout výběr. Upuštění na „Bez data“ nedělá nic. Pokud tažení přepíná výběr, je chyba v obsluze mouseDown v `PhotoGridView`.
 - [ ] Chip série „×4“ rozbalí a sbalí sérii na místě, klik na chip nepřepne vedoucí fotku. S vybranými členy chip ukazuje „2 z 4“.
 - [ ] Klávesnice: šipky nahoru a dolů v seznamu dnů mění den; v mřížce šipky posouvají fokus a mezerník přepíná výběr.
-- [ ] Undo: po přepnutí výběru nebo přesunu říká Cmd-Z „Odvolat Vybrat fotku“ nebo „Přesunout fotku do dne“ a stav vrátí.
+- [ ] Undo: po přepnutí výběru nebo přesunu říká položka nabídky „Odvolat: Vybrat fotku“ nebo „Odvolat: Přesunout fotku do dne“ a Cmd-Z stav vrátí.
 - [ ] VoiceOver čte buňky jako „Fotka, vybraná, …“ (zatržítko) a VO-mezerník přepíná výběr.
 - [ ] Vzhled: nevybrané fotky jsou ztlumené, odznaky jsou čitelné na světlých i tmavých fotkách ve světlém i tmavém režimu, tlačítko „Navrhnout album“ je při nedostupnosti vypnuté s popiskem (ověř, že se popisek u vypnutého tlačítka vůbec zobrazí).
 - [ ] Když album už má dvoustrany, přesun vybrané fotky na jiný den přesune i její umístění v rozložení (jedno Cmd-Z to vrátí).
+- [ ] Dlouhá cesta (kolem 3 000 fotek za 10 dní, výběr přes 200 fotek): patička třídění ukáže vedle počtu stran oranžové „Přesahuje maximum 98 stran“, když odhad přesáhne maximum profilu. „Navrhnout album“ pak dává do galerie 3 fotky na dvoustranu; počet stran klesne, ale může zůstat nad maximem (export to pak zablokuje).
+- [ ] Analýza fotek po návrhu: album s dvoustranami, ve kterém část fotek ještě nemá analýzu (například po „Načíst nové fotky ze zdroje“ nebo po zavření okna uprostřed analýzy a „Navrhnout album“). Po doběhnutí analýzy se výběr nezmění: žádná fotka v rámečku nezešedne jako nevybraná.
 
 ## E. Editor
 
@@ -56,16 +58,20 @@ Otevři album s fotkami, které ještě nemá dvoustrany (nebo jeho kopii). Fotk
 - [ ] Plátno: dvoustrana vyplňuje střed, je vidět červená ořezová čára, světle červený pás spadávky, modré obdélníky bezpečné zóny a šedá linka hřbetu. Fotky naskočí po chvíli (do té doby šedé), rolování pásu nesekne. Velikost a poloha textů odpovídá exportu.
 - [ ] Výběr: klik na rámeček fotky ho orámuje, klik na pozadí a Escape výběr zruší.
 - [ ] Výřez: tažení uvnitř fotky ji posouvá pod ukazatelem a zastaví se na krajích. Jedno Cmd-Z vrátí celé tažení a nabídka říká „Odvolat: Posunout fotku“. Dvouprstové rolování a pinch zoomují 1× až 4×, jedno Cmd-Z na gesto. Dvojklik výřez obnoví („Odvolat: Obnovit výřez“). Šipky s vybraným rámečkem posouvají fotku (Shift = 5 mm), držení klávesy je jeden krok zpět. Šipky vlevo a vpravo bez výběru přepínají dvoustrany.
+- [ ] Klasická myš s kolečkem (bez plynulého rolování): kolečko nad fotkou zoomuje rozumnými kroky (ne skokem na 4×), po chvíli bez otáčení se gesto uzavře a jedno Cmd-Z ho vrátí.
 - [ ] Cmd-Z uprostřed tažení výřezu (myš drží): potom jedno Cmd-Z vrátí zbytek tažení, žádný řetěz drobných kroků.
 - [ ] Přetažení fotky ze zásobníku na rámeček: rámeček se při tažení zvýrazní, fotka nahradí původní a tečka v zásobníku se přesune. Upuštění na text nebo pozadí nedělá nic. Pokud SwiftUI zásobník a AppKit plátno nespolupracují, je chyba v přenosu (prostý text s identifikátorem fotky).
-- [ ] ⌥-tažení fotky na jiný rámeček téže dvoustrany obě fotky prohodí i s výřezy.
+- [ ] ⌥-tažení fotky na jiný rámeček téže dvoustrany obě fotky prohodí i s výřezy. Vzhled tažení: pod ukazatelem jde rozumný obrázek fotky (výřez z plátna), cílový rámeček se zvýrazní, po puštění nezůstane nic viset.
 - [ ] Pás dvoustran: klik zobrazí dvoustranu a zásobník sleduje její den. Přetažení položky přeřadí s vloženou svislou čárou; úvod a závěr nejdou tahat a nic nejde před úvod ani za závěr. Kontextová nabídka: „Změnit šablonu…“, „Vložit dvoustranu za“ (Galerie, Deník, Prázdná), „Smazat dvoustranu“ (ptá se jen když má obsah). Náhledy se po úpravách aktualizují. Přední a zadní obálka jsou na začátku a jen ke čtení.
 - [ ] Delete na vybraném rámečku ho vyprázdní, objeví se červený odznak „Rámeček je prázdný…“ a v záhlaví pásu „1 vybraná fotka není v albu“; popover ji vypíše a klik na ni přeskočí zásobník a na 2 s ji orámuje.
 - [ ] Text: dvojklik na textové pole otevře překryv se stejným písmem a velikostí; porovnej s vytištěným/exportovaným textem (PNG nebo `pages.pdf` v Náhledu), že zalamování a velikost sedí. Zadej text a klikni jinam: uloží se a jedno Cmd-Z vrátí celé psaní.
 - [ ] Cmd-Z při psaní: překryv ukáže předchozí text a zůstane otevřený; další psaní funguje a Cmd-Shift-Z se chová rozumně. Return ukončí titulek nebo popisek, v těle deníku dělá nový řádek, Escape editaci ukončí a text zachová.
+- [ ] Přepnutí do jiné aplikace (Cmd-Tab) uprostřed psaní textu a návrat: napsaný text zůstal uložený (jedno Cmd-Z ho vrátí) a nic se neztratilo.
+- [ ] Dlouhý text: do popisku nebo těla deníku napiš víc textu, než se vejde do rámečku. Překryv se dá rolovat (objeví se svislý posuvník) a konec textu jde vidět i upravit. Po ukončení psaní je u textu na plátně oranžová ikona s popiskem „Text se nevejde do rámečku, konec se nevytiskne“ a kontrola v exportu ukáže stejné varování. V exportovaném PDF je text uříznutý na hranici rámečku.
 - [ ] Zrušení překryvu: otevři překryv bez psaní a klikni na fotku. Překryv zmizí a nabídka Úpravy už neříká „Odvolat: Upravit text“.
 - [ ] Změna šablony, která zahodí text: potvrzení „Tyto texty by se ztratily: …“ se ukáže uvnitř výběru šablony; „Změnit šablonu“ změnu provede a výběr zavře. Nesmí se objevit druhý dialog po zavření sheetu.
-- [ ] Nabídka Úpravy: titulky „Odvolat: …“ a „Znovu: …“ se po každé změně hned obnoví a položka je vypnutá, když není co odvolat. V okně „Nové album“ Cmd-Z v poli názvu pořád vrací psaní.
+- [ ] Nabídka Úpravy: titulky „Odvolat: …“ a „Znovu: …“ se po každé změně hned obnoví. Položka se záměrně nikdy nevypíná: když není co odvolat, říká jen „Odvolat“ a Cmd-Z nic neudělá. V okně „Nové album“ Cmd-Z v poli názvu pořád vrací psaní.
+- [ ] Cmd-Z v sheetu „Nové album“ otevřeném z okna alba (Cmd-N, když je album vepředu): napiš do pole názvu pár znaků a stiskni Cmd-Z. Očekávání: vrátí se psaní v poli, album za sheetem se nezmění (třeba výběr fotky nebo text zůstanou). Totéž v sheetu exportu, ve výběru šablony a v potvrzovacích dialozích.
 - [ ] Cmd-W nebo Cmd-Q do 0,5 s po posledním písmenu psaného textu a následné otevření: poslední znaky mohou chybět (ověř a zapiš; zaručené je jen uložení po 0,5 s nečinnosti).
 - [ ] Varování: nízké DPI, chybějící originál a text mimo bezpečnou zónu mají oranžové nebo červené ikony u rámečku či rohu textu s popiskem; prázdné tělo deníku dá pruh „1 problém na této dvoustraně“ s popoverem; chyba počtu stran je v záhlaví pásu („N problémů alba“).
 - [ ] Panel nástrojů: „Navrhnout znovu“ ukáže „Zachovám N ručně upravených dvoustran. Pokračovat?“ se správným N; „Formát“ vypíše formáty se zatržením a změna ukáže „Rozložení se přepočítá, obsah zůstane.“ a přepočítá.
@@ -80,19 +86,24 @@ Otevři album s fotkami, které ještě nemá dvoustrany (nebo jeho kopii). Fotk
 - [ ] Smaž ve Photos fotku, jejíž originál je už stažený, ještě než se album uloží, a album znovu otevři. Očekávání: originál se použije dál a fotka je označená jako smazaná ve zdroji.
 - [ ] Během stahování a ukládání se nikdy neobjeví hlášení „dokument byl změněn jinou aplikací“ a dokument se sám nenačte znovu.
 - [ ] Soubor > Vrátit (Revert) nebo obnovení z Verzí a po něm úprava alba: změna se uloží (zavři a otevři). Práce na pozadí po návratu pokračuje.
+- [ ] Verze a originály: vyber fotky, nech stáhnout jejich originály, pak Soubor > Vrátit se k > Poslední otevřená verze (nebo „Procházet všechny verze…“ > Obnovit starší verzi). Zjisti a zapiš, co se stane se složkou `originals/`. Očekávané (a proto varování v README): obnovení nahradí celý balík včetně `originals/`, originály stažené po té verzi z disku zmizí a znovu se stáhnou; když fotka mezitím zmizela z Fotek, její jediná kopie je pryč.
+- [ ] Automatické ukládání při první analýze velkého alba (kolem 3 000 fotek): během analýzy sleduj plynulost okna (rolování mřížky). Zapiš, jestli okno zhruba každých 10 s na chvíli (asi 1 s) zamrzne kvůli uložení; při analýze se ukládá s odstupem 10 s, ne 3 s.
 - [ ] Balík smazaný, zatímco je otevřený, nejde uložit (známé omezení). Jen zjisti, jak se aplikace chová, a zapiš to.
+- [ ] Panel pro otevření při spuštění aplikace má tlačítko „Nový dokument“. Očekávání (známé omezení): vytvoří prázdné okno bez názvu, ve kterém nejde nic dělat; zavři ho a album založ přes Soubor > Nové album.
 
 ## G. Načíst nové fotky ze zdroje
 
 - [ ] Přidej do Photos 2 fotky v období alba a jednu už vybranou smaž. Soubor > „Načíst nové fotky ze zdroje“. Očekávání: hlášení se správným součtem, nové fotky jsou v příslušných dnech jako nevybrané, smazaná má značku ve třídění i v zásobníku.
 - [ ] Přejmenuj nebo smaž album ve Photos, ze kterého bylo vytvořené, a spusť načtení. Očekávání: hlášení „Zdroj nevrátil žádné fotky“ a žádná fotka se neoznačí jako smazaná.
-- [ ] S omezeným přístupem (Vybrané fotky) načtení ukáže hlášení o chybějícím přístupu a žádnou fotku neoznačí.
-- [ ] Položky nabídky „Načíst nové fotky ze zdroje“ a „Stáhnout znovu“ jsou správně zapnuté a vypnuté. „Stáhnout znovu“ zopakuje fotku, která selhala (například při vypnuté síti).
+- [ ] S omezeným přístupem (Vybrané fotky) je položka „Načíst nové fotky ze zdroje“ vypnutá a žádná fotka se neoznačí.
+- [ ] Položky nabídky „Načíst nové fotky ze zdroje“ a „Stáhnout znovu“ jsou správně zapnuté a vypnuté. Při vypnuté síti se originál zkusí stáhnout, po neúspěchu ještě jednou automaticky a pak zůstane jako nestažený (ne „nedostupný“); po zapnutí sítě ho „Stáhnout znovu“ stáhne.
 
 ## H. Export
 
 - [ ] Soubor > Exportovat… (Shift-Cmd-E) a tlačítko v liště editoru otevřou sheet; z třídění přepne do editoru; bez dvoustran je vypnuté.
 - [ ] Seznam problémů: chyby červeně, varování žlutě. Klik na „Dvoustrana N“ zavře sheet, ukáže dvoustranu a vybere rámeček. „Rozumím varováním“ zapne tlačítko. Úprava alba při otevřeném sheetu seznam obnoví a nové varování zaškrtnutí zruší.
+- [ ] Skok z exportu při zobrazené obálce: v pásu klikni na přední obálku, otevři export s problémem na některé dvoustraně a klikni na „Dvoustrana N“. Očekávání: plátno ukáže tu dvoustranu (ne obálku).
+- [ ] Smazaný originál: u hotového alba smaž v Finderu (Zobrazit obsah balíku) jeden soubor z `originals/`, jehož fotka je v albu, a otevři export (album nezavírej). Očekávání: kontrola ukáže chybu „Soubor originálu chybí v projektu“ s nápovědou a export nejde spustit. Pokud by se export přesto spustil (soubor smazaný až během exportu), skončí chybou „Originál 1 fotky v projektu chybí nebo nejde přečíst, export se nezapsal…“ a ve složce exportu nevznikne nic nového.
 - [ ] Při stahování originálů tlačítko říká „Čekám na originály (N)“ a N klesá.
 - [ ] „Exportovat“ otevře výběr složky připojený k sheetu (modálně): dokud je otevřený, tlačítka a Esc sheetu nedělají nic a okno nejde zavřít. Složka uvnitř balíku `.leporelo` nebo samotný balík ukáže českou chybu. Složka s dřívějším exportem ukáže hlášení o přepsání se jmény souborů.
 - [ ] Průběh se plynule posouvá, „Zrušit“ ho zastaví s hláškou „Export byl zrušen“ a nezůstane složka `.leporelo-export-*`. Během exportu sheet nejde zavřít (Esc = Zrušit).
