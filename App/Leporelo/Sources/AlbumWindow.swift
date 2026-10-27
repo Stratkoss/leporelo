@@ -1,8 +1,9 @@
 import LeporeloCore
 import SwiftUI
 
-/// The document window: the background-work banner on top of the triage view (Task 20) once the
-/// album is bound and has photos, else placeholder content (the album title).
+/// The document window: the background-work banner on top of the album content (triage or the
+/// editor, `AlbumContent`) once the album is bound and has photos, else placeholder content (the
+/// album title).
 struct AlbumWindow: View {
     let document: AlbumDocument
     let fileURL: URL?
@@ -23,6 +24,9 @@ struct AlbumWindow: View {
 
     @State private var session = AlbumSession()
     @State private var showsNewAlbum = false
+    /// Triage or editor as the user chose; nil = by the album (editor when it has spreads). Kept
+    /// across rebinds (revert, reload, move) of the same window.
+    @State private var requestedMode: WindowMode?
     @Environment(\.photoSourceProvider) private var photoSourceProvider
     /// The document's undo manager (one per window); capped once here for every view of it.
     @Environment(\.undoManager) private var undoManager
@@ -61,7 +65,7 @@ struct AlbumWindow: View {
                                    description: Text(bindError))
         } else if let store, !store.album.photos.isEmpty {
             // A new store (rebind after revert, reload or move) gets a new model.
-            TriageContainer(store: store).id(ObjectIdentifier(store))
+            AlbumContent(store: store, requestedMode: $requestedMode).id(ObjectIdentifier(store))
         } else {
             ContentUnavailableView {
                 Label(store?.album.title ?? document.currentAlbum.title, systemImage: "book.pages")

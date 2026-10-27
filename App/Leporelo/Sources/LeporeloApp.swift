@@ -11,7 +11,10 @@ struct LeporeloApp: App {
         DocumentGroup(newDocument: { AlbumDocument() }) { file in
             AlbumWindow(document: file.document, fileURL: file.fileURL)
         }
-        .commands { FileCommands() }
+        .commands {
+            FileCommands()
+            UndoCommands()
+        }
 
         // "Nové album…" from the File menu (also when no album is open).
         Window("Nové album", id: NewAlbumSheet.windowID) {

@@ -52,6 +52,16 @@
 	<array>
 		<dict>
 			<key>UTTypeIdentifier</key>
+			<string>com.stratkoss.leporelo.photo-id</string>
+			<key>UTTypeDescription</key>
+			<string>Fotka z alba Leporelo</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+		</dict>
+		<dict>
+			<key>UTTypeIdentifier</key>
 			<string>com.stratkoss.leporelo.album</string>
 			<key>UTTypeDescription</key>
 			<string>Leporelo album</string>
