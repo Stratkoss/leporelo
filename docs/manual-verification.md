@@ -1,0 +1,112 @@
+# Ruční ověření před prvním tiskem
+
+Kontrolní seznam toho, co se při stavbě nedalo ověřit: agenti nespouštěli aplikaci, neměli přístup do knihovny Photos ani účet Canva. Testy (`make test`, `make test-app`) tyto věci nepokrývají. Odškrtávej po jednom a nález, který nevyjde, si poznamenej s popisem, co se stalo.
+
+Příprava: `make build-app`, pak `make run-app`. Chyby a diagnostika jdou do Konzole (subsystém `com.stratkoss.leporelo`). Pro kontroly bez Photos stačí album vytvořené příkazem `leporelo-cli draft` (viz README); otevři ho přes Soubor > Otevřít.
+
+## A. První spuštění a oprávnění k Photos
+
+- [ ] Nové album (Cmd-N) při nerozhodnutém přístupu ukáže vysvětlení a tlačítko „Povolit přístup k Fotkám“. Po kliknutí se objeví systémový dotaz právě jednou. Očekávání: po povolení plného přístupu se objeví formulář.
+- [ ] V Nastavení systému > Soukromí > Fotky přepni aplikaci na „Vybrané fotky“ (limited) a vrať se do sheetu „Nové album“. Očekávání: sheet ukáže vysvětlení omezeného přístupu a tlačítko „Otevřít Nastavení systému“ otevře správný panel. Volání nad knihovnou nesmí vrátit částečný seznam fotek.
+- [ ] Totéž pro „Žádné“ (denied) a, pokud to jde nasimulovat, pro omezený přístup správcem (restricted). Očekávání: v restricted se tlačítko nastavení nezobrazuje.
+- [ ] Odeber přístup za běhu u otevřeného, už zanalyzovaného alba. Očekávání: album dál funguje, banner ukáže chybějící přístup s tlačítkem „Otevřít Nastavení systému“. U nového alba bez náhledů se ukáže celookenní obrazovka s vysvětlením. Po vrácení přístupu a návratu do aplikace práce na pozadí znovu naběhne.
+
+## B. Založení alba z posledních 7 dní
+
+- [ ] Nové album: výchozí hodnoty jsou název „Nové album“, formát „Na šířku 8 × 6 in (Canva)“ s poznámkou „Rozměry formátu nejsou ověřené u dodavatele.“ a rozmezí od před 7 dny do dneška. Po chvíli se ukáže „Fotek ve zdroji: N“ a N odpovídá počtu fotek a videí ve Photos za dané období.
+- [ ] Rozmezí bez fotek ukáže „V tomto rozmezí nejsou žádné fotky“ a „Založit album“ je vypnuté. Režim Album vypíše alba z Photos; sdílené album ukáže oranžovou poznámku o sdílených albech iCloudu (zmenšené fotky) a dovolí vytvoření.
+- [ ] „Založit album“ nabídne uložení jako „Nové album.leporelo“. Ulož na plochu. Očekávání: okno alba se otevře do několika sekund, banner ukazuje „Analyzuji fotky 0 / N“ a počítá nahoru, okno zůstává plynulé, po skončení banner zmizí (nebo ukáže „Zjišťuji místa…“, dokud běží geocoding).
+- [ ] Názvy míst se objeví později, ne hned; třídění po dnech je použitelné dřív. Fotky s GPS mají po dokončení v `album.json` (Zobrazit obsah balíku) pole `placeName`.
+- [ ] Zavři okno uprostřed analýzy a balík znovu otevři. Očekávání: analýza pokračuje se zbývajícím počtem. Po dokončení má `album.json` vyplněné `analysis` a část fotek `isSelected: true`. Otevření dokončeného alba nezmění výběr a neukáže banner.
+- [ ] V uložení vyber existující `.leporelo` a potvrď. Očekávání: panel zůstane otevřený a ukáže „Na tomto místě už album je. Zvolte jiný název.“; systémový dotaz „Nahradit?“ se neobjeví. Pokud se objeví (pořadí volání delegáta je jiné, než se předpokládalo), existující balík se přesto nesmí přepsat a ukáže se „Album s tímto názvem už existuje.“.
+- [ ] Během „Zakládám album…“ jsou formulář i „Zrušit“ vypnuté.
+- [ ] Smaž z `thumbs/` jeden soubor v hotovém albu a album otevři. Očekávání: krátce se ukáže „Analyzuji fotky 0 / 1“, soubor je zpět a výběr se nezměnil.
+
+## C. Fakta o PhotoKit k potvrzení
+
+Dosud nikdo neprošel PhotoKit proti skutečné knihovně. Nejjednodušší je dočasné tlačítko v `App/Leporelo/Sources/AlbumWindow.swift`, které zavolá `PhotoKitAuthorization.request()`, `PhotoKitSource().photos(matching: .dateRange(start:end:))`, `albums()`, u první nevideo fotky `thumbnail(for:maxPixel: 512)`, `original(for:)` a `isLocallyAvailable(identifier:)` a vypíše výsledky (potom tlačítko odstraň). Většinu lze vyčíst i z chování v oddílech B, D a F.
+
+- [ ] Rozměry z `PHAsset` jsou upright. U portrétní fotky z iPhonu je `pixelWidth < pixelHeight`, náhled je na výšku s delší stranou 512 px a původní HEIC v Náhledu stojí správně. Když vyjdou otočené, musí se opravit zdroj (zbytek aplikace počítá s upright rozměry).
+- [ ] Upravená nebo ořezaná fotka (úprava ve Photos) vrátí upravenou verzi a rozměry jí odpovídají.
+- [ ] Sdílená alba iCloudu se vypíšou s nenulovým počtem, mají zhruba 2 048 px na delší straně a dotaz na album vrací fotky. Když vrátí 0, je potřeba upravit dotaz (`includeAssetSourceTypes`, případně načtení kolekce bez voleb).
+- [ ] Náhled má přesně požadovaný pixelový rozměr (512 px na delší straně), ne dvojnásobek bodů.
+- [ ] Volba zdroje originálu a přípona: iPhone fotka dá příponu `heic`, upravená fotka dá upravenou verzi, RAW dá velký soubor (dng), Live Photo dá fotku.
+- [ ] Fotka jen v iCloudu (Optimalizovat úložiště): před stažením je `isLocallyAvailable` `false`, po stažení `true`.
+- [ ] Cena `isLocallyAvailable` (čte celý lokální soubor): s několika sty vybranými fotkami otevření alba a změna stavu stahování nezpomalí okno.
+- [ ] Počet za posledních 7 dní odpovídá Photos a načtení trvá výrazně méně než 5 s. Videa se vrátí jako video, zobrazují se zašedlá a do alba se nedávají.
+
+## D. Třídění
+
+- [ ] Rychlost mřížky: album s kolem 3 000 fotek (nebo den s několika sty). Rychlé rolování je plynulé bez sekání, placeholdery se rychle mění na náhledy, paměť zůstává rozumná.
+- [ ] Při analýze nového alba přibývají náhledy a odznaky (rozmazaná, zavřené oči, série ×N) postupně, bez blikání a bez skoku nahoru.
+- [ ] Jedno kliknutí na fotku ji vybere nebo zruší (zešedne nebo se vrátí, objeví se zatržení).
+- [ ] Přetažení fotky na jiný den v levém seznamu ji přesune a řádek dne se při tažení orámuje. Tažení fotku nesmí zároveň přepnout výběr. Upuštění na „Bez data“ nedělá nic. Pokud tažení přepíná výběr, je chyba v obsluze mouseDown v `PhotoGridView`.
+- [ ] Chip série „×4“ rozbalí a sbalí sérii na místě, klik na chip nepřepne vedoucí fotku. S vybranými členy chip ukazuje „2 z 4“.
+- [ ] Klávesnice: šipky nahoru a dolů v seznamu dnů mění den; v mřížce šipky posouvají fokus a mezerník přepíná výběr.
+- [ ] Undo: po přepnutí výběru nebo přesunu říká Cmd-Z „Odvolat Vybrat fotku“ nebo „Přesunout fotku do dne“ a stav vrátí.
+- [ ] VoiceOver čte buňky jako „Fotka, vybraná, …“ (zatržítko) a VO-mezerník přepíná výběr.
+- [ ] Vzhled: nevybrané fotky jsou ztlumené, odznaky jsou čitelné na světlých i tmavých fotkách ve světlém i tmavém režimu, tlačítko „Navrhnout album“ je při nedostupnosti vypnuté s popiskem (ověř, že se popisek u vypnutého tlačítka vůbec zobrazí).
+- [ ] Když album už má dvoustrany, přesun vybrané fotky na jiný den přesune i její umístění v rozložení (jedno Cmd-Z to vrátí).
+
+## E. Editor
+
+Otevři album s fotkami, které ještě nemá dvoustrany (nebo jeho kopii). Fotky z Photos nejsou potřeba.
+
+- [ ] Tok režimů: „Navrhnout album“ navrhne a přepne na „Dvoustrany“; Cmd-Z hned potom návrh vrátí a okno se vrátí do třídění. Album s dvoustranami se otevře rovnou v „Dvoustranách“. Přepínač v liště funguje oběma směry; „Dvoustrany“ bez vybraných fotek zůstanou v třídění.
+- [ ] Plátno: dvoustrana vyplňuje střed, je vidět červená ořezová čára, světle červený pás spadávky, modré obdélníky bezpečné zóny a šedá linka hřbetu. Fotky naskočí po chvíli (do té doby šedé), rolování pásu nesekne. Velikost a poloha textů odpovídá exportu.
+- [ ] Výběr: klik na rámeček fotky ho orámuje, klik na pozadí a Escape výběr zruší.
+- [ ] Výřez: tažení uvnitř fotky ji posouvá pod ukazatelem a zastaví se na krajích. Jedno Cmd-Z vrátí celé tažení a nabídka říká „Odvolat: Posunout fotku“. Dvouprstové rolování a pinch zoomují 1× až 4×, jedno Cmd-Z na gesto. Dvojklik výřez obnoví („Odvolat: Obnovit výřez“). Šipky s vybraným rámečkem posouvají fotku (Shift = 5 mm), držení klávesy je jeden krok zpět. Šipky vlevo a vpravo bez výběru přepínají dvoustrany.
+- [ ] Cmd-Z uprostřed tažení výřezu (myš drží): potom jedno Cmd-Z vrátí zbytek tažení, žádný řetěz drobných kroků.
+- [ ] Přetažení fotky ze zásobníku na rámeček: rámeček se při tažení zvýrazní, fotka nahradí původní a tečka v zásobníku se přesune. Upuštění na text nebo pozadí nedělá nic. Pokud SwiftUI zásobník a AppKit plátno nespolupracují, je chyba v přenosu (prostý text s identifikátorem fotky).
+- [ ] ⌥-tažení fotky na jiný rámeček téže dvoustrany obě fotky prohodí i s výřezy.
+- [ ] Pás dvoustran: klik zobrazí dvoustranu a zásobník sleduje její den. Přetažení položky přeřadí s vloženou svislou čárou; úvod a závěr nejdou tahat a nic nejde před úvod ani za závěr. Kontextová nabídka: „Změnit šablonu…“, „Vložit dvoustranu za“ (Galerie, Deník, Prázdná), „Smazat dvoustranu“ (ptá se jen když má obsah). Náhledy se po úpravách aktualizují. Přední a zadní obálka jsou na začátku a jen ke čtení.
+- [ ] Delete na vybraném rámečku ho vyprázdní, objeví se červený odznak „Rámeček je prázdný…“ a v záhlaví pásu „1 vybraná fotka není v albu“; popover ji vypíše a klik na ni přeskočí zásobník a na 2 s ji orámuje.
+- [ ] Text: dvojklik na textové pole otevře překryv se stejným písmem a velikostí; porovnej s vytištěným/exportovaným textem (PNG nebo `pages.pdf` v Náhledu), že zalamování a velikost sedí. Zadej text a klikni jinam: uloží se a jedno Cmd-Z vrátí celé psaní.
+- [ ] Cmd-Z při psaní: překryv ukáže předchozí text a zůstane otevřený; další psaní funguje a Cmd-Shift-Z se chová rozumně. Return ukončí titulek nebo popisek, v těle deníku dělá nový řádek, Escape editaci ukončí a text zachová.
+- [ ] Zrušení překryvu: otevři překryv bez psaní a klikni na fotku. Překryv zmizí a nabídka Úpravy už neříká „Odvolat: Upravit text“.
+- [ ] Změna šablony, která zahodí text: potvrzení „Tyto texty by se ztratily: …“ se ukáže uvnitř výběru šablony; „Změnit šablonu“ změnu provede a výběr zavře. Nesmí se objevit druhý dialog po zavření sheetu.
+- [ ] Nabídka Úpravy: titulky „Odvolat: …“ a „Znovu: …“ se po každé změně hned obnoví a položka je vypnutá, když není co odvolat. V okně „Nové album“ Cmd-Z v poli názvu pořád vrací psaní.
+- [ ] Cmd-W nebo Cmd-Q do 0,5 s po posledním písmenu psaného textu a následné otevření: poslední znaky mohou chybět (ověř a zapiš; zaručené je jen uložení po 0,5 s nečinnosti).
+- [ ] Varování: nízké DPI, chybějící originál a text mimo bezpečnou zónu mají oranžové nebo červené ikony u rámečku či rohu textu s popiskem; prázdné tělo deníku dá pruh „1 problém na této dvoustraně“ s popoverem; chyba počtu stran je v záhlaví pásu („N problémů alba“).
+- [ ] Panel nástrojů: „Navrhnout znovu“ ukáže „Zachovám N ručně upravených dvoustran. Pokračovat?“ se správným N; „Formát“ vypíše formáty se zatržením a změna ukáže „Rozložení se přepočítá, obsah zůstane.“ a přepočítá.
+- [ ] VoiceOver: položky pásu čtou „Dvoustrana 3, Deník, čtvrtek 18. června 2026, 2 problémy“, buňky zásobníku „Fotka čt 18. 6. · 9:05, vybraná, v albu“.
+- [ ] Výkon: psaní textu ve velkém albu (stovky dvoustran) nesekne (miniatury v pásu se při změně přepočítávají).
+
+## F. Originály a automatické ukládání
+
+- [ ] Vyber fotku, která je jen v iCloudu. V buňce se ukáže spinner, banner říká „Stahuji originály 1 / 1“ a potom je soubor v `<album>.leporelo/originals/`.
+- [ ] Velké stahování (100 a více originálů): nech album otevřené několik minut, aby proběhlo automatické ukládání. Zavři a znovu otevři: všechny stažené fotky jsou uložené (bez ikony mraku) a jejich soubory existují.
+- [ ] Zavři okno uprostřed stahování a znovu otevři. Očekávání: už stažené se nestahují znovu, banner pokračuje se zbytkem.
+- [ ] Smaž ve Photos fotku, jejíž originál je už stažený, ještě než se album uloží, a album znovu otevři. Očekávání: originál se použije dál a fotka je označená jako smazaná ve zdroji.
+- [ ] Během stahování a ukládání se nikdy neobjeví hlášení „dokument byl změněn jinou aplikací“ a dokument se sám nenačte znovu.
+- [ ] Soubor > Vrátit (Revert) nebo obnovení z Verzí a po něm úprava alba: změna se uloží (zavři a otevři). Práce na pozadí po návratu pokračuje.
+- [ ] Balík smazaný, zatímco je otevřený, nejde uložit (známé omezení). Jen zjisti, jak se aplikace chová, a zapiš to.
+
+## G. Načíst nové fotky ze zdroje
+
+- [ ] Přidej do Photos 2 fotky v období alba a jednu už vybranou smaž. Soubor > „Načíst nové fotky ze zdroje“. Očekávání: hlášení se správným součtem, nové fotky jsou v příslušných dnech jako nevybrané, smazaná má značku ve třídění i v zásobníku.
+- [ ] Přejmenuj nebo smaž album ve Photos, ze kterého bylo vytvořené, a spusť načtení. Očekávání: hlášení „Zdroj nevrátil žádné fotky“ a žádná fotka se neoznačí jako smazaná.
+- [ ] S omezeným přístupem (Vybrané fotky) načtení ukáže hlášení o chybějícím přístupu a žádnou fotku neoznačí.
+- [ ] Položky nabídky „Načíst nové fotky ze zdroje“ a „Stáhnout znovu“ jsou správně zapnuté a vypnuté. „Stáhnout znovu“ zopakuje fotku, která selhala (například při vypnuté síti).
+
+## H. Export
+
+- [ ] Soubor > Exportovat… (Shift-Cmd-E) a tlačítko v liště editoru otevřou sheet; z třídění přepne do editoru; bez dvoustran je vypnuté.
+- [ ] Seznam problémů: chyby červeně, varování žlutě. Klik na „Dvoustrana N“ zavře sheet, ukáže dvoustranu a vybere rámeček. „Rozumím varováním“ zapne tlačítko. Úprava alba při otevřeném sheetu seznam obnoví a nové varování zaškrtnutí zruší.
+- [ ] Při stahování originálů tlačítko říká „Čekám na originály (N)“ a N klesá.
+- [ ] „Exportovat“ otevře výběr složky připojený k sheetu (modálně): dokud je otevřený, tlačítka a Esc sheetu nedělají nic a okno nejde zavřít. Složka uvnitř balíku `.leporelo` nebo samotný balík ukáže českou chybu. Složka s dřívějším exportem ukáže hlášení o přepsání se jmény souborů.
+- [ ] Průběh se plynule posouvá, „Zrušit“ ho zastaví s hláškou „Export byl zrušen“ a nezůstane složka `.leporelo-export-*`. Během exportu sheet nejde zavřít (Esc = Zrušit).
+- [ ] Cmd-W a Cmd-Q v průběhu exportu: zapiš, co se stane (okno s připojeným sheetem se nemá zavřít, ukončení export zruší).
+- [ ] Po úspěchu: „Zobrazit ve Finderu“ vybere tři soubory (`pages.pdf`, `cover.pdf`, `co-nahrat-kam.txt`), „Otevřít složku“ otevře složku. `cover.pdf` je přední obálka.
+- [ ] Otevři `pages.pdf` v Náhledu (Nástroje > Zobrazit inspektora, Cmd-I). Velikost stránky pro formát 297 × 210 mm se spadávkou 3 mm je 303 × 216 mm (pro 8 × 6 in 209,2 × 158,4 mm); počet stran odpovídá albu.
+- [ ] Písma jsou vložená: v Náhledu Soubor > Vlastnosti nebo v terminálu `pdffonts pages.pdf` (pokud je nainstalovaný poppler). Fraunces a Schibsted Grotesk jsou uvedené jako vložené.
+- [ ] Zkouška importu do Canvy (spec, oddíl 10; dosud neprovedena): vyexportuj PDF z alba s několika fotkami v plném rozlišení, nahraj ho do Canvy (nová fotokniha ve stejném formátu, Nahrát soubory) a prohlédni fotky zblízka: ostrost, artefakty JPEG, rozlišení. Očekávání: Canva fotky viditelně nepřekomprimuje a jedna strana PDF je jedna strana knihy. Když překomprimuje nebo rozloží: přejít na JPG strany v plném rozlišení (Canva umí nahrát obrázky a vložit je jako stránky); to vyžaduje změnu exportu, ne jen profilu, a je třeba ji zadat jako novou práci.
+- [ ] Kontrola Canvy po nahrání: nic nesmí být označené jako nízké rozlišení tam, kde preflight Leporela mlčel, a nic důležitého nesmí vyjít mimo bezpečnou zónu.
+- [ ] Pokud Canva uvádí jiné rozměry stránky, spadávku, bezpečnou zónu nebo maximum stran než profil (`Sources/LeporeloCore/Resources/Profiles/canva-photobook.json`), oprav hodnoty, nastav `verified` na `true` a u formátů smaž „neověřeno u Canvy“ z názvu.
+
+## I. Rozhodnutí pro Davida
+
+- [ ] Jaký formát a papír v Canvě nakonec objednat (ovlivní jen profil `canva-photobook.json`, ne aplikaci). Spec, oddíl 11.
+- [ ] Zda a kdy přidat profil Saal Digital (vyžaduje účet a šablony za přihlášením; kód navíc potřebuje obálku `wrapWithSpine` a výpočet hřbetu).
+- [ ] Zda má album mít závěrečnou dvoustranu a co na ní (návrh dnes vytváří dvoustranu „closing“; ověř, že to tak chceš). Spec, oddíl 11.
+- [ ] Zda dodělat položky z limitů verze 1: rozdělit den na dvě, přístupnost rámečků, import ze složky v aplikaci, posun času fotek z foťáku.
