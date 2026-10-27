@@ -24,6 +24,8 @@ struct AlbumWindow: View {
     @State private var session = AlbumSession()
     @State private var showsNewAlbum = false
     @Environment(\.photoSourceProvider) private var photoSourceProvider
+    /// The document's undo manager (one per window); capped once here for every view of it.
+    @Environment(\.undoManager) private var undoManager
 
     private var store: AlbumStore? { session.store }
 
@@ -48,6 +50,8 @@ struct AlbumWindow: View {
             // document after a reload; the old store's background work is cancelled first.
             session.bind(document: document, fileURL: fileURL, sourceProvider: photoSourceProvider)
         }
+        .onAppear { AlbumStore.configure(undoManager) }
+        .onChange(of: undoManager) { _, manager in AlbumStore.configure(manager) }
         .onDisappear { session.close() }
     }
 

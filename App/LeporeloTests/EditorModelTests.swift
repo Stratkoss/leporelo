@@ -215,11 +215,15 @@ struct EditorModelTests {
         let journal = try #require(store.album.spreads.first { $0.kind == .journal && $0.dayKey == day1 })
         let a = try #require(journal.frames[0].photoID), b = try #require(journal.frames[2].photoID)
         let count = store.album.placedPhotoIDs.count
+        step(undo) { model.nudge(frame: journal.frames[0].id, offset: Point(x: 0.4, y: 0), zoom: 1.5, in: journal.id) }
 
         #expect(step(undo) { model.dropPhoto(a, onFrame: journal.frames[2].id, in: journal.id) })
         let after = try #require(spread(store.album, journal.id))
         #expect(after.frames[2].photoID == a)
         #expect(after.frames[0].photoID == b)
+        // Like swap(): each crop stays with its photo.
+        #expect(after.frames[2].zoom == 1.5 && after.frames[2].offset == Point(x: 0.4, y: 0))
+        #expect(after.frames[0].zoom == 1 && after.frames[0].offset == Point(x: 0, y: 0))
         #expect(store.album.placedPhotoIDs.count == count)  // no duplicate, nothing lost
         #expect(undo.undoActionName == "Vložit fotku")
     }
@@ -574,5 +578,189 @@ struct EditorModelTests {
         #expect(model.issues(for: gallery.id).contains { $0.id.hasPrefix("emptyFrame") })
         undo.undo()
         #expect(!model.issues(for: gallery.id).contains { $0.id.hasPrefix("emptyFrame") })
+    }
+
+    // MARK: Fix round 1: templates and spread order
+
+    @Test func changeTemplateToTheCurrentTemplateIsANoOp() throws {
+        let (model, store, undo) = try makeModel(try standardAlbum())
+        let gallery = try #require(store.album.spreads.first { $0.templateID == "gallery-2" })
+        let before = store.album
+        let outcome = model.changeTemplate(to: "gallery-2", in: gallery.id)
+        #expect(outcome == .applied(unplacedPhotoIDs: []))
+        #expect(store.album == before)
+        #expect(spread(store.album, gallery.id)?.manuallyEdited == false)
+        #expect(!undo.canUndo)
+    }
+
+    @Test func introStaysFirstAndClosingStaysLast() throws {
+        let (model, store, undo) = try makeModel(try standardAlbum())
+        let ids = store.album.spreads.map(\.id)
+        #expect(ids.first == "intro" && ids.last == "closing")
+        let count = ids.count
+
+        // Intro and closing do not move.
+        model.moveSpread("intro", to: 3)
+        model.moveSpread("closing", to: 0)
+        #expect(store.album.spreads.map(\.id) == ids)
+        #expect(!undo.canUndo)
+
+        // Others are clamped between them.
+        step(undo) { model.moveSpread(ids[2], to: 0) }
+        #expect(model.spreadIndex(of: ids[2]) == 1)
+        step(undo) { model.moveSpread(ids[2], to: 99) }
+        #expect(model.spreadIndex(of: ids[2]) == count - 2)
+        #expect(store.album.spreads.first?.id == "intro" && store.album.spreads.last?.id == "closing")
+
+        // Inserting after the closing inserts before it.
+        let id = try #require(step(undo) { model.insertSpread(kind: .blank, after: "closing") })
+        #expect(store.album.spreads.last?.id == "closing")
+        #expect(model.spreadIndex(of: id) == store.album.spreads.count - 2)
+    }
+}
+
+/// Fix round 1: editing sessions must never lose text, never merge with another action's undo
+/// step, and must reach the store (and so the autosave snapshot) without waiting for their end.
+@MainActor
+struct EditorSessionTests {
+    private func body(_ store: AlbumStore, _ id: String) -> String? {
+        spread(store.album, id)?.texts.first { $0.id == "body" }?.text
+    }
+
+    private func title(_ store: AlbumStore, _ id: String) -> String? {
+        spread(store.album, id)?.texts.first { $0.id == "title" }?.text
+    }
+
+    /// Lets the run loop end the current event, which closes the undo manager's event group.
+    private func endEvent() {
+        RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+    }
+
+    @Test func undoDuringATextSessionUndoesTheSession() throws {
+        let (model, store, undo) = try makeModel(try standardAlbum())
+        let journal = try #require(store.album.spreads.first { $0.kind == .journal })
+        step(undo) { model.setText("title", "Ravello", in: journal.id) }
+
+        model.beginTextEditing("body", in: journal.id)
+        model.updateText("Pláž")
+        model.undo()
+        #expect(!model.isEditingText)
+        #expect(body(store, journal.id) == "")  // the session, not the edit before it
+        #expect(title(store, journal.id) == "Ravello")
+        #expect(model.displayedSpread(journal.id)?.texts.first { $0.id == "body" }?.text == "")
+        #expect(undo.canRedo)
+
+        model.redo()
+        #expect(body(store, journal.id) == "Pláž")
+        model.undo()
+        model.undo()
+        #expect(title(store, journal.id) == AlbumDrafter.noPlaceTitle)
+        #expect(!undo.canUndo)
+    }
+
+    @Test func aSessionEndedByAnotherActionIsItsOwnStep() throws {
+        let (model, store, _) = try makeModel(try standardAlbum())
+        let undo = UndoManager()  // groups by event, like the window's
+        model.undoManager = undo
+        let journal = try #require(store.album.spreads.first { $0.templateID == "journal-5" })
+
+        model.beginTextEditing("body", in: journal.id)
+        model.updateText("Pláž")
+        // A toolbar action while the text field still has focus, in the same event.
+        _ = model.changeTemplate(to: "journal-4", in: journal.id)
+        endEvent()
+        #expect(spread(store.album, journal.id)?.templateID == "journal-4")
+        #expect(undo.undoActionName == "Změnit šablonu")
+
+        model.undo()
+        endEvent()
+        #expect(spread(store.album, journal.id)?.templateID == "journal-5")
+        #expect(body(store, journal.id) == "Pláž")  // one Undo reverts only the action
+        #expect(undo.undoActionName == "Upravit text")
+
+        model.undo()
+        endEvent()
+        #expect(body(store, journal.id) == "")
+        #expect(!undo.canUndo)
+    }
+
+    @Test func anEditEarlierInTheSameEventStaysItsOwnStepToo() throws {
+        let (model, store, _) = try makeModel(try standardAlbum())
+        let undo = UndoManager()
+        model.undoManager = undo
+        let journal = try #require(store.album.spreads.first { $0.templateID == "journal-5" })
+
+        model.setText("title", "Ravello", in: journal.id)  // opens the event's undo group
+        model.beginTextEditing("body", in: journal.id)
+        model.updateText("Pláž")
+        _ = model.changeTemplate(to: "journal-4", in: journal.id)
+        endEvent()
+
+        model.undo(); endEvent()
+        #expect(spread(store.album, journal.id)?.templateID == "journal-5")
+        #expect(body(store, journal.id) == "Pláž" && title(store, journal.id) == "Ravello")
+        model.undo(); endEvent()
+        #expect(body(store, journal.id) == "" && title(store, journal.id) == "Ravello")
+        model.undo(); endEvent()
+        #expect(title(store, journal.id) == AlbumDrafter.noPlaceTitle)
+        #expect(!undo.canUndo)
+    }
+
+    @Test func textReachesTheStoreWithinTheDebounceAsOneStep() async throws {
+        let (model, store, undo) = try makeModel(try standardAlbum())
+        model.textCommitDelay = .milliseconds(30)
+        let journal = try #require(store.album.spreads.first { $0.kind == .journal })
+
+        model.beginTextEditing("body", in: journal.id)
+        model.updateText("Pl")
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(body(store, journal.id) == "Pl")  // visible to the autosave snapshot
+        model.updateText("Pláž")
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(body(store, journal.id) == "Pláž")
+        #expect(model.isEditingText)
+        model.endTextEditing()
+
+        #expect(undo.undoActionName == "Upravit text")
+        undo.undo()  // the whole session is one step
+        #expect(body(store, journal.id) == "")
+        #expect(!undo.canUndo)
+        undo.redo()
+        #expect(body(store, journal.id) == "Pláž")
+    }
+
+    @Test func storeFlushCommitsTheSession() throws {
+        let (model, store, undo) = try makeModel(try standardAlbum())
+        let journal = try #require(store.album.spreads.first { $0.kind == .journal })
+        model.beginTextEditing("body", in: journal.id)
+        model.updateText("Pláž")
+        store.flushPendingEdits()
+        #expect(body(store, journal.id) == "Pláž")
+        #expect(!model.isEditingText)
+        #expect(undo.undoActionName == "Upravit text")
+
+        // A crop gesture too.
+        model.beginTransform(frame: journal.frames[0].id, in: journal.id)
+        model.nudge(frame: journal.frames[0].id, offset: Point(x: 0.5, y: 0), zoom: 2)
+        store.flushPendingEdits()
+        #expect(spread(store.album, journal.id)?.frames[0].zoom == 2)
+    }
+
+    @Test func closingTheSessionFlushesTheEditor() throws {
+        let album = try standardAlbum()
+        let url = makeTempDir().appendingPathComponent("Close.leporelo")
+        _ = try ProjectPackage.create(at: url, album: album)
+        let session = AlbumSession(placeResolver: { InMemoryPlaceResolver([]) })
+        let document = try AlbumDocument(file: FileWrapper(url: url, options: []))
+        session.bind(document: document, fileURL: url, sourceProvider: { _ in FakePhotoSource() })
+        let store = try #require(session.store)
+        let model = EditorModel(store: store, geometry: try laxGeometry())
+        let journal = try #require(store.album.spreads.first { $0.kind == .journal })
+
+        model.beginTextEditing("body", in: journal.id)
+        model.updateText("Pláž")
+        session.close()  // window closes (also runs before every rebind)
+        #expect(body(store, journal.id) == "Pláž")
+        #expect(document.currentAlbum == store.album)
     }
 }

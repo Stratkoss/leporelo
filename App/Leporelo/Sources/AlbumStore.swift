@@ -31,6 +31,7 @@ final class AlbumStore {
     @ObservationIgnored private let snapshotBox: AlbumSnapshotBox
     /// Marks the document changed for edits that register no undo (set by `AlbumDocument.bind`).
     @ObservationIgnored var markChanged: (@MainActor () -> Void)?
+    @ObservationIgnored private var pendingEditsFlushers: [@MainActor () -> Void] = []
 
     init(album: Album, package: ProjectPackage, snapshotBox: AlbumSnapshotBox? = nil) {
         self.album = album
@@ -80,6 +81,21 @@ final class AlbumStore {
         }
         undoManager.setActionName(actionName)
     }
+
+    /// Writes edits that live outside the album for now (the editor's text and crop sessions) into
+    /// the store. The window calls it before it closes or rebinds (`AlbumSession.close`). Autosave
+    /// cannot call it: SwiftUI snapshots off the main thread (`AlbumSnapshotBox`), so the editor
+    /// also writes session text within a short delay by itself.
+    func flushPendingEdits() {
+        for flush in pendingEditsFlushers { flush() }
+    }
+
+    /// Registers a flush for `flushPendingEdits` (the editor registers `commitSessions`, holding
+    /// itself weakly, so a flusher of a model that is gone does nothing).
+    func addPendingEditsFlusher(_ flush: @escaping @MainActor () -> Void) {
+        pendingEditsFlushers.append(flush)
+    }
+
 
     /// How many steps the window's undo manager keeps. Every `replace` step holds a whole album,
     /// so unlimited undo would grow without bound during a long editing session.

@@ -41,8 +41,10 @@ final class AlbumSession {
         }
     }
 
-    /// Cancels the background work (window closed, or before a rebind).
+    /// Commits the editor's pending sessions into the store, then cancels the background work
+    /// (window closed, or before a rebind after revert/reload/move).
     func close() {
+        store?.flushPendingEdits()
         work?.cancel()
         work = nil
     }

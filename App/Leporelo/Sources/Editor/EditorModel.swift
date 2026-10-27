@@ -23,9 +23,12 @@ enum TemplateChangeOutcome: Equatable {
 ///
 /// Coalescing: a text editing session (`beginTextEditing` / `updateText` / `endTextEditing`) and a
 /// crop gesture (`beginTransform` / `nudge` / `endTransform`) keep a live preview in the model
-/// (`displayedSpread`) and store ONE edit when they end. Any other edit, and choosing another
-/// spread, ends a running session first (it is committed, not discarded). The view must end a
-/// session before it triggers Undo (21b: end editing on ⌘Z / focus loss).
+/// (`displayedSpread`) and are ONE undo step each. Session text also reaches the store
+/// `textCommitDelay` after the last keystroke (same step), because autosave reads the album off
+/// the main thread and cannot ask the model to flush (see `AlbumSnapshotBox`). Any other edit,
+/// choosing another spread, `undo()`/`redo()` and `AlbumStore.flushPendingEdits()` (window close,
+/// rebind) commit a running session first, as its own undo step. 21b routes Edit > Undo/Redo
+/// through `undo()`/`redo()`.
 ///
 /// Derived data (tray, placed photos, preflight) is cached per `AlbumStore.revision`; reading any
 /// of it observes the store, so views update on every change, undo included.
@@ -41,6 +44,31 @@ final class EditorModel {
     init(store: AlbumStore, geometry: PageGeometry) {
         self.store = store
         self.geometryCache = geometry
+        // The window calls `store.flushPendingEdits()` before it closes or rebinds.
+        store.addPendingEditsFlusher { [weak self] in self?.commitSessions() }
+    }
+
+    /// How long after the last keystroke a text session's text is written to the store (and so
+    /// reaches the autosave snapshot). The session stays one undo step.
+    @ObservationIgnored var textCommitDelay: Duration = .milliseconds(500)
+
+    // MARK: Undo
+
+    /// Edit > Undo for the editor (21b routes the menu and ⌘Z here). A running session is
+    /// committed first as its own step, then undone: Undo while typing undoes the typing, like a
+    /// text editor, and never reverts the step before the session while the preview keeps the text.
+    func undo() {
+        commitSessions()
+        guard let undoManager, undoManager.canUndo else { return }
+        undoManager.undo()
+    }
+
+    /// Edit > Redo for the editor. A session with changed text is committed first (a new change,
+    /// so, as in any editor, there is nothing left to redo then).
+    func redo() {
+        commitSessions()
+        guard let undoManager, undoManager.canRedo else { return }
+        undoManager.redo()
     }
 
     // MARK: Geometry
@@ -215,6 +243,7 @@ final class EditorModel {
         let g = geometry
         let draft = Workflow.draft(album: album, profile: g.profile, format: g.format)
         guard !draft.spreads.isEmpty else { return false }
+        startStepAfterSessionCommit()
         store.replace(album: draft, actionName: "Navrhnout album", undoManager: undoManager)
         requestedSpreadID = nil
         return true
@@ -236,6 +265,7 @@ final class EditorModel {
         let result = AlbumUpdater.redraft(album: album, days: Workflow.days(of: album),
                                           profile: g.profile, format: g.format)
         if result.album != album {
+            startStepAfterSessionCommit()
             store.replace(album: result.album, actionName: "Navrhnout znovu", undoManager: undoManager)
         }
         return result.keptManual
@@ -250,6 +280,7 @@ final class EditorModel {
         guard formatID != store.album.formatID,
               let format = g.profile.formats.first(where: { $0.id == formatID }) else { return false }
         let updated = AlbumUpdater.changeFormat(album: store.album, to: format, profile: g.profile)
+        startStepAfterSessionCommit()
         store.replace(album: updated, actionName: "Změnit formát", undoManager: undoManager)
         return true
     }
@@ -257,11 +288,12 @@ final class EditorModel {
     // MARK: Photos in frames
 
     /// Puts photo `id` into frame `frameID` of the spread (default: the current one) as one step
-    /// "Vložit fotku". The frame's crop resets. Returns false (nothing changes) for videos,
+    /// "Vložit fotku". The frame's crop resets (except for a swap, below). Returns false (nothing changes) for videos,
     /// unknown photos/frames, or a photo already in that frame.
     ///
     /// A photo is never duplicated in print:
-    /// - already in ANOTHER frame of the same spread: the two frames swap photos;
+    /// - already in ANOTHER frame of the same spread: the two frames swap photos, each photo
+    ///   keeping its crop (as `swap`);
     /// - target is a journal/gallery spread and the photo sits in another journal/gallery spread:
     ///   it MOVES (that frame is emptied, marked by the preflight, and that spread becomes
     ///   manually edited too). Intro, closing and cover frames are left alone: they repeat a day
@@ -280,13 +312,12 @@ final class EditorModel {
 
         var edits: [AlbumEdit] = []
         if !photo.isSelected { edits.append(.setSelected(id, true)) }
-        let previous = target.frames[f].photoID
         if let g = target.frames.indices.first(where: { $0 != f && target.frames[$0].photoID == id }) {
-            target.frames[g].photoID = previous
-            Self.resetCrop(&target.frames[g])
+            Self.swapFrames(&target, f, g)  // exactly like swap(): each crop stays with its photo
+        } else {
+            target.frames[f].photoID = id
+            Self.resetCrop(&target.frames[f])
         }
-        target.frames[f].photoID = id
-        Self.resetCrop(&target.frames[f])
         edits.append(.replaceSpread(target))
 
         if Self.isDaySpread(target) {
@@ -311,6 +342,12 @@ final class EditorModel {
               var spread = store.album.spreads.first(where: { $0.id == id }),
               let a = spread.frames.firstIndex(where: { $0.id == frameA }),
               let b = spread.frames.firstIndex(where: { $0.id == frameB }) else { return }
+        Self.swapFrames(&spread, a, b)
+        perform([.replaceSpread(spread)], "Prohodit fotky")
+    }
+
+    /// Exchanges photo, offset and zoom of two frames (shared by `swap` and `dropPhoto`).
+    private static func swapFrames(_ spread: inout Spread, _ a: Int, _ b: Int) {
         let first = spread.frames[a]
         spread.frames[a].photoID = spread.frames[b].photoID
         spread.frames[a].offset = spread.frames[b].offset
@@ -318,7 +355,6 @@ final class EditorModel {
         spread.frames[b].photoID = first.photoID
         spread.frames[b].offset = first.offset
         spread.frames[b].zoom = first.zoom
-        perform([.replaceSpread(spread)], "Prohodit fotky")
     }
 
     // MARK: Crop (offset and zoom)
@@ -369,8 +405,10 @@ final class EditorModel {
         guard let frame = store.album.spreads.first(where: { $0.id == session.spreadID })?
             .frames.first(where: { $0.id == session.frameID }),
               frame.offset != session.offset || frame.zoom != session.zoom else { return }
-        perform([.setFrameTransform(spreadID: session.spreadID, frameID: session.frameID,
-                                    offset: session.offset, zoom: session.zoom)], "Posunout fotku")
+        asOwnStep {
+            perform([.setFrameTransform(spreadID: session.spreadID, frameID: session.frameID,
+                                        offset: session.offset, zoom: session.zoom)], "Posunout fotku")
+        }
     }
 
     // MARK: Texts
@@ -379,15 +417,24 @@ final class EditorModel {
         var spreadID: String
         var textID: String
         var text: String
+        /// The session's undo step exists (its first store write registered it).
+        var registered = false
+        /// The store revision right after the session's last write; a different revision means
+        /// something else changed the album since (e.g. an Undo from outside the editor).
+        var storedRevision: Int?
     }
 
     private var textSession: TextSession?
+    @ObservationIgnored private var textCommitTask: Task<Void, Never>?
 
     /// Whether a text editing session is running.
     var isEditingText: Bool { textSession != nil }
 
-    /// Starts editing a text box of the spread (default: current): `updateText` changes only the
-    /// preview, `endTextEditing` stores one step "Upravit text" for the whole session.
+    /// Starts editing a text box of the spread (default: current). The whole session is ONE undo
+    /// step "Upravit text": `updateText` updates the preview at once and, `textCommitDelay` after
+    /// the last keystroke, writes the text to the store (the first write registers the step, later
+    /// writes amend it without a new step: the step's inverse restores the spread from before the
+    /// session, so it undoes all of it). `endTextEditing` writes the final text.
     func beginTextEditing(_ textID: String, in spreadID: String? = nil) {
         commitSessions()
         guard let id = spreadID ?? currentSpreadID,
@@ -396,18 +443,46 @@ final class EditorModel {
         textSession = TextSession(spreadID: id, textID: textID, text: box.text)
     }
 
-    /// The live text of the running session (no store change, no undo step).
+    /// The live text of the running session: the preview at once, the store after the delay.
     func updateText(_ text: String) {
+        guard textSession != nil else { return }
         textSession?.text = text
+        textCommitTask?.cancel()
+        let delay = textCommitDelay
+        textCommitTask = Task { [weak self] in
+            try? await Task.sleep(for: delay)
+            guard !Task.isCancelled else { return }
+            self?.storeSessionText()
+        }
     }
 
-    /// Ends the session: stores the text as one step if it differs from the stored one.
+    /// Ends the session: stores the final text (nothing if it equals the stored one).
     func endTextEditing() {
-        guard let session = textSession else { return }
+        textCommitTask?.cancel()
+        textCommitTask = nil
+        storeSessionText()
         textSession = nil
-        guard let box = store.album.spreads.first(where: { $0.id == session.spreadID })?
-            .texts.first(where: { $0.id == session.textID }), box.text != session.text else { return }
-        perform([.setText(spreadID: session.spreadID, textID: session.textID, text: session.text)], "Upravit text")
+    }
+
+    /// Writes the session text to the store; see `beginTextEditing` for the one-step rule.
+    private func storeSessionText() {
+        guard var session = textSession,
+              let box = store.album.spreads.first(where: { $0.id == session.spreadID })?
+                .texts.first(where: { $0.id == session.textID }), box.text != session.text else { return }
+        let edit = AlbumEdit.setText(spreadID: session.spreadID, textID: session.textID, text: session.text)
+        if session.registered, session.storedRevision == store.revision {
+            do {
+                try store.applyWithoutUndo(edit)
+            } catch {
+                Logger.editor.error("Text update failed: \(String(describing: error), privacy: .public)")
+            }
+        } else {
+            var stored = false
+            asOwnStep { stored = perform([edit], "Upravit text") }
+            session.registered = stored
+        }
+        session.storedRevision = store.revision
+        textSession = session
     }
 
     /// Sets a text at once as one step "Upravit text" (no session).
@@ -431,10 +506,61 @@ final class EditorModel {
         return spread
     }
 
-    /// Ends running sessions, storing what they changed.
+    /// Ends running sessions, storing what they changed, each as its OWN undo step (see
+    /// `asOwnStep`). Every other edit, choosing another spread, `undo`/`redo` and
+    /// `AlbumStore.flushPendingEdits` (window close, rebind) call it first.
     func commitSessions() {
         endTextEditing()
         endTransform()
+    }
+
+    /// A session commit registered a step in the current event; the next action must start a
+    /// step of its own (`startStepAfterSessionCommit`).
+    @ObservationIgnored private var sessionCommittedInEvent = false
+
+    /// Runs a session commit (`body` registers one undo step) as an undo step of its own.
+    ///
+    /// The window's undo manager groups by event: it opens a group lazily at the first
+    /// registration of an event (level 1) and closes it when the run loop finishes the event, and
+    /// that end requires level 1 (an extra `endUndoGrouping` throws; an empty group left behind
+    /// becomes an empty undo step). So, verified against NSUndoManager:
+    /// - level 1 (something earlier in this event registered): close that group and open a fresh
+    ///   one for the commit (`end` + `begin` in the same event gives level 1 again); the run loop
+    ///   closes it, or the next action splits it again;
+    /// - level 0: a plain registration opens the event's group;
+    /// - a manager that does not group by event (tests) at level 0 gets an explicit group; deeper
+    ///   levels are a caller's explicit group and nest.
+    /// Afterwards `sessionCommittedInEvent` makes the following action split once more, so
+    /// "commit + action" are TWO steps with their own names and one Undo reverts only the action.
+    private func asOwnStep(_ body: () -> Void) {
+        guard let undoManager else { return body() }
+        if undoManager.groupsByEvent {
+            splitEventGroup()
+            body()
+            sessionCommittedInEvent = true
+        } else if undoManager.groupingLevel == 0 {
+            undoManager.beginUndoGrouping()
+            body()
+            undoManager.endUndoGrouping()
+        } else {
+            body()
+        }
+    }
+
+    /// Called right before an action registers: if a session commit registered in this event,
+    /// the action gets its own group (see `asOwnStep`).
+    private func startStepAfterSessionCommit() {
+        guard sessionCommittedInEvent else { return }
+        sessionCommittedInEvent = false
+        splitEventGroup()
+    }
+
+    /// Closes the event's open undo group (level 1 of a manager grouping by event) and opens a
+    /// new one, so what follows is a separate step. Only call it right before a registration.
+    private func splitEventGroup() {
+        guard let undoManager, undoManager.groupsByEvent, undoManager.groupingLevel == 1 else { return }
+        undoManager.endUndoGrouping()
+        undoManager.beginUndoGrouping()
     }
 
     // MARK: Templates
@@ -466,7 +592,11 @@ final class EditorModel {
     func changeTemplate(to templateID: String, in spreadID: String? = nil,
                         confirmTextLoss: Bool = false) -> TemplateChangeOutcome {
         commitSessions()
-        guard let result = previewTemplateChange(to: templateID, in: spreadID) else { return .unavailable }
+        guard let id = spreadID ?? currentSpreadID,
+              let spread = store.album.spreads.first(where: { $0.id == id }) else { return .unavailable }
+        // The spread's own template: nothing to do, no undo step, the spread stays unedited.
+        if spread.templateID == templateID { return .applied(unplacedPhotoIDs: []) }
+        guard let result = previewTemplateChange(to: templateID, in: id) else { return .unavailable }
         if !result.droppedTexts.isEmpty && !confirmTextLoss { return .needsTextLossConfirmation(result.droppedTexts) }
         return perform([.replaceSpread(result.spread)], "Změnit šablonu")
             ? .applied(unplacedPhotoIDs: result.unplacedPhotoIDs) : .unavailable
@@ -488,7 +618,7 @@ final class EditorModel {
     /// "Přidat dvoustranu": an EMPTY spread of `kind` (`defaultTemplateID`) with id `manual-N`
     /// (smallest free N; the drafter never uses that prefix), `manuallyEdited = true` so
     /// "Navrhnout znovu" keeps it. Inserted after spread `after`; nil = at the end, before the
-    /// closing spread if the album ends with one. A gallery/journal takes the day of the spread it
+    /// closing spread if the album ends with one (also for `after` = that closing spread). A gallery/journal takes the day of the spread it
     /// follows, else of the spread after it, else the tray day. Its empty frames are flagged by the
     /// preflight until filled. Becomes the current spread. Returns its id (nil: unknown `after`).
     @discardableResult
@@ -498,7 +628,8 @@ final class EditorModel {
         let index: Int
         if let after {
             guard let i = spreadIndex(of: after) else { return nil }
-            index = i + 1
+            // Nothing goes after the closing spread: "after the closing" means before it.
+            index = spreads[i].kind == .closing && i == spreads.count - 1 ? i : i + 1
         } else {
             index = spreads.last?.kind == .closing ? spreads.count - 1 : spreads.count
         }
@@ -526,12 +657,16 @@ final class EditorModel {
         perform([.deleteSpread(id: id)], "Smazat dvoustranu")
     }
 
-    /// "Přesunout dvoustranu" to `index` (clamped to the album).
+    /// "Přesunout dvoustranu" to `index`. A leading intro stays first and a trailing closing
+    /// stays last: they cannot be moved, and other spreads are clamped between them.
     func moveSpread(_ id: String, to index: Int) {
         commitSessions()
-        let count = store.album.spreads.count
-        guard let from = spreadIndex(of: id), count > 0 else { return }
-        let to = min(max(index, 0), count - 1)
+        let spreads = store.album.spreads
+        guard let from = spreadIndex(of: id) else { return }
+        let first = spreads.first?.kind == .intro ? 1 : 0
+        let last = spreads.count - 1 - (spreads.count > 1 && spreads.last?.kind == .closing ? 1 : 0)
+        guard from >= first, from <= last else { return }  // the intro or the closing itself
+        let to = min(max(index, first), last)
         guard from != to else { return }
         perform([.moveSpread(from: from, to: to)], "Přesunout dvoustranu")
     }
@@ -570,6 +705,10 @@ final class EditorModel {
     @discardableResult
     private func perform(_ edits: [AlbumEdit], _ actionName: String) -> Bool {
         do {
+            // Validate first: a split undo group that then registers nothing is an empty step.
+            var check = store.album
+            for edit in edits { check = try check.applying(edit).album }
+            startStepAfterSessionCommit()
             try store.apply(edits, actionName: actionName, undoManager: undoManager)
             return true
         } catch {

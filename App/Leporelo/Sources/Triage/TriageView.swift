@@ -34,14 +34,8 @@ struct TriageView: View {
                 footer
             }
         }
-        .onAppear {
-            AlbumStore.configure(undoManager)
-            model.undoManager = undoManager
-        }
-        .onChange(of: undoManager) { _, manager in
-            AlbumStore.configure(manager)
-            model.undoManager = manager
-        }
+        .onAppear { model.undoManager = undoManager }
+        .onChange(of: undoManager) { _, manager in model.undoManager = manager }
     }
 
     // MARK: Days
