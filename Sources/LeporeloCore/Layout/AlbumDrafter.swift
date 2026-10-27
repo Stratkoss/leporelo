@@ -296,12 +296,6 @@ public enum AlbumDrafter {
         key.map { String(format: "%04d-%02d-%02d", $0.year, $0.month, $0.day) } ?? "day"
     }
 
-    /// Caption of a day's first spread without the day's texts (`AlbumUpdater`'s new `gallery-1`):
-    /// "čtvrtek 18. června 2026, Ravello".
-    static func dayCaption(_ key: DayKey, placeNames: [String]) -> String {
-        czechDate(key) + (placeNames.isEmpty ? "" : ", " + placeNames.joined(separator: ", "))
-    }
-
     /// Intro body: the date range of `days` (ascending), then their places in order of first
     /// occurrence. Empty for no days.
     static func introBody(_ days: [DayGroup]) -> String {

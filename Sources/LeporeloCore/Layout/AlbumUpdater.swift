@@ -387,7 +387,7 @@ public enum AlbumUpdater {
 
     /// The spread carries the day's header (spec 4.1): it is a journal, has a non-empty date or
     /// title text, or a caption starting with the day's date (an old book's first gallery of a
-    /// day without a journal, `AlbumDrafter.dayCaption`).
+    /// day without a journal has the caption "čtvrtek 18. června 2026, Ravello").
     static func hasDayHeader(_ spread: Spread) -> Bool {
         if spread.kind == .journal { return true }
         return spread.texts.contains { text in

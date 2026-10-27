@@ -57,8 +57,9 @@ import Foundation
             }
             for start in stride(from: 0, to: rest.count, by: 2) {
                 let chunk = Array(rest[start..<min(start + 2, rest.count)])
-                let caption = photos.count < 3 && start == 0
-                    ? AlbumDrafter.dayCaption(group.dayKey, placeNames: group.placeNames) : ""
+                // The old drafter's day caption: "čtvrtek 18. června 2026, Ravello".
+                let dayCaption = ([AlbumDrafter.czechDate(group.dayKey)] + group.placeNames).joined(separator: ", ")
+                let caption = photos.count < 3 && start == 0 ? dayCaption : ""
                 plan.append(("gallery-\(chunk.count)", group.dayKey, chunk, [.caption: caption]))
             }
         }
