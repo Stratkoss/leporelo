@@ -164,6 +164,18 @@ import Foundation
         #expect(Set(placed) == selected)
         #expect(p.pageCount.isSatisfied(by: AlbumDrafter.pageCount(of: a)))
         #expect(Self.misfits(a).isEmpty)
+        // Spec 8: no `empty` page inside a day; no two adjacent pages with the same layout (the
+        // rulings allow a forced repeat in a portrait-only run or after a parity split; this book
+        // has neither, so the check is strict); every hero of a day is on a `full` page.
+        let pages = Self.pages(Self.daySpreads(a))
+        #expect(!pages.contains { $0.layout == "empty" || $0.layout.isEmpty }, "\(pages.map(\.layout))")
+        #expect(zip(pages, pages.dropFirst()).allSatisfy { $0.layout != $1.layout }, "\(pages.map(\.layout))")
+        let titlePhotos = Set([a.spreads.first, a.spreads.last].compactMap { $0?.frames.first?.photoID })
+        let candidates = PagePlanner.heroCandidates(days.flatMap(\.photos), excluding: titlePhotos)
+        let heroes = days.flatMap { PagePlanner.dayHeroes($0.photos, candidates: candidates) }
+        #expect(heroes.count >= 3)
+        let full = Set(pages.filter { $0.layout == "full" }.flatMap(\.photos))
+        #expect(Set(heroes).isSubset(of: full), "heroes \(heroes.sorted()), full \(full.sorted())")
     }
 
     @Test func introPhotoIsNotAHero() throws {
