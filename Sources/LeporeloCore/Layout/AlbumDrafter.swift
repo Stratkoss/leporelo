@@ -83,8 +83,9 @@ public enum AlbumDrafter {
         let ranked = allSelected.sorted(by: rank)
         let introPhoto = ranked.first(where: \.isLandscape) ?? ranked[0]
         // The intro photo is also the cover photo, so it is never a hero, even without an intro.
-        let heroes = PagePlanner.heroCandidates(
-            allSelected, excluding: options.includeClosing ? [introPhoto.id, lastPhoto.id] : [introPhoto.id])
+        // These photos never get a whole page in a day, not even as a rescue page (spec 4.2).
+        let notFull: Set<PhotoID> = options.includeClosing ? [introPhoto.id, lastPhoto.id] : [introPhoto.id]
+        let heroes = PagePlanner.heroCandidates(allSelected, excluding: notFull)
         let weights = options.layoutWeights
 
         // 1. Plan the days. When the book has more pages than the supplier's maximum, plan every
@@ -93,7 +94,8 @@ public enum AlbumDrafter {
         var plans = selectedDays.compactMap { group, photos -> DayPlan? in
             let dayPhotos = photos.filter { !excludedFromDays.contains($0.id) }
             if dayPhotos.isEmpty { return nil }
-            return DayPlan(group: group, photos: dayPhotos, opener: !galleryOnlyDays.contains(group.dayKey))
+            return DayPlan(group: group, photos: dayPhotos, opener: !galleryOnlyDays.contains(group.dayKey),
+                           notFull: notFull)
                 .planned(target: start, heroes: heroes, weights: weights)
         }
         let fixedSpreads = (includeIntro ? 1 : 0) + (options.includeClosing ? 1 : 0) + reservedSpreads
@@ -151,12 +153,14 @@ public enum AlbumDrafter {
         var group: DayGroup
         var photos: [Photo]
         var opener: Bool
+        /// The intro and closing photos: never on a `full` page.
+        var notFull: Set<PhotoID>
         var pages: [PlannedPage] = []
 
         func planned(target: Int, heroes: Set<PhotoID>, weights: LayoutWeights) -> DayPlan {
             var plan = self
             plan.pages = PagePlanner.planDay(photos, heroCandidates: heroes, opener: opener, target: target,
-                                             weights: weights)
+                                             weights: weights, excluding: notFull)
             return plan
         }
 
@@ -181,7 +185,7 @@ public enum AlbumDrafter {
             return da != db ? da > db : a < b
         }
         for i in order {
-            if let pages = PagePlanner.expand(plans[i].pages, by: 2, weights: weights) {
+            if let pages = PagePlanner.expand(plans[i].pages, by: 2, weights: weights, excluding: plans[i].notFull) {
                 plans[i].pages = pages
                 return true
             }

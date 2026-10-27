@@ -183,6 +183,28 @@ import Foundation
         #expect(pages.contains { $0.photos.contains("star") })
     }
 
+    // Spec 4.2: padding splits a short book into 1-photo pages, but the intro and closing photos
+    // stay ordinary photos (never `full`) in the day.
+    @Test func paddingKeepsIntroAndClosingPhotosOffFullPages() throws {
+        let (p, f) = try Self.canva(formatID: "landscape-8x6in")
+        // Scores below the hero minimum; "star" is the intro photo, "last" the closing photo.
+        // Without the exclusion both land on `full` pages here.
+        var photos = (0..<10).map { Self.photo("a\($0)", day: Self.june18, minute: $0, aesthetic: 0.1 + Double($0 % 3) * 0.05) }
+        photos[3] = Self.photo("star", day: Self.june18, minute: 3, aesthetic: 0.95)
+        photos[9] = Self.photo("last", day: Self.june18, minute: 9, aesthetic: 0.1)
+        let a = Self.draft([Self.day(Self.june18, photos)], profile: p, format: f)
+        #expect(a.spreads.first?.frames.first?.photoID == "star")
+        #expect(a.spreads.last?.frames.first?.photoID == "last")
+        let pages = Self.pages(Self.daySpreads(a))
+        #expect(pages.filter { $0.photos.count == 1 }.count >= 4)   // padded down to single photos
+        let full = pages.filter { $0.layout == "full" }.flatMap(\.photos)
+        #expect(!full.contains("star"))
+        #expect(!full.contains("last"))
+        #expect(pages.contains { $0.photos.contains("star") })
+        #expect(pages.contains { $0.photos.contains("last") })
+        #expect(Self.misfits(a).isEmpty)
+    }
+
     @Test func galleryOnlyDayHasNoOpenerAndSkipsExcludedPhotos() throws {
         let (p, f) = try Self.canva(PageCountRule(min: 2, max: nil, multipleOf: 2), formatID: "landscape-8x6in")
         let days = [Self.day(Self.june18, Self.mixedPhotos("a", Self.june18, count: 7)),
@@ -414,7 +436,7 @@ import Foundation
         let intro = try #require(a.spreads.first?.frames.first?.photoID)
         let closing = try #require(a.spreads.last?.frames.first?.photoID)
         let planned = PagePlanner.planDay(photos, heroCandidates: PagePlanner.heroCandidates(photos, excluding: [intro, closing]),
-                                          opener: true, target: 3, weights: weights)
+                                          opener: true, target: 3, weights: weights, excluding: [intro, closing])
         let pages = Self.pages(Self.daySpreads(a))
         #expect(pages.map(\.layout) == planned.map(\.layoutID))
         #expect(pages.map(\.photos) == planned.map { $0.photos.map(\.id) })

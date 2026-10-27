@@ -64,6 +64,20 @@ import Foundation
         #expect(PagePlanner.expand(pair, by: 2, weights: .init()) == nil)
     }
 
+    // Spec 4.2: the intro and closing photos never get a whole page, not even as a rescue page.
+    @Test func excludedPhotosGetFramedInsteadOfFull() throws {
+        let photo = T.photo("p0", day: Self.day, minute: 0)
+        #expect(PagePlanner.planDay([photo], heroCandidates: [], opener: true, target: 3, weights: .init())
+            .map(\.layoutID) == ["opener-text", "full"])
+        #expect(PagePlanner.planDay([photo], heroCandidates: [], opener: true, target: 3, weights: .init(),
+                                    excluding: ["p0"]).map(\.layoutID) == ["opener-text", "framed-1"])
+        let photos = Self.photos([true, true])
+        let pair = [PlannedPage(layoutID: "opener-text", photos: []),
+                    PlannedPage(layoutID: "landscape-2", photos: photos)]
+        let split = try #require(PagePlanner.expand(pair, by: 1, weights: .init(), excluding: ["p0", "p1"]))
+        #expect(split.map(\.layoutID) == ["opener-text", "framed-1", "framed-1"])
+    }
+
     @Test func twelveLandscapesEvenNoRepeatsNoMismatch() {
         let photos = Self.photos(Array(repeating: true, count: 12))
         let pages = Self.plan(photos)

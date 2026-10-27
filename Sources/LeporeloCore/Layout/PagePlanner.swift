@@ -71,16 +71,18 @@ public enum PagePlanner {
         }.map(\.id))
     }
 
-    /// The pages of one day; `photos` are chronological. The page count is even.
+    /// The pages of one day; `photos` are chronological. The page count is even. Photos in
+    /// `excluding` (intro, closing, cover) never get a `full` page, not even as a rescue page
+    /// (spec 4.2): a single one gets `framed-1`.
     public static func planDay(_ photos: [Photo], heroCandidates: Set<PhotoID>, opener: Bool, target: Int,
-                               weights: LayoutWeights) -> [PlannedPage] {
+                               weights: LayoutWeights, excluding: Set<PhotoID> = []) -> [PlannedPage] {
         let heroes = dayHeroes(photos, candidates: heroCandidates)
         var runs: [[Photo]] = [[]]
         for p in photos {
             if heroes.contains(p.id) { runs.append([]) } else { runs[runs.count - 1].append(p) }
         }
         let heroPages = photos.filter { heroes.contains($0.id) }.map { PlannedPage(layoutID: "full", photos: [$0]) }
-        let planner = Planner(target: target, weights: weights)
+        let planner = Planner(target: target, weights: weights, notFull: excluding)
         var parts: [[PlannedPage]] = []
         /// The pages before run `i`.
         func prefix(_ i: Int) -> [PlannedPage] {
@@ -119,9 +121,11 @@ public enum PagePlanner {
     /// chronologically in two (see `splitting`). 1-photo pages follow the rescue rule (`full` for
     /// a ▭/square with a long side of 1800 px or more, else `framed-1`; ▯ `portrait-text`). A split
     /// must keep orientations matching; a page that cannot split so yields to the next one.
-    /// Layouts repeat only where a split forces it.
-    public static func expand(_ pages: [PlannedPage], by extra: Int, weights: LayoutWeights) -> [PlannedPage]? {
-        let planner = Planner(target: 1, weights: weights)
+    /// Layouts repeat only where a split forces it. Photos in `excluding` get `framed-1` instead of
+    /// `full`, as in `planDay`.
+    public static func expand(_ pages: [PlannedPage], by extra: Int, weights: LayoutWeights,
+                              excluding: Set<PhotoID> = []) -> [PlannedPage]? {
+        let planner = Planner(target: 1, weights: weights, notFull: excluding)
         var result = pages
         for _ in 0..<max(0, extra) {
             guard let split = planner.splitting(result, clean: true) else { return nil }
@@ -149,6 +153,8 @@ public enum PagePlanner {
 private struct Planner {
     var target: Int
     var weights: LayoutWeights
+    /// Photos that never get a `full` page (intro, closing, cover).
+    var notFull: Set<PhotoID> = []
 
     // MARK: Search
 
@@ -315,11 +321,11 @@ private struct Planner {
     /// only for the search: `framed-1` after `full` (no two full pages in a row, spec 4.2) and,
     /// after a page of several photos, the first photo alone.
     func rescue(_ window: [Photo]) -> [PlannedPage] {
-        if window.count == 1, let p = window.first { return Self.single(p) }
+        if window.count == 1, let p = window.first { return single(p) }
         if let sparse = PageLayoutCatalog.all.first(where: {
             $0.role == .sparse && $0.photoCount == window.count && Self.canHold(window, in: $0)
         }) {
-            return [Self.page(sparse, window)] + Self.single(window[0])
+            return [Self.page(sparse, window)] + single(window[0])
         }
         let best = PageLayoutCatalog.dense.filter { $0.photoCount <= window.count }
             .map { ($0, Self.looseFill($0, from: window)) }
@@ -328,14 +334,16 @@ private struct Planner {
                 if a.0.photoCount != b.0.photoCount { return a.0.photoCount > b.0.photoCount }
                 return (Self.catalogIndex[a.0.id] ?? 0) < (Self.catalogIndex[b.0.id] ?? 0)
             }!
-        return [Self.page(best.0, best.1.photos)] + Self.single(window[0])
+        return [Self.page(best.0, best.1.photos)] + single(window[0])
     }
 
-    /// The pages for one photo: `full` (then `framed-1`), `framed-1` or `portrait-text`.
-    private static func single(_ p: Photo) -> [PlannedPage] {
+    /// The pages for one photo: `full` (then `framed-1`), `framed-1` or `portrait-text`. A photo
+    /// in `notFull` never gets `full`.
+    private func single(_ p: Photo) -> [PlannedPage] {
         let ids = !TemplateLayout.fits(p, .landscape) ? ["portrait-text"]
-            : max(p.pixelWidth, p.pixelHeight) >= PagePlanner.heroMinLongSidePX ? ["full", "framed-1"] : ["framed-1"]
-        return ids.map { page(PageLayoutCatalog.layout(id: $0)!, [p]) }
+            : max(p.pixelWidth, p.pixelHeight) >= PagePlanner.heroMinLongSidePX && !notFull.contains(p.id)
+            ? ["full", "framed-1"] : ["framed-1"]
+        return ids.map { Self.page(PageLayoutCatalog.layout(id: $0)!, [p]) }
     }
 
     // MARK: Filling
@@ -452,7 +460,7 @@ private struct Planner {
             let photos = pages[i].photos.sorted(by: Photo.chronological)
             let before = pages[..<i].map(\.layoutID)
             let after = i + 1 < pages.count ? pages[i + 1].layoutID : nil
-            let half = Planner(target: max(1, photos.count / 2), weights: weights)
+            let half = Planner(target: max(1, photos.count / 2), weights: weights, notFull: notFull)
             let two = half.plan(photos, opener: false, before: before, after: after, goal: .exactly(2), strict: true)
             var split: [PlannedPage]?
             if two.count == 2 && (!clean || two.allSatisfy { mismatches($0) == 0 }) {
@@ -478,7 +486,7 @@ private struct Planner {
 
     /// `photos` as exactly one page with matching orientations, or nil.
     private func onePage(_ photos: [Photo], before: [String], after: String?) -> PlannedPage? {
-        let planner = Planner(target: photos.count, weights: weights)
+        let planner = Planner(target: photos.count, weights: weights, notFull: notFull)
         let pages = planner.plan(photos, opener: false, before: before, after: after, goal: .exactly(1), strict: true)
         return pages.count == 1 && mismatches(pages[0]) == 0 ? pages[0] : nil
     }
