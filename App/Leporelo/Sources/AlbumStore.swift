@@ -80,6 +80,38 @@ final class AlbumStore {
         markChanged?()
     }
 
+    // MARK: Background results (no undo; `BackgroundWork` calls these on the CURRENT album)
+
+    /// Sets the analysis of a batch of photos as ONE no-undo mutation (one snapshot, one
+    /// `markChanged`). Photos no longer in the album are ignored; an empty batch changes nothing.
+    func setAnalyses(_ results: [PhotoID: PhotoAnalysis]) {
+        var updated = album
+        var changed = false
+        for (id, analysis) in results where updated.photos[id] != nil {
+            updated.photos[id]?.analysis = analysis
+            changed = true
+        }
+        if changed { replaceWithoutUndo(album: updated) }
+    }
+
+    /// Applies resolved places to the album as it is NOW (`GroupingService.applyRefinement`), in
+    /// one synchronous step, so day moves the user made while geocoding ran are kept. No undo.
+    @discardableResult
+    func applyPlaceRefinement(_ places: [PhotoID: Place], completed: Bool) -> PlaceRefinement {
+        var updated = album
+        let result = GroupingService.applyRefinement(places, completed: completed, to: &updated)
+        if result.namedPhotos > 0 || result.changedDays > 0 { replaceWithoutUndo(album: updated) }
+        return result
+    }
+
+    /// Recommends photos per day (`Workflow.applyRecommendations`: series, `Recommender`) on the
+    /// current album and selects them, as one no-undo mutation. Only photos the user has not
+    /// decided change, so a photo the user deselected is never reselected, however often this runs.
+    func applyRecommendations() {
+        let updated = Workflow.applyRecommendations(to: album)
+        if updated != album { replaceWithoutUndo(album: updated) }
+    }
+
     /// Points the store at the package's new location after a rename or move.
     func packageMoved(to url: URL) throws {
         guard url != package.url else { return }

@@ -1,7 +1,8 @@
 import LeporeloCore
 import SwiftUI
 
-/// The document window. Placeholder content until Task 19+: the album title and an empty state.
+/// The document window: the background-work banner on top of placeholder content (the album
+/// title; Task 20 brings the triage grid).
 struct AlbumWindow: View {
     let document: AlbumDocument
     let fileURL: URL?
@@ -20,27 +21,38 @@ struct AlbumWindow: View {
         }
     }
 
-    @State private var store: AlbumStore?
-    @State private var bindError: String?
+    @State private var session = AlbumSession()
     @State private var showsNewAlbum = false
+    @Environment(\.photoSourceProvider) private var photoSourceProvider
+
+    private var store: AlbumStore? { session.store }
 
     var body: some View {
-        content
-            .frame(minWidth: 720, minHeight: 480)
-            .navigationTitle(store?.album.title ?? document.currentAlbum.title)
-            .toolbar {
-                ToolbarItem {
-                    Button("Nové album…", systemImage: "plus") { showsNewAlbum = true }
-                }
+        VStack(spacing: 0) {
+            // The banner observes the work's counters itself; this body only reads `session.work`.
+            if let work = session.work { ProgressBanner(work: work) }
+            content.frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .frame(minWidth: 720, minHeight: 480)
+        .navigationTitle(store?.album.title ?? document.currentAlbum.title)
+        .toolbar {
+            ToolbarItem {
+                Button("Nové album…", systemImage: "plus") { showsNewAlbum = true }
             }
-            .sheet(isPresented: $showsNewAlbum) {
-                NewAlbumView(onClose: { showsNewAlbum = false })
-            }
-            .task(id: BindKey(document: document, fileURL: fileURL)) { bind() }
+        }
+        .sheet(isPresented: $showsNewAlbum) {
+            NewAlbumSheet(onClose: { showsNewAlbum = false })
+        }
+        .task(id: BindKey(document: document, fileURL: fileURL)) {
+            // Binds the store once SwiftUI knows the file URL, again after a move, and to the new
+            // document after a reload; the old store's background work is cancelled first.
+            session.bind(document: document, fileURL: fileURL, sourceProvider: photoSourceProvider)
+        }
+        .onDisappear { session.close() }
     }
 
     @ViewBuilder private var content: some View {
-        if let bindError {
+        if let bindError = session.bindError {
             ContentUnavailableView("Album nejde otevřít", systemImage: "exclamationmark.triangle",
                                    description: Text(bindError))
         } else {
@@ -53,19 +65,6 @@ struct AlbumWindow: View {
                     Text("Album zatím není uložené.")
                 }
             }
-        }
-    }
-
-    /// Binds the store to the package once SwiftUI knows the file URL, again after a move, and
-    /// to the new document after a reload. The old store is dropped first.
-    private func bind() {
-        store = nil
-        guard let fileURL else { return }
-        do {
-            store = try document.bind(to: fileURL)
-            bindError = nil
-        } catch {
-            bindError = error.localizedDescription
         }
     }
 }

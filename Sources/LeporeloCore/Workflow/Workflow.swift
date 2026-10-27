@@ -75,6 +75,26 @@ public enum Workflow {
     /// zone computation.
     public static func recommendAndDraft(album: Album, profile: SupplierProfile, format: BookFormat,
                                          options: DraftOptions = .init()) -> Album {
+        let (result, days) = recommend(album)
+        let draftDays = days.map { day in
+            DayGroup(dayKey: day.dayKey, photos: day.photos.map { result.photos[$0.id] ?? $0 },
+                     placeNames: day.placeNames, timeZoneSeconds: day.timeZoneSeconds)
+        }
+        return AlbumDrafter.draft(album: result, days: draftDays, profile: profile, format: format,
+                                  options: options)
+    }
+
+    /// The selection half of `recommendAndDraft`, without drafting (the app runs it once after the
+    /// first analysis): marks series (`seriesID`) and sets `isSelected = recommended` for every
+    /// photo with `selectionDecidedByUser == false`. Spreads and cover are left as they are.
+    /// Pure and deterministic; running it again changes nothing unless the photos changed.
+    public static func applyRecommendations(to album: Album) -> Album {
+        recommend(album).album
+    }
+
+    /// Shared by `recommendAndDraft` and `applyRecommendations`: the album with series and the
+    /// recommended selection applied, plus the days it was computed from.
+    private static func recommend(_ album: Album) -> (album: Album, days: [DayGroup]) {
         var result = album
         for (id, photo) in album.photos where !photo.selectionDecidedByUser {
             result.photos[id]?.isSelected = false
@@ -95,12 +115,7 @@ public enum Workflow {
                 }
             }
         }
-        let draftDays = days.map { day in
-            DayGroup(dayKey: day.dayKey, photos: day.photos.map { result.photos[$0.id] ?? $0 },
-                     placeNames: day.placeNames, timeZoneSeconds: day.timeZoneSeconds)
-        }
-        return AlbumDrafter.draft(album: result, days: draftDays, profile: profile, format: format,
-                                  options: options)
+        return (result, days)
     }
 
     /// Copies the originals of the SELECTED photos into `package` (`OriginalsDownloader`) and

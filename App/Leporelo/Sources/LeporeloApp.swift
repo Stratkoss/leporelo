@@ -13,9 +13,9 @@ struct LeporeloApp: App {
         }
         .commands { FileCommands() }
 
-        // Placeholder until Task 19: "Nové album…" from the File menu when no album is open.
-        Window("Nové album", id: NewAlbumView.windowID) {
-            NewAlbumView()
+        // "Nové album…" from the File menu (also when no album is open).
+        Window("Nové album", id: NewAlbumSheet.windowID) {
+            NewAlbumSheet()
         }
         .windowResizability(.contentSize)
         .defaultLaunchBehavior(.suppressed)
@@ -31,7 +31,7 @@ struct FileCommands: Commands {
 
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
-            Button("Nové album…") { openWindow(id: NewAlbumView.windowID) }
+            Button("Nové album…") { openWindow(id: NewAlbumSheet.windowID) }
                 .keyboardShortcut("n")
         }
     }

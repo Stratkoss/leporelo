@@ -148,6 +148,33 @@ private func album(_ photos: [Photo]) -> Album {
         #expect(Workflow.recommendAndDraft(album: second, profile: profile, format: format) == second)
     }
 
+    /// The selection half of `recommendAndDraft` (the app runs it after the first analysis):
+    /// the same selection and series, no spreads, user decisions kept.
+    @Test func applyRecommendationsSelectsWithoutDrafting() throws {
+        let (profile, format) = try ProfileCatalog.format(profileID: "canva-photobook", formatID: "landscape-8x6in")
+        var photos = (0..<12).map { photo("p\($0)", day1 + Double($0) * 600, day: 1) }
+        photos += (0..<3).map { photo("b\($0)", day1 + 86_400 + Double($0), day: 2) }
+        photos.append(photo("undated", day1 + 5 * 86_400, day: nil, selected: true))
+        let input = album(photos)
+
+        let selected = Workflow.applyRecommendations(to: input)
+        let drafted = Workflow.recommendAndDraft(album: input, profile: profile, format: format)
+        #expect(selected.spreads.isEmpty && selected.cover == nil)
+        for (id, photo) in drafted.photos {
+            #expect(selected.photos[id]?.isSelected == photo.isSelected, "\(id)")
+            #expect(selected.photos[id]?.seriesID == photo.seriesID, "\(id)")
+        }
+        #expect(!selected.photos.values.filter(\.isSelected).isEmpty)
+        #expect(selected.photos["undated"]?.isSelected == false)  // undecided and undated
+        #expect(selected.photos.values.allSatisfy { !$0.selectionDecidedByUser })
+
+        let dropped = try #require(selected.photos.values.filter(\.isSelected).map(\.id).sorted().first)
+        let edited = try selected.applying(.setSelected(dropped, false)).album
+        let again = Workflow.applyRecommendations(to: edited)
+        #expect(again.photos[dropped]?.isSelected == false)
+        #expect(again == edited)
+    }
+
     @Test func recommendAndDraftKeepsDecidedSelectionOfUndatedPhoto() throws {
         let (profile, format) = try ProfileCatalog.format(profileID: "canva-photobook", formatID: "landscape-8x6in")
         var photos = (0..<10).map { photo("p\($0)", day1 + Double($0) * 600, day: 1) }
