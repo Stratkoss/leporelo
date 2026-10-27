@@ -5,10 +5,21 @@ import os
 
 /// The UI model of one open album: the album in memory plus the package it lives in.
 ///
-/// Every change goes through `apply` (an `AlbumEdit`) or `replace` (a whole new album from a
-/// workflow step), and both register their undo with the window's `UndoManager`. Registering an
-/// undo is also what marks the SwiftUI document as changed, which schedules autosave: a change
-/// made with a `nil` undo manager is applied in memory but does not trigger autosave on its own.
+/// Every change goes through one of four methods, and every one of them gets autosaved:
+/// - `apply(_:undoManager:)` / `replace(album:actionName:undoManager:)` for user actions: they
+///   register their undo with the window's `UndoManager`, and that registration is what marks the
+///   SwiftUI document as changed.
+/// - `applyWithoutUndo(_:)` / `replaceWithoutUndo(album:)` for background results (analysis,
+///   downloaded originals, source refresh): no undo; they call `markChanged`, which the document
+///   sets at bind time to mark its NSDocument edited. Passing a `nil` undo manager to `apply` or
+///   `replace` takes this same path, so there is no change that silently skips autosave.
+///
+/// Caveat for Tasks 19-21: undoing a `replace` restores the WHOLE previous album, including
+/// background-owned fields (`analysis`, `originalState`, photos added by a refresh) that changed
+/// after it. Use `replace` with undo only for user steps whose undo should restore everything
+/// (recommendations, redraft, format change), and keep background writes on the no-undo path.
+/// Background results that arrive between a user `replace` and its undo can be lost by that undo;
+/// re-run or merge them if that matters.
 @MainActor
 @Observable
 final class AlbumStore {
@@ -18,6 +29,8 @@ final class AlbumStore {
     private(set) var package: ProjectPackage
     /// Receives every change, so the document can snapshot from any thread.
     @ObservationIgnored private let snapshotBox: AlbumSnapshotBox
+    /// Marks the document changed for edits that register no undo (set by `AlbumDocument.bind`).
+    @ObservationIgnored var markChanged: (@MainActor () -> Void)?
 
     init(album: Album, package: ProjectPackage, snapshotBox: AlbumSnapshotBox? = nil) {
         self.album = album
@@ -33,21 +46,38 @@ final class AlbumStore {
 
     /// Applies `edit` and registers its exact inverse; undoing registers the inverse of the
     /// inverse, so redo works. Throws (and registers nothing) when the edit does not apply.
+    /// With a `nil` undo manager this is `applyWithoutUndo`.
     func apply(_ edit: AlbumEdit, undoManager: UndoManager?) throws {
         try apply(edit, actionName: Self.actionName(for: edit), undoManager: undoManager)
     }
 
     /// Replaces the whole album (selection recommendations, redraft, format change) as one undoable
-    /// step named `actionName`.
+    /// step named `actionName` (see the caveat above). With a `nil` undo manager this is
+    /// `replaceWithoutUndo`.
     func replace(album newAlbum: Album, actionName: String, undoManager: UndoManager?) {
+        guard let undoManager else { return replaceWithoutUndo(album: newAlbum) }
         let previous = album
         album = newAlbum
         publish()
-        guard let undoManager else { return }
         undoManager.registerUndo(withTarget: self) { [weak undoManager] store in
             store.replace(album: previous, actionName: actionName, undoManager: undoManager)
         }
         undoManager.setActionName(actionName)
+    }
+
+    /// Applies a background edit: no undo, snapshot published at once, document marked changed.
+    func applyWithoutUndo(_ edit: AlbumEdit) throws {
+        album = try album.applying(edit).album
+        publish()
+        markChanged?()
+    }
+
+    /// Replaces the album with a background result: no undo, snapshot published at once, document
+    /// marked changed.
+    func replaceWithoutUndo(album newAlbum: Album) {
+        album = newAlbum
+        publish()
+        markChanged?()
     }
 
     /// Points the store at the package's new location after a rename or move.
@@ -58,10 +88,10 @@ final class AlbumStore {
     }
 
     private func apply(_ edit: AlbumEdit, actionName: String, undoManager: UndoManager?) throws {
+        guard let undoManager else { return try applyWithoutUndo(edit) }
         let (updated, inverse) = try album.applying(edit)
         album = updated
         publish()
-        guard let undoManager else { return }
         // Weak: the undo manager owns this closure.
         undoManager.registerUndo(withTarget: self) { [weak undoManager] store in
             do {

@@ -18,6 +18,23 @@ public enum ProjectError: Error, Equatable, Sendable {
     case writeFailed(String)
 }
 
+extension ProjectError: LocalizedError {
+    /// Short Czech messages for the app (the UI language); the CLI prints `String(describing:)`.
+    public var errorDescription: String? {
+        switch self {
+        case .notAPackage: "Tohle není album Leporela."
+        case .missingAlbumFile: "V albu chybí soubor album.json."
+        case .corrupt: "Album je poškozené a nejde přečíst."
+        case .unsupportedVersion(let version) where version > Album.currentFormatVersion:
+            "Album je z novější verze Leporela (formát \(version)). Aktualizujte aplikaci."
+        case .unsupportedVersion(let version): "Album má nepodporovaný formát \(version)."
+        case .alreadyExists: "Album s tímto názvem už existuje."
+        case .invalidName: "Album obsahuje neplatný název souboru."
+        case .writeFailed: "Album nejde uložit."
+        }
+    }
+}
+
 /// A Leporelo project on disk: the directory `<name>.leporelo/`
 ///
 ///     album.json                 the album (pretty printed, sorted keys, ISO 8601 dates)

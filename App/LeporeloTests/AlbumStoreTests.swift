@@ -122,4 +122,37 @@ struct AlbumStoreTests {
         undo.redo()
         #expect(store.album == replacement)
     }
+
+    /// Background work (analysis, downloads) changes the album without undo; every such change
+    /// must reach the document's "changed" hook so autosave runs.
+    @Test func changesWithoutUndoCallMarkChanged() throws {
+        let store = try makeStore(title: "A", photos: [makeTestPhoto("p1")])
+        var marks = 0
+        store.markChanged = { marks += 1 }
+
+        try store.applyWithoutUndo(.setSelected("p1", true))
+        #expect(store.album.photos["p1"]?.isSelected == true)
+        #expect(marks == 1)
+
+        var replacement = store.album
+        replacement.title = "Analyzováno"
+        store.replaceWithoutUndo(album: replacement)
+        #expect(store.album.title == "Analyzováno")
+        #expect(marks == 2)
+
+        // The nil-undo-manager forms are the same no-undo path, never a silent unsaved change.
+        try store.apply(.setTitle("C"), undoManager: nil)
+        store.replace(album: replacement, actionName: "X", undoManager: nil)
+        #expect(marks == 4)
+
+        // With an undo manager, the registered undo marks the document; the hook stays quiet.
+        let undo = makeUndoManager()
+        undo.beginUndoGrouping()
+        try store.apply(.setTitle("D"), undoManager: undo)
+        undo.endUndoGrouping()
+        #expect(marks == 4)
+
+        #expect(throws: AlbumEditError.unknownPhoto) { try store.applyWithoutUndo(.setSelected("nope", true)) }
+        #expect(marks == 4)
+    }
 }

@@ -51,8 +51,6 @@ targets:
       - path: LeporeloTests
     dependencies:
       - target: Leporelo
-      - package: Leporelo
-        product: LeporeloCore
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.stratkoss.leporelo.tests

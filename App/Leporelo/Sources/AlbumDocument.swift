@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import LeporeloCore
 import SwiftUI
@@ -89,22 +90,69 @@ final class AlbumDocument: ReferenceFileDocument {
         guard let data = albumFile.regularFileContents else {
             throw ProjectError.corrupt("\(ProjectPackage.albumFileName) is not a regular file")
         }
-        self.init(album: Self.resettingInterruptedDownloads(try ProjectPackage.decodeAlbum(data)))
+        self.init(album: Self.reconcilingOriginals(try ProjectPackage.decodeAlbum(data), in: file))
     }
 
-    /// A download that was running when the app quit or crashed is not running any more.
-    nonisolated static func resettingInterruptedDownloads(_ album: Album) -> Album {
+    /// Fixes original states a crash or an outside change left wrong, in memory only (the next
+    /// save persists them): a download that was running is not running any more, and a `.stored`
+    /// original whose file is not a regular file inside the package is `.missing`.
+    nonisolated static func reconcilingOriginals(_ album: Album, in package: FileWrapper) -> Album {
         var album = album
-        for (id, photo) in album.photos where photo.originalState == .downloading {
-            album.photos[id]?.originalState = .missing
+        for (id, photo) in album.photos {
+            switch photo.originalState {
+            case .downloading:
+                album.photos[id]?.originalState = .missing
+            case .stored(let relative) where !containsRegularFile(package, at: relative):
+                album.photos[id]?.originalState = .missing
+            default:
+                break
+            }
         }
         return album
+    }
+
+    /// Walks the (lazy) wrapper tree; `..`, `.` and absolute paths never match.
+    private nonisolated static func containsRegularFile(_ root: FileWrapper, at relative: String) -> Bool {
+        guard !relative.hasPrefix("/") else { return false }
+        let components = relative.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+        guard !components.isEmpty, !components.contains(where: { $0 == "." || $0 == ".." }) else { return false }
+        var node = root
+        for name in components {
+            guard let child = node.fileWrappers?[name] else { return false }
+            node = child
+        }
+        return node.isRegularFile
     }
 
     // MARK: Store
 
     /// The album the document would save now.
     var currentAlbum: Album { boundStore?.album ?? openedAlbum }
+
+    /// What the window calls: `store(for:)` plus the hook that marks this document's NSDocument
+    /// edited for changes without undo (`AlbumStore.applyWithoutUndo` / `replaceWithoutUndo`).
+    /// The NSDocument is looked up lazily, never while menus are built (an early
+    /// `NSDocumentController.shared` crashes the launch), and found again after a move.
+    func bind(to url: URL) throws -> AlbumStore {
+        let store = try store(for: url)
+        weak var cached: NSDocument?
+        store.markChanged = { [weak store] in
+            if cached == nil, let url = store?.package.url { cached = Self.platformDocument(for: url) }
+            cached?.updateChangeCount(.changeDone)
+        }
+        return store
+    }
+
+    /// The open NSDocument whose file is `url` (compared with symlinks resolved: temp and
+    /// `/var` paths reach AppKit as `/private/var`).
+    private static func platformDocument(for url: URL) -> NSDocument? {
+        let controller = NSDocumentController.shared
+        if let document = controller.document(for: url) { return document }
+        let target = url.standardizedFileURL.resolvingSymlinksInPath().path
+        return controller.documents.first {
+            $0.fileURL?.standardizedFileURL.resolvingSymlinksInPath().path == target
+        }
+    }
 
     /// The store for this document, bound to its package at `url`. Created on first call; later
     /// calls with a new URL (rename, move) re-point the same store, keeping album and undo history.
@@ -130,14 +178,19 @@ final class AlbumDocument: ReferenceFileDocument {
     }
 
     /// The package to write: the current package directory (lazy, nothing loaded) with the
-    /// snapshot's `album.json`. Falls back to `existingFile`, then to a new package, when the
-    /// document has no package on disk yet.
+    /// snapshot's `album.json`. Only a document with no package URL (never bound) falls back to
+    /// `existingFile`, then to a new package. A bound package that is gone (moved before the
+    /// window rebinds) throws, so NSDocument retries later instead of writing the open-time tree,
+    /// which would drop originals stored after opening.
     nonisolated static func fileWrapper(for snapshot: AlbumSnapshot, existingFile: FileWrapper?) throws -> FileWrapper {
         let json = try AlbumCoding.encoder().encode(snapshot.album)
         let root: FileWrapper
-        var isDirectory: ObjCBool = false
-        if let url = snapshot.packageURL,
-           FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), isDirectory.boolValue {
+        if let url = snapshot.packageURL {
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
+                  isDirectory.boolValue else {
+                throw CocoaError(.fileNoSuchFile, userInfo: [NSFilePathErrorKey: url.path])
+            }
             root = try FileWrapper(url: url, options: [])
         } else if let existingFile, existingFile.isDirectory {
             root = existingFile

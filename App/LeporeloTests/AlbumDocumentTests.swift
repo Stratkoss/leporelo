@@ -37,7 +37,8 @@ struct AlbumDocumentTests {
             makeTestPhoto("gone", state: .unavailable),
             makeTestPhoto("kept", state: .stored(relativePath: "originals/kept.jpg")),
         ])
-        _ = try ProjectPackage.create(at: url, album: album)
+        let package = try ProjectPackage.create(at: url, album: album)
+        _ = try package.storeOriginal(data: Data([7]), ext: "jpg", for: "kept")
 
         let document = try AlbumDocument(file: FileWrapper(url: url, options: []))
         let opened = document.currentAlbum
@@ -48,6 +49,85 @@ struct AlbumDocumentTests {
         var expected = album
         expected.photos["down"]?.originalState = .missing
         #expect(opened == expected)
+    }
+
+    /// `.stored` whose file is not in the package (deleted, or lost in a crash) becomes `.missing`,
+    /// so preflight and the downloader see the truth.
+    @Test func openingReconcilesStoredOriginalsWithoutAFile() throws {
+        let url = makeTempDir().appendingPathComponent("Soubory.leporelo")
+        let album = makeTestAlbum(photos: [
+            makeTestPhoto("here", state: .stored(relativePath: "originals/here.jpg")),
+            makeTestPhoto("lost", state: .stored(relativePath: "originals/lost.jpg")),
+            makeTestPhoto("escape", state: .stored(relativePath: "../outside.jpg")),
+            makeTestPhoto("dir", state: .stored(relativePath: "originals")),
+        ])
+        let package = try ProjectPackage.create(at: url, album: album)
+        _ = try package.storeOriginal(data: Data([1]), ext: "jpg", for: "here")
+
+        let opened = try AlbumDocument(file: FileWrapper(url: url, options: [])).currentAlbum
+        #expect(opened.photos["here"]?.originalState == .stored(relativePath: "originals/here.jpg"))
+        #expect(opened.photos["lost"]?.originalState == .missing)
+        #expect(opened.photos["escape"]?.originalState == .missing)
+        #expect(opened.photos["dir"]?.originalState == .missing)
+    }
+
+    @Test func openingANewerFormatFailsWithACzechMessage() throws {
+        let url = makeTempDir().appendingPathComponent("Budoucí.leporelo")
+        _ = try ProjectPackage.create(at: url, album: makeTestAlbum())
+        let jsonURL = url.appendingPathComponent(ProjectPackage.albumFileName)
+        let json = try String(contentsOf: jsonURL, encoding: .utf8)
+            .replacingOccurrences(of: "\"formatVersion\" : 1", with: "\"formatVersion\" : 99")
+        try json.write(to: jsonURL, atomically: true, encoding: .utf8)
+
+        do {
+            _ = try AlbumDocument(file: FileWrapper(url: url, options: []))
+            Issue.record("opening a newer format must fail")
+        } catch {
+            #expect(error as? ProjectError == .unsupportedVersion(99))
+            #expect(error.localizedDescription.contains("novější verz"))
+        }
+        let corrupt: Error = ProjectError.corrupt("bad")
+        #expect(corrupt.localizedDescription.contains("poškozen"))
+    }
+
+    /// Revert, Versions "Restore" and external-change reloads give the window a NEW document. The
+    /// window must rebind (its key changes) and edits must land in the new document's snapshot.
+    @Test func reloadedDocumentGetsItsOwnStore() throws {
+        let (url, _, _, _) = try makePackageWithLargeOriginal()
+        let first = try AlbumDocument(file: FileWrapper(url: url, options: []))
+        let firstStore = try first.bind(to: url)
+        try firstStore.applyWithoutUndo(.setTitle("Před návratem"))
+
+        let reloaded = try AlbumDocument(file: FileWrapper(url: url, options: []))
+        #expect(AlbumWindow.BindKey(document: first, fileURL: url)
+                != AlbumWindow.BindKey(document: reloaded, fileURL: url))
+        let store = try reloaded.bind(to: url)
+        #expect(store !== firstStore)
+        #expect(store.album.title == "Původní")
+
+        try store.applyWithoutUndo(.setTitle("Po návratu"))
+        let snapshot = try reloaded.snapshot(contentType: .leporeloAlbum)
+        #expect(snapshot.album.title == "Po návratu")
+        #expect(snapshot.packageURL == url)
+    }
+
+    /// A bound package that vanished (moved in Finder before the window rebinds) must fail the
+    /// save, so NSDocument retries later, instead of writing the stale open-time tree, which
+    /// would delete originals stored after opening.
+    @Test func savingFailsWhenTheBoundPackageIsGone() throws {
+        let (url, _, album, _) = try makePackageWithLargeOriginal()
+        let openTime = try FileWrapper(url: url, options: [])
+        let gone = url.deletingLastPathComponent().appendingPathComponent("Přesunuto.leporelo")
+        try FileManager.default.moveItem(at: url, to: gone)
+
+        #expect(throws: CocoaError.self) {
+            _ = try AlbumDocument.fileWrapper(for: AlbumSnapshot(album: album, packageURL: url),
+                                              existingFile: openTime)
+        }
+        // No package URL at all (never saved): the existing file is still the fallback.
+        let fallback = try AlbumDocument.fileWrapper(for: AlbumSnapshot(album: album, packageURL: nil),
+                                                     existingFile: openTime)
+        #expect(fallback === openTime)
     }
 
     @Test func openingRejectsDirectoryWithoutAlbum() throws {
