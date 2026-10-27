@@ -117,19 +117,26 @@ enum PhotoKitMapping {
     /// File extensions PhotoKit delivers as rendered still images Leporelo can place directly.
     static let renderedStillExtensions: Set<String> = ["heic", "heif", "jpg", "jpeg", "png", "tif", "tiff"]
 
-    /// Lowercased extension from the resource's original filename ("IMG_0001.HEIC" -> "heic"),
-    /// else the preferred extension of its uniform type identifier ("public.heic" -> "heic").
-    /// Nil when neither yields a short alphanumeric extension.
+    /// Lowercased extension of a resource. The uniform type identifier describes the actual bytes,
+    /// so it wins: its preferred extension ("public.heic" -> "heic", "public.jpeg" -> "jpg"),
+    /// unless the filename's extension is a spelling of that same type ("IMG_1.JPEG" with
+    /// public.jpeg -> "jpeg"). A filename that disagrees ("FullSizeRender.heic" holding JPEG
+    /// bytes) loses. Without a known UTI the filename extension ("IMG_0001.HEIC" -> "heic") is the
+    /// fallback. Nil when neither yields a short alphanumeric extension.
     static func fileExtension(originalFilename: String?, uniformTypeIdentifier: String?) -> String? {
-        if let name = originalFilename {
-            let ext = (name as NSString).pathExtension.lowercased()
-            if isValidExtension(ext) { return ext }
+        let nameExt = originalFilename
+            .map { ($0 as NSString).pathExtension.lowercased() }
+            .flatMap { isValidExtension($0) ? $0 : nil }
+        if let uti = uniformTypeIdentifier, let type = UTType(uti), !type.isDynamic {
+            // The filename keeps its own spelling only when it names the same type.
+            if let nameExt, let nameType = UTType(filenameExtension: nameExt), nameType.conforms(to: type) {
+                return nameExt
+            }
+            if let preferred = type.preferredFilenameExtension?.lowercased(), isValidExtension(preferred) {
+                return preferred == "jpeg" ? "jpg" : preferred
+            }
         }
-        if let uti = uniformTypeIdentifier, let type = UTType(uti),
-           let ext = type.preferredFilenameExtension?.lowercased(), isValidExtension(ext) {
-            return ext
-        }
-        return nil
+        return nameExt
     }
 
     /// Same rule as `ProjectPackage.storeOriginal`: 1-8 ASCII alphanumerics.
@@ -161,7 +168,23 @@ enum PhotoKitMapping {
 
     // MARK: Errors
 
-    /// iCloud / network failures, retried by `OriginalsDownloader` as `cloudUnavailable`.
+    /// iCloud / network failures, mapped to `cloudUnavailable` (retried by `OriginalsDownloader`
+    /// 3 times before "unavailable"): PhotoKit network errors (3164 networkAccessRequired,
+    /// 3169 networkError), 3303 missingResource (in practice an iCloud copy that is not available
+    /// yet), and any `NSURLErrorDomain` or `CloudPhotoLibraryErrorDomain` error.
+    static func isCloudFailure(domain: String, code: Int) -> Bool {
+        if domain == PHPhotosErrorDomain {
+            return code == PHPhotosError.Code.networkAccessRequired.rawValue
+                || code == PHPhotosError.Code.networkError.rawValue
+                || code == PHPhotosError.Code.missingResource.rawValue
+        }
+        return domain == NSURLErrorDomain || domain == cloudPhotoLibraryErrorDomain
+    }
+
+    /// Error domain of iCloud Photos (not a public constant; compared as a string).
+    static let cloudPhotoLibraryErrorDomain = "CloudPhotoLibraryErrorDomain"
+
+    /// Network failures only (a subset of `isCloudFailure`).
     static func isNetworkFailure(domain: String, code: Int) -> Bool {
         if domain == PHPhotosErrorDomain {
             return code == PHPhotosError.Code.networkAccessRequired.rawValue
@@ -170,11 +193,9 @@ enum PhotoKitMapping {
         return domain == NSURLErrorDomain
     }
 
-    /// The asset or its resource no longer exists.
+    /// The asset identifier no longer exists (3201 identifierNotFound): `notFound`.
     static func isMissing(domain: String, code: Int) -> Bool {
-        domain == PHPhotosErrorDomain
-            && (code == PHPhotosError.Code.identifierNotFound.rawValue
-                || code == PHPhotosError.Code.missingResource.rawValue)
+        domain == PHPhotosErrorDomain && code == PHPhotosError.Code.identifierNotFound.rawValue
     }
 
     static func isUserCancelled(domain: String, code: Int) -> Bool {
@@ -207,28 +228,41 @@ enum PhotoKitMapping {
         case failed
     }
 
+    /// Classifies one `requestImage` callback. Only a degraded image WITHOUT an error may wait:
+    /// with `.highQualityFormat` PhotoKit delivers a single result, so every other callback must
+    /// be terminal, or the continuation could never resume.
+    /// - cancelled flag or user-cancelled error => `.cancelled`
+    /// - any error (`PHImageErrorKey`) => terminal: `.cloudUnavailable` for cloud errors or when
+    ///   `PHImageResultIsInCloudKey` is set, `.missing` for 3201, else `.failed`
+    /// - an image without error: `.wait` if degraded, else `.deliver`
+    /// - neither image nor error (degraded or not) => `.cloudUnavailable` if in iCloud, else `.failed`
     static func imageCallbackOutcome(hasImage: Bool, isDegraded: Bool, isCancelled: Bool,
                                      isInCloud: Bool, errorDomain: String?, errorCode: Int?) -> ImageCallbackOutcome {
         if isCancelled { return .cancelled }
-        if let domain = errorDomain, let code = errorCode {
+        if let domain = errorDomain {
+            let code = errorCode ?? 0
             if isUserCancelled(domain: domain, code: code) { return .cancelled }
-            if isNetworkFailure(domain: domain, code: code) { return .cloudUnavailable }
+            if isInCloud || isCloudFailure(domain: domain, code: code) { return .cloudUnavailable }
             if isMissing(domain: domain, code: code) { return .missing }
-            if !hasImage { return isInCloud ? .cloudUnavailable : .failed }
+            return .failed
         }
         if hasImage { return isDegraded ? .wait : .deliver }
-        if isDegraded { return .wait }
-        return isInCloud ? .cloudUnavailable : .missing
+        return isInCloud ? .cloudUnavailable : .failed
     }
 
     /// Downscales `image` so its longest side is <= `maxPixel` (no-op when it already fits).
-    /// A safety net: `.exact` resize normally delivers the requested size already.
+    /// Works in PIXELS (`CGImage.width/height`), so an image delivered at points x backing scale
+    /// comes back at exactly the requested pixel size. A safety net: `.exact` resize normally
+    /// delivers the requested size already.
     static func clamp(_ image: CGImage, maxPixel: Int) -> CGImage {
         let limit = max(1, maxPixel)
         guard max(image.width, image.height) > limit else { return image }
         let size = thumbnailPixelSize(pixelWidth: image.width, pixelHeight: image.height, maxPixel: limit)
-        let space = image.colorSpace.flatMap { $0.supportsOutput ? $0 : nil }
-            ?? CGColorSpace(name: CGColorSpace.sRGB)!
+        // Always an RGBA context, whatever the source space (grayscale, CMYK and indexed spaces
+        // cannot back premultipliedLast): Display P3 for P3 sources, sRGB otherwise.
+        let space = image.colorSpace?.name == CGColorSpace.displayP3
+            ? CGColorSpace(name: CGColorSpace.displayP3)!
+            : CGColorSpace(name: CGColorSpace.sRGB)!
         guard let context = CGContext(data: nil, width: size.width, height: size.height,
                                       bitsPerComponent: 8, bytesPerRow: 0, space: space,
                                       bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return image }

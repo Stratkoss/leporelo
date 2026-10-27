@@ -118,9 +118,15 @@ struct PhotoKitMappingTests {
         #expect(PhotoKitMapping.fileExtension(originalFilename: "IMG_0001.HEIC", uniformTypeIdentifier: nil) == "heic")
         #expect(PhotoKitMapping.fileExtension(originalFilename: "photo.JPG", uniformTypeIdentifier: nil) == "jpg")
         #expect(PhotoKitMapping.fileExtension(originalFilename: "noext", uniformTypeIdentifier: "public.heic") == "heic")
-        #expect(PhotoKitMapping.fileExtension(originalFilename: nil, uniformTypeIdentifier: "public.jpeg") == "jpeg")
+        #expect(PhotoKitMapping.fileExtension(originalFilename: nil, uniformTypeIdentifier: "public.jpeg") == "jpg")
+        // The UTI describes the actual bytes: it wins over a disagreeing filename extension.
         #expect(PhotoKitMapping.fileExtension(originalFilename: "FullSizeRender.heic",
-                                              uniformTypeIdentifier: "public.jpeg") == "heic")
+                                              uniformTypeIdentifier: "public.jpeg") == "jpg")
+        // Agreeing filename keeps its own spelling.
+        #expect(PhotoKitMapping.fileExtension(originalFilename: "IMG_1.JPEG", uniformTypeIdentifier: "public.jpeg") == "jpeg")
+        #expect(PhotoKitMapping.fileExtension(originalFilename: "IMG_1.HEIC", uniformTypeIdentifier: "public.heic") == "heic")
+        // Unknown UTI: the filename is the fallback.
+        #expect(PhotoKitMapping.fileExtension(originalFilename: "IMG_1.HEIC", uniformTypeIdentifier: "not.a.type") == "heic")
         #expect(PhotoKitMapping.fileExtension(originalFilename: "", uniformTypeIdentifier: "not.a.type") == nil)
     }
 
@@ -148,7 +154,13 @@ struct PhotoKitMappingTests {
         #expect(PhotoKitMapping.isNetworkFailure(domain: NSURLErrorDomain, code: NSURLErrorNotConnectedToInternet))
         #expect(!PhotoKitMapping.isNetworkFailure(domain: domain, code: PHPhotosError.Code.missingResource.rawValue))
         #expect(PhotoKitMapping.isMissing(domain: domain, code: PHPhotosError.Code.identifierNotFound.rawValue))
-        #expect(PhotoKitMapping.isMissing(domain: domain, code: PHPhotosError.Code.missingResource.rawValue))
+        #expect(!PhotoKitMapping.isMissing(domain: domain, code: PHPhotosError.Code.missingResource.rawValue))
+        // A missing resource is usually an iCloud copy not (yet) available: retried as cloud.
+        #expect(PhotoKitMapping.isCloudFailure(domain: domain, code: PHPhotosError.Code.missingResource.rawValue))
+        #expect(PhotoKitMapping.isCloudFailure(domain: "CloudPhotoLibraryErrorDomain", code: 1))
+        #expect(PhotoKitMapping.isCloudFailure(domain: domain, code: PHPhotosError.Code.networkError.rawValue))
+        #expect(!PhotoKitMapping.isCloudFailure(domain: domain, code: PHPhotosError.Code.identifierNotFound.rawValue))
+        #expect(!PhotoKitMapping.isCloudFailure(domain: NSCocoaErrorDomain, code: 4))
         #expect(PhotoKitMapping.isUserCancelled(domain: domain, code: PHPhotosError.Code.userCancelled.rawValue))
         #expect(!PhotoKitMapping.isUserCancelled(domain: domain, code: PHPhotosError.Code.networkError.rawValue))
     }
@@ -167,9 +179,36 @@ struct PhotoKitMappingTests {
         #expect(M.imageCallbackOutcome(hasImage: false, isDegraded: false, isCancelled: false, isInCloud: false,
                                        errorDomain: PHPhotosErrorDomain, errorCode: net) == .cloudUnavailable)
         #expect(M.imageCallbackOutcome(hasImage: false, isDegraded: false, isCancelled: false, isInCloud: false,
-                                       errorDomain: nil, errorCode: nil) == .missing)
-        #expect(M.imageCallbackOutcome(hasImage: false, isDegraded: false, isCancelled: false, isInCloud: false,
                                        errorDomain: NSCocoaErrorDomain, errorCode: 4) == .failed)
+        #expect(M.imageCallbackOutcome(hasImage: false, isDegraded: false, isCancelled: false, isInCloud: false,
+                                       errorDomain: PHPhotosErrorDomain,
+                                       errorCode: PHPhotosError.Code.identifierNotFound.rawValue) == .missing)
+        #expect(M.imageCallbackOutcome(hasImage: false, isDegraded: false, isCancelled: false, isInCloud: false,
+                                       errorDomain: PHPhotosErrorDomain,
+                                       errorCode: PHPhotosError.Code.missingResource.rawValue) == .cloudUnavailable)
+        // Any error on an in-cloud result is a cloud failure.
+        #expect(M.imageCallbackOutcome(hasImage: false, isDegraded: false, isCancelled: false, isInCloud: true,
+                                       errorDomain: NSCocoaErrorDomain, errorCode: 4) == .cloudUnavailable)
+    }
+
+    /// With `.highQualityFormat` PhotoKit delivers ONE result, so only a degraded image without an
+    /// error may wait; everything else is terminal, otherwise the continuation could never resume.
+    @Test func imageCallbackTerminatesUnlessDegradedImageWithoutError() {
+        typealias M = PhotoKitMapping
+        // Error + degraded image: terminal.
+        #expect(M.imageCallbackOutcome(hasImage: true, isDegraded: true, isCancelled: false, isInCloud: false,
+                                       errorDomain: NSCocoaErrorDomain, errorCode: 4) == .failed)
+        #expect(M.imageCallbackOutcome(hasImage: true, isDegraded: true, isCancelled: false, isInCloud: true,
+                                       errorDomain: NSCocoaErrorDomain, errorCode: 4) == .cloudUnavailable)
+        // Degraded, no image, no error: terminal failure.
+        #expect(M.imageCallbackOutcome(hasImage: false, isDegraded: true, isCancelled: false, isInCloud: false,
+                                       errorDomain: nil, errorCode: nil) == .failed)
+        // Neither image nor error, not degraded: terminal failure.
+        #expect(M.imageCallbackOutcome(hasImage: false, isDegraded: false, isCancelled: false, isInCloud: false,
+                                       errorDomain: nil, errorCode: nil) == .failed)
+        // Degraded image, no error: wait for the final one.
+        #expect(M.imageCallbackOutcome(hasImage: true, isDegraded: true, isCancelled: false, isInCloud: false,
+                                       errorDomain: nil, errorCode: nil) == .wait)
     }
 
     // MARK: Authorization
@@ -207,6 +246,31 @@ struct PhotoKitMappingTests {
         #expect(big.width == 100 && big.height == 50)
         let small = PhotoKitMapping.clamp(try image(50, 20), maxPixel: 100)
         #expect(small.width == 50 && small.height == 20)
+    }
+
+    @Test func clampHandlesGrayscaleSources() throws {
+        let ctx = try #require(CGContext(data: nil, width: 300, height: 600, bitsPerComponent: 8, bytesPerRow: 0,
+                                         space: CGColorSpaceCreateDeviceGray(),
+                                         bitmapInfo: CGImageAlphaInfo.none.rawValue))
+        let gray = try #require(ctx.makeImage())
+        let clamped = PhotoKitMapping.clamp(gray, maxPixel: 120)
+        #expect(clamped.width == 60 && clamped.height == 120)
+        #expect(clamped.colorSpace?.model == .rgb)
+    }
+
+    /// The result is in PIXELS: an image delivered at 2x the requested size (points x backing
+    /// scale) is brought back to exactly the requested pixel size.
+    @Test func clampResultEqualsRequestedPixelSize() throws {
+        let requested = PhotoKitMapping.thumbnailPixelSize(pixelWidth: 4032, pixelHeight: 3024, maxPixel: 512)
+        let delivered2x = PhotoKitMapping.thumbnailPixelSize(pixelWidth: requested.width * 2,
+                                                             pixelHeight: requested.height * 2, maxPixel: 512)
+        #expect(delivered2x == requested)
+        let ctx = try #require(CGContext(data: nil, width: requested.width * 2, height: requested.height * 2,
+                                         bitsPerComponent: 8, bytesPerRow: 0,
+                                         space: CGColorSpace(name: CGColorSpace.displayP3)!,
+                                         bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        let clamped = PhotoKitMapping.clamp(try #require(ctx.makeImage()), maxPixel: 512)
+        #expect(clamped.width == requested.width && clamped.height == requested.height)
     }
 
     // MARK: Gate

@@ -45,7 +45,11 @@ struct PhotoKitSource: PhotoSource {
 
     func albums() async throws -> [SourceAlbum] {
         try PhotoKitAuthorization.ensureAuthorized()
-        let countOptions = Self.assetOptions(for: .album(identifier: "", name: ""))
+        // Count-only fetch: the media-type predicate, no sort descriptor.
+        let countOptions = PHFetchOptions()
+        countOptions.predicate = PhotoKitMapping.mediaTypePredicate()
+        countOptions.includeHiddenAssets = false
+        countOptions.wantsIncrementalChangeDetails = false
         var result: [SourceAlbum] = []
         // User albums (including those inside folders) and iCloud shared albums.
         let kinds: [(PHAssetCollectionSubtype, Bool)] = [(.albumRegular, false), (.albumCloudShared, true)]
@@ -124,7 +128,8 @@ struct PhotoKitSource: PhotoSource {
                         if let image, let cg = Self.cgImage(from: image) {
                             gate.finish(.success(PhotoKitMapping.clamp(cg, maxPixel: limit)))
                         } else {
-                            gate.finish(.failure(PhotoSourceError.notFound(identifier)))
+                            gate.finish(.failure(Self.requestError(identifier, error,
+                                                                   message: "image conversion failed")))
                         }
                     case .cancelled:
                         gate.finish(.failure(CancellationError()))
@@ -180,7 +185,7 @@ struct PhotoKitSource: PhotoSource {
                     }
                     if PhotoKitMapping.isUserCancelled(domain: error.domain, code: error.code) {
                         gate.finish(.failure(CancellationError()))
-                    } else if PhotoKitMapping.isNetworkFailure(domain: error.domain, code: error.code) {
+                    } else if PhotoKitMapping.isCloudFailure(domain: error.domain, code: error.code) {
                         gate.finish(.failure(PhotoSourceError.cloudUnavailable(identifier)))
                     } else if PhotoKitMapping.isMissing(domain: error.domain, code: error.code) {
                         gate.finish(.failure(PhotoSourceError.notFound(identifier)))
@@ -202,9 +207,10 @@ struct PhotoKitSource: PhotoSource {
     ///
     /// PhotoKit has no public per-asset "locally available" flag, so this asks
     /// `requestImageDataAndOrientation` with network access disallowed: it returns data when the
-    /// file is local and nil with `PHImageResultIsInCloudKey` when it is not. It reads the local
-    /// file (a few MB) and is meant for a single photo on demand, NOT for a whole fetch; that is
-    /// why `photos(matching:)` reports `isCloudOnly = false`. False when unauthorized or unknown.
+    /// file is local and nil with `PHImageResultIsInCloudKey` when it is not. When local it reads
+    /// the WHOLE current file into memory (a few MB for HEIC/JPEG, up to tens of MB for RAW), so
+    /// it is meant for a single photo on demand, NOT for a whole fetch; that is why
+    /// `photos(matching:)` reports `isCloudOnly = false`. False when unauthorized or unknown.
     func isLocallyAvailable(identifier: String) async -> Bool {
         guard PhotoKitAuthorization.allowsReading(PhotoKitAuthorization.currentStatus()),
               let asset = try? Self.asset(identifier), asset.mediaType == .image else { return false }
@@ -270,10 +276,11 @@ struct PhotoKitSource: PhotoSource {
         return image.cgImage(forProposedRect: &rect, context: nil, hints: nil)
     }
 
-    private static func requestError(_ identifier: String, _ error: NSError?) -> Error {
+    private static func requestError(_ identifier: String, _ error: NSError?,
+                                     message: String = "no result") -> Error {
         PhotoKitRequestError(identifier: identifier, domain: error?.domain ?? "PhotoKit",
                              code: error?.code ?? 0,
-                             message: error?.localizedDescription ?? "no result")
+                             message: error?.localizedDescription ?? message)
     }
 }
 
