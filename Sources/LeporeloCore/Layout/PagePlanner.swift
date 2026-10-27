@@ -360,7 +360,7 @@ private struct Planner {
 
     /// Whether `photos` can go into distinct frames of `layout` with matching orientation
     /// (squares fit any frame).
-    private static func canHold(_ photos: [Photo], in layout: PageLayout,
+    static func canHold(_ photos: [Photo], in layout: PageLayout,
                                 capacity c: (landscape: Int, portrait: Int, any: Int)? = nil) -> Bool {
         canHold(photos, capacity: c ?? capacity(layout))
     }
@@ -413,23 +413,30 @@ private struct Planner {
         return (forced + fitting + extra, forced.count + extra.count)
     }
 
-    /// `photos` in the frames of `layout`, in frame order. When every photo can fit its frame,
-    /// frames in priority order take the best-ranked photo that fits and leaves the others a
-    /// fitting frame each: like `TemplateLayout.assign`, but a square never takes the frame a ▯ or
-    /// ▭ needs. Otherwise (a rescue page) `TemplateLayout.assign` decides.
+    /// `photos` in the frames of `layout`, in frame order.
     private static func page(_ layout: PageLayout, _ photos: [Photo]) -> PlannedPage {
+        let assignment = assignment(layout, photos)
+        return PlannedPage(layoutID: layout.id, photos: layout.frames.compactMap { assignment[$0.id] })
+    }
+
+    /// Frame id -> photo for `photos` in the frames of `layout`. When every photo can fit a frame
+    /// of its orientation, frames in priority order take the best-ranked photo that fits and leaves
+    /// the others a fitting frame each (a frame no photo can take stays empty): like
+    /// `TemplateLayout.assign`, but a square never takes the frame a ▯ or ▭ needs. Otherwise (a
+    /// rescue page, more photos than frames) `TemplateLayout.assign` decides.
+    static func assignment(_ layout: PageLayout, _ photos: [Photo]) -> [String: Photo] {
         let frames = layout.frames.sorted { ($0.priority, $0.id) < ($1.priority, $1.id) }
-        var assignment: [String: Photo] = [:]
-        if photos.count == layout.photoCount && canHold(photos, in: layout) {
+        var result: [String: Photo] = [:]
+        if photos.count <= layout.photoCount && canHold(photos, in: layout) {
             var remaining = photos.sorted(by: TemplateLayout.rank)
-            for (k, frame) in frames.enumerated() {
+            for (k, frame) in frames.enumerated() where !remaining.isEmpty {
                 let later = capacity(Array(frames[(k + 1)...]))
                 let i = remaining.indices.first { i in
                     var rest = remaining
                     rest.remove(at: i)
                     return TemplateLayout.fits(remaining[i], frame.orientation) && canHold(rest, capacity: later)
-                }!
-                assignment[frame.id] = remaining.remove(at: i)
+                }
+                if let i { result[frame.id] = remaining.remove(at: i) }
             }
         } else {
             let slots = frames.map {
@@ -437,9 +444,9 @@ private struct Planner {
                           priority: $0.priority)
             }
             let byID = Dictionary(photos.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
-            assignment = TemplateLayout.assign(slots, photos: photos).compactMapValues { byID[$0] }
+            result = TemplateLayout.assign(slots, photos: photos).compactMapValues { byID[$0] }
         }
-        return PlannedPage(layoutID: layout.id, photos: layout.frames.compactMap { assignment[$0.id] })
+        return result
     }
 
     // MARK: Even page count
@@ -507,5 +514,19 @@ private struct Planner {
                 pages.append(PlannedPage(layoutID: "empty", photos: []))
             }
         }
+    }
+}
+
+// MARK: - Shared with page editing
+
+extension PagePlanner {
+    /// Frame id -> photo, orientation-safe where possible (see `Planner.assignment`).
+    static func assignment(_ layout: PageLayout, _ photos: [Photo]) -> [String: Photo] {
+        Planner.assignment(layout, photos)
+    }
+
+    /// Whether `photos` can go into distinct frames of `layout` with matching orientation.
+    static func canHold(_ photos: [Photo], in layout: PageLayout) -> Bool {
+        Planner.canHold(photos, in: layout)
     }
 }
