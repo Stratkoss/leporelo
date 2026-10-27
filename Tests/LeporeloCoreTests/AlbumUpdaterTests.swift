@@ -51,6 +51,10 @@ import Foundation
         #expect(spread.frames.first { $0.id == "photo2" }?.photoID == "new")
         #expect(spread.frames.first { $0.id == "photo1" }?.photoID == nil)
         #expect(a.photos["new"]?.isSelected == true)
+        #expect(a.photos["new"]?.selectionDecidedByUser == true)  // a user selection is a decision
+        #expect(a.photos.values.filter { $0.id != "new" && $0.id != "new2" }.allSatisfy { photo in
+            photo.selectionDecidedByUser == g2.frames.contains { $0.photoID == photo.id }
+        })
 
         // A second landscape photo falls back to the remaining (portrait) empty frame.
         a = Self.adding(D.photo("new2", day: Self.june18, minute: 51), to: a)
@@ -106,6 +110,7 @@ import Foundation
         var loose = D.photo("loose", day: Self.june18, minute: 9)
         loose.dayKey = nil
         a = Self.adding(loose, to: a)
+        // Unchanged, so the selection is not recorded as decided either.
         #expect(AlbumUpdater.photoSelected("loose", in: a, geometry: Self.geometry(p, f)) == a)
         #expect(AlbumUpdater.photoSelected("unknown", in: a, geometry: Self.geometry(p, f)) == a)
     }
@@ -131,6 +136,8 @@ import Foundation
         #expect(after.spreads[0].frames[0].photoID == nil)          // intro
         #expect(after.cover?.front.frames[0].photoID == nil)        // cover
         #expect(after.photos["a4"]?.isSelected == false)
+        #expect(after.photos["a4"]?.selectionDecidedByUser == true)  // a user deselection is a decision
+        #expect(before.photos["a4"]?.selectionDecidedByUser == false)
         // Other frames are untouched.
         #expect(after.spreads[jIndex].frames.filter { $0.id != cleared.id }
             == before.spreads[jIndex].frames.filter { $0.id != cleared.id })

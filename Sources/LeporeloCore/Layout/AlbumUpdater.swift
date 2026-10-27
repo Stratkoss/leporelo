@@ -13,7 +13,8 @@ public enum AlbumUpdater {
 
     // MARK: - Selection
 
-    /// Places a newly selected photo and marks it selected.
+    /// Places a newly selected photo and marks it selected, as a user decision
+    /// (`selectionDecidedByUser = true`, so recommendations leave it alone).
     ///
     /// - Unknown photo or photo without `dayKey`: the album is returned unchanged (a photo without a
     ///   day cannot be placed; the user first assigns a day, then selects it again).
@@ -31,6 +32,7 @@ public enum AlbumUpdater {
         guard let photo = album.photos[id], let key = photo.dayKey else { return album }
         var result = album
         result.photos[id]?.isSelected = true
+        result.photos[id]?.selectionDecidedByUser = true
         if result.spreads.contains(where: { $0.frames.contains { $0.photoID == id } }) { return result }
 
         // 1. An empty frame of the day's galleries.
@@ -78,12 +80,13 @@ public enum AlbumUpdater {
         return result
     }
 
-    /// Marks the photo unselected and empties every frame holding it (spreads and cover):
+    /// Marks the photo unselected (a user decision: `selectionDecidedByUser = true`) and empties every frame holding it (spreads and cover):
     /// `photoID = nil`, offset 0, zoom 1. Spreads are never removed and `manuallyEdited` is left as
     /// is (a deselect is not a manual layout edit). See the type comment for the "marked" convention.
     public static func photoDeselected(_ id: PhotoID, in album: Album) -> Album {
         var result = album
         result.photos[id]?.isSelected = false
+        result.photos[id]?.selectionDecidedByUser = true
         func clear(_ spread: inout Spread) {
             for i in spread.frames.indices where spread.frames[i].photoID == id {
                 spread.frames[i].photoID = nil

@@ -15,10 +15,11 @@ private func sourcePhoto(_ id: String, _ t: TimeInterval, zone: Int? = 7200) -> 
 }
 
 private func photo(_ id: String, _ t: TimeInterval, day: Int?, selected: Bool = false,
-                   place: String? = nil) -> Photo {
+                   decided: Bool = false, place: String? = nil) -> Photo {
     Photo(id: id, sourceIdentifier: "src-\(id)", capturedAt: Date(timeIntervalSince1970: t),
           timeZoneSeconds: 7200, location: nil, pixelWidth: 4000, pixelHeight: 3000, kind: .photo,
-          analysis: nil, isSelected: selected, dayKey: day.map { DayKey(year: 2026, month: 7, day: $0) },
+          analysis: nil, isSelected: selected, selectionDecidedByUser: decided,
+          dayKey: day.map { DayKey(year: 2026, month: 7, day: $0) },
           placeName: place, seriesID: nil, originalState: .missing, deletedInSource: false)
 }
 
@@ -110,10 +111,50 @@ private func album(_ photos: [Photo]) -> Album {
     }
 
     @Test func recommendAndDraftReplacesStaleSelection() throws {
+        // Preselected but undecided (e.g. an earlier recommendation): the new recommendation decides.
         let (profile, format) = try ProfileCatalog.format(profileID: "canva-photobook", formatID: "landscape-8x6in")
         let photos = (0..<20).map { photo("p\($0)", day1 + Double($0) * 600, day: 1, selected: true) }
         let out = Workflow.recommendAndDraft(album: album(photos), profile: profile, format: format)
         #expect(out.photos.values.filter(\.isSelected).count == Recommender.targetCount(photoCount: 20))
+    }
+
+    @Test func recommendationsApplyOnlyOnce() throws {
+        let (profile, format) = try ProfileCatalog.format(profileID: "canva-photobook", formatID: "landscape-8x6in")
+        let photos = (0..<20).map { photo("p\($0)", day1 + Double($0) * 600, day: 1) }
+        let first = Workflow.recommendAndDraft(album: album(photos), profile: profile, format: format)
+        let recommended = Set(first.photos.values.filter(\.isSelected).map(\.id))
+        #expect(recommended.count == Recommender.targetCount(photoCount: 20))
+        #expect(first.photos.values.allSatisfy { !$0.selectionDecidedByUser })  // a recommendation is no decision
+
+        // The user deselects a recommended photo and selects a photo that was not recommended.
+        let dropped = recommended.sorted()[0]
+        let added = try #require(Set(first.photos.keys).subtracting(recommended).sorted().first)
+        var edited = try first.applying(.setSelected(dropped, false)).album
+        edited = try edited.applying(.setSelected(added, true)).album
+
+        let second = Workflow.recommendAndDraft(album: edited, profile: profile, format: format)
+        #expect(second.photos[dropped]?.isSelected == false)
+        #expect(second.photos[dropped]?.selectionDecidedByUser == true)
+        #expect(second.photos[added]?.isSelected == true)
+        #expect(second.photos[added]?.selectionDecidedByUser == true)
+        // Undecided photos get the recommendation again.
+        for id in Set(photos.map(\.id)).subtracting([dropped, added]) {
+            #expect(second.photos[id]?.isSelected == recommended.contains(id), "\(id)")
+        }
+        let framed = Set(second.spreads.flatMap(\.frames).compactMap(\.photoID))
+        #expect(framed == Set(second.photos.values.filter(\.isSelected).map(\.id)))
+        #expect(!framed.contains(dropped) && framed.contains(added))
+        // And a third run changes nothing.
+        #expect(Workflow.recommendAndDraft(album: second, profile: profile, format: format) == second)
+    }
+
+    @Test func recommendAndDraftKeepsDecidedSelectionOfUndatedPhoto() throws {
+        let (profile, format) = try ProfileCatalog.format(profileID: "canva-photobook", formatID: "landscape-8x6in")
+        var photos = (0..<10).map { photo("p\($0)", day1 + Double($0) * 600, day: 1) }
+        photos.append(photo("undated", day1 + 5 * 86_400, day: nil, selected: true, decided: true))
+        let out = Workflow.recommendAndDraft(album: album(photos), profile: profile, format: format)
+        #expect(out.photos["undated"]?.isSelected == true)  // the user's decision stands
+        #expect(!out.spreads.flatMap(\.frames).contains { $0.photoID == "undated" })  // no day, not placed
     }
 
     @Test func recommendAndDraftKeepsPlaceNamesFromPhotos() throws {
@@ -129,7 +170,7 @@ private func album(_ photos: [Photo]) -> Album {
     @Test func recommendAndDraftUnselectsUndatedPreselectedPhoto() throws {
         let (profile, format) = try ProfileCatalog.format(profileID: "canva-photobook", formatID: "landscape-8x6in")
         var photos = (0..<10).map { photo("p\($0)", day1 + Double($0) * 600, day: 1) }
-        // No dayKey (never grouped), alone on another day, preselected by an earlier state.
+        // No dayKey (never grouped), alone on another day, preselected by an earlier state, undecided.
         photos.append(photo("undated", day1 + 5 * 86_400, day: nil, selected: true))
         let out = Workflow.recommendAndDraft(album: album(photos), profile: profile, format: format)
         #expect(out.photos["undated"]?.isSelected == false)

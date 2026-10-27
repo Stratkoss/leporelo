@@ -70,6 +70,10 @@ public struct Photo: Sendable, Codable, Equatable {
     public var kind: PhotoKind
     public var analysis: PhotoAnalysis?
     public var isSelected: Bool
+    /// `true` once the user selected or deselected the photo themselves. Recommendations
+    /// (`Workflow.recommendAndDraft`) only change `isSelected` of undecided photos.
+    /// Missing in album files written before it existed; decodes as `false`.
+    public var selectionDecidedByUser: Bool
     public var dayKey: DayKey?
     public var placeName: String?
     public var seriesID: String?
@@ -78,7 +82,8 @@ public struct Photo: Sendable, Codable, Equatable {
 
     public init(id: PhotoID, sourceIdentifier: String, capturedAt: Date, timeZoneSeconds: Int?,
                 location: GeoPoint?, pixelWidth: Int, pixelHeight: Int, kind: PhotoKind,
-                analysis: PhotoAnalysis?, isSelected: Bool, dayKey: DayKey?, placeName: String?,
+                analysis: PhotoAnalysis?, isSelected: Bool, selectionDecidedByUser: Bool = false,
+                dayKey: DayKey?, placeName: String?,
                 seriesID: String?, originalState: OriginalState, deletedInSource: Bool) {
         self.id = id
         self.sourceIdentifier = sourceIdentifier
@@ -90,6 +95,7 @@ public struct Photo: Sendable, Codable, Equatable {
         self.kind = kind
         self.analysis = analysis
         self.isSelected = isSelected
+        self.selectionDecidedByUser = selectionDecidedByUser
         self.dayKey = dayKey
         self.placeName = placeName
         self.seriesID = seriesID
@@ -98,4 +104,25 @@ public struct Photo: Sendable, Codable, Equatable {
     }
 
     public var isLandscape: Bool { pixelWidth > pixelHeight }
+
+    /// Synthesized decoding, except that `selectionDecidedByUser` may be missing (older files).
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(PhotoID.self, forKey: .id)
+        sourceIdentifier = try c.decode(String.self, forKey: .sourceIdentifier)
+        capturedAt = try c.decode(Date.self, forKey: .capturedAt)
+        timeZoneSeconds = try c.decodeIfPresent(Int.self, forKey: .timeZoneSeconds)
+        location = try c.decodeIfPresent(GeoPoint.self, forKey: .location)
+        pixelWidth = try c.decode(Int.self, forKey: .pixelWidth)
+        pixelHeight = try c.decode(Int.self, forKey: .pixelHeight)
+        kind = try c.decode(PhotoKind.self, forKey: .kind)
+        analysis = try c.decodeIfPresent(PhotoAnalysis.self, forKey: .analysis)
+        isSelected = try c.decode(Bool.self, forKey: .isSelected)
+        selectionDecidedByUser = try c.decodeIfPresent(Bool.self, forKey: .selectionDecidedByUser) ?? false
+        dayKey = try c.decodeIfPresent(DayKey.self, forKey: .dayKey)
+        placeName = try c.decodeIfPresent(String.self, forKey: .placeName)
+        seriesID = try c.decodeIfPresent(String.self, forKey: .seriesID)
+        originalState = try c.decode(OriginalState.self, forKey: .originalState)
+        deletedInSource = try c.decode(Bool.self, forKey: .deletedInSource)
+    }
 }

@@ -19,6 +19,7 @@ import Foundation
                 closedEyes: false, featurePrint: Data([1, 2, 3])
             ),
             isSelected: true,
+            selectionDecidedByUser: true,
             dayKey: day,
             placeName: "Praha",
             seriesID: nil,
@@ -51,6 +52,38 @@ import Foundation
         let decoder = AlbumCoding.decoder()
         let decoded = try decoder.decode(Album.self, from: try encoder.encode(album))
         #expect(decoded == album)
+    }
+
+    @Test func photoWithoutSelectionDecidedKeyDecodesAsUndecided() throws {
+        // An album.json written before `selectionDecidedByUser` existed.
+        var album = Album(
+            formatVersion: Album.currentFormatVersion, id: "old", title: "t",
+            supplierProfileID: "s", formatID: "f", world: "journal-gallery", cover: nil, spreads: [],
+            photos: ["a": Self.makePhoto("a", at: 100)], source: nil,
+            createdAt: Date(timeIntervalSince1970: 0))
+        let data = try AlbumCoding.encoder().encode(album)
+        var json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        var photos = try #require(json["photos"] as? [String: Any])
+        var photo = try #require(photos["a"] as? [String: Any])
+        #expect(photo["selectionDecidedByUser"] as? Bool == true)
+        photo.removeValue(forKey: "selectionDecidedByUser")
+        photos["a"] = photo
+        json["photos"] = photos
+        let legacy = try JSONSerialization.data(withJSONObject: json)
+        #expect(!String(decoding: legacy, as: UTF8.self).contains("selectionDecidedByUser"))
+
+        let decoded = try AlbumCoding.decoder().decode(Album.self, from: legacy)
+        #expect(decoded.photos["a"]?.selectionDecidedByUser == false)
+        album.photos["a"]?.selectionDecidedByUser = false
+        #expect(decoded == album)
+    }
+
+    @Test func photoInitDefaultsToUndecided() {
+        let photo = Photo(id: "x", sourceIdentifier: "x", capturedAt: Date(timeIntervalSince1970: 0),
+                          timeZoneSeconds: nil, location: nil, pixelWidth: 1, pixelHeight: 1, kind: .photo,
+                          analysis: nil, isSelected: true, dayKey: nil, placeName: nil, seriesID: nil,
+                          originalState: .missing, deletedInSource: false)
+        #expect(photo.selectionDecidedByUser == false)
     }
 
     @Test func rectInsetAndIntersect() {

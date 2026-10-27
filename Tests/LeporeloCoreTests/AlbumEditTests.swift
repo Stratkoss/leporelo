@@ -37,6 +37,9 @@ private func makeAlbum() -> Album {
 
     let edits: [AlbumEdit] = [
         .setSelected("p1", true),
+        .setSelected("p1", false),
+        .restorePhotoSelection("p2", isSelected: true, decided: false),
+        .restorePhotoSelection("p2", isSelected: false, decided: true),
         .setFramePhoto(spreadID: "s1", frameID: "f1", photoID: "p3"),
         .setFramePhoto(spreadID: "s1", frameID: "f1", photoID: nil),
         .swapFramePhotos(spreadID: "s1", frameA: "f1", frameB: "f2"),
@@ -156,5 +159,26 @@ private func makeAlbum() -> Album {
     #expect(throws: AlbumEditError.unknownSpread) { try album.applying(.restoreSpread(ghost)) }
     #expect(throws: AlbumEditError.unknownText) {
         try album.applying(.setText(spreadID: "s1", textID: "nope", text: "x"))
+    }
+}
+
+@Test func setSelectedRecordsUserDecisionAndInverseRestoresBoth() throws {
+    var original = makeAlbum()
+    original.photos["p2"]?.isSelected = true
+    original.photos["p2"]?.selectionDecidedByUser = true
+    // p1 starts undecided and unselected, p2 decided and selected.
+    for (id, value) in [("p1", true), ("p1", false), ("p2", false), ("p2", true)] {
+        let before = original.photos[id]!
+        let (edited, inverse) = try original.applying(.setSelected(id, value))
+        #expect(edited.photos[id]?.isSelected == value)
+        #expect(edited.photos[id]?.selectionDecidedByUser == true)
+        #expect(inverse == .restorePhotoSelection(id, isSelected: before.isSelected,
+                                                  decided: before.selectionDecidedByUser))
+        let (restored, redo) = try edited.applying(inverse)
+        #expect(restored == original)
+        #expect(try restored.applying(redo).album == edited)
+    }
+    #expect(throws: AlbumEditError.unknownPhoto) {
+        try original.applying(.restorePhotoSelection("nope", isSelected: true, decided: true))
     }
 }

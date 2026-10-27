@@ -59,9 +59,16 @@ public enum Workflow {
 
     /// Recommends photos per day and drafts the album (pure, deterministic):
     /// days from `DayGrouper.group` over the photos that have a `dayKey` (photos without one were
-    /// never grouped and are left out, unselected), series from `SeriesDetector` (feature-print
-    /// distance) applied to the photos' `seriesID`, `Recommender.recommend` per day sets
-    /// `isSelected` (every other photo is unselected), then `AlbumDrafter.draft`.
+    /// never grouped and are left out of the draft), series from `SeriesDetector` (feature-print
+    /// distance) applied to the photos' `seriesID`, `Recommender.recommend` per day, then
+    /// `AlbumDrafter.draft` over the resulting selection.
+    ///
+    /// The recommendation only decides for photos with `selectionDecidedByUser == false`: those get
+    /// `isSelected = recommended` (so a stale preselection, or an undated photo, ends unselected).
+    /// Photos the user decided keep their `isSelected` verbatim, so a recommended photo the user
+    /// deselected stays out and a photo the user selected stays in, however often this runs.
+    /// The recommender itself still sees every photo of the day (a decided photo can take a
+    /// recommendation slot that then stays as the user set it).
     ///
     /// No `places` / `timeZones` maps are passed: `DayGrouper.group` falls back to each photo's
     /// stored `placeName` (set by `GroupingService.assignDays`), and a stored `dayKey` wins over the
@@ -69,9 +76,9 @@ public enum Workflow {
     public static func recommendAndDraft(album: Album, profile: SupplierProfile, format: BookFormat,
                                          options: DraftOptions = .init()) -> Album {
         var result = album
-        // TODO(task19): keep the selection of photos the user decided (`selectionDecidedByUser`);
-        // until then the recommendation decides for all photos.
-        for id in album.photos.keys { result.photos[id]?.isSelected = false }
+        for (id, photo) in album.photos where !photo.selectionDecidedByUser {
+            result.photos[id]?.isSelected = false
+        }
         let dated = album.photos.values.filter { $0.dayKey != nil }
         var days = DayGrouper.group(Array(dated), timeZones: [:], places: [:])
         var recommended = Set<PhotoID>()
@@ -83,7 +90,9 @@ public enum Workflow {
         for day in days {
             for photo in day.photos {
                 result.photos[photo.id]?.seriesID = photo.seriesID
-                result.photos[photo.id]?.isSelected = recommended.contains(photo.id)
+                if !photo.selectionDecidedByUser {
+                    result.photos[photo.id]?.isSelected = recommended.contains(photo.id)
+                }
             }
         }
         let draftDays = days.map { day in

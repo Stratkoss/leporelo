@@ -1,7 +1,10 @@
 import Foundation
 
 public enum AlbumEdit: Sendable, Codable, Equatable {
+    /// A user (de)selection: sets `isSelected` and marks it `selectionDecidedByUser`.
     case setSelected(PhotoID, Bool)
+    /// Stores both selection fields verbatim. Used as the exact-restore inverse of `setSelected`.
+    case restorePhotoSelection(PhotoID, isSelected: Bool, decided: Bool)
     case setFramePhoto(spreadID: String, frameID: String, photoID: PhotoID?)
     case swapFramePhotos(spreadID: String, frameA: String, frameB: String)
     case setFrameTransform(spreadID: String, frameID: String, offset: Point, zoom: Double)
@@ -52,9 +55,14 @@ extension Album {
 
         switch edit {
         case let .setSelected(id, selected):
+            return try applying(.restorePhotoSelection(id, isSelected: selected, decided: true))
+
+        case let .restorePhotoSelection(id, selected, decided):
             guard let photo = album.photos[id] else { throw AlbumEditError.unknownPhoto }
             album.photos[id]?.isSelected = selected
-            return (album, .setSelected(id, photo.isSelected))
+            album.photos[id]?.selectionDecidedByUser = decided
+            return (album, .restorePhotoSelection(id, isSelected: photo.isSelected,
+                                                  decided: photo.selectionDecidedByUser))
 
         case let .setFramePhoto(spreadID, frameID, photoID):
             if let photoID, album.photos[photoID] == nil { throw AlbumEditError.unknownPhoto }

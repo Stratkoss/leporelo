@@ -113,6 +113,8 @@ final class AlbumStore {
         switch edit {
         case .setSelected(_, true): "Vybrat fotku"
         case .setSelected(_, false): "Vyřadit fotku"
+        case .restorePhotoSelection(_, true, _): "Vybrat fotku"
+        case .restorePhotoSelection(_, false, _): "Vyřadit fotku"
         case .setFramePhoto(_, _, .some): "Vložit fotku"
         case .setFramePhoto(_, _, .none): "Odebrat fotku"
         case .swapFramePhotos: "Prohodit fotky"
