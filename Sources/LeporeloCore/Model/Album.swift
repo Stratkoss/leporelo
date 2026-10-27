@@ -7,6 +7,8 @@ public enum SourceQuery: Sendable, Codable, Equatable {
 
 public struct Album: Sendable, Codable, Equatable {
     public static let currentFormatVersion = 1
+    /// The page margin (mm) a new or older album gets.
+    public static let defaultMarginMM = 10.0
 
     public var formatVersion: Int
     public var id: String
@@ -20,10 +22,13 @@ public struct Album: Sendable, Codable, Equatable {
     public var photos: [PhotoID: Photo]
     public var source: SourceQuery?
     public var createdAt: Date
+    /// Distance (mm) the layout keeps from every page edge (see `MarginRule`).
+    public var marginMM: Double
 
     public init(formatVersion: Int, id: String, title: String, supplierProfileID: String,
                 formatID: String, world: String, cover: Cover?, spreads: [Spread],
-                photos: [PhotoID: Photo], source: SourceQuery?, createdAt: Date) {
+                photos: [PhotoID: Photo], source: SourceQuery?, createdAt: Date,
+                marginMM: Double = Album.defaultMarginMM) {
         self.formatVersion = formatVersion
         self.id = id
         self.title = title
@@ -35,6 +40,24 @@ public struct Album: Sendable, Codable, Equatable {
         self.photos = photos
         self.source = source
         self.createdAt = createdAt
+        self.marginMM = marginMM
+    }
+
+    /// Albums written before `marginMM` existed decode with `defaultMarginMM`.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        formatVersion = try c.decode(Int.self, forKey: .formatVersion)
+        id = try c.decode(String.self, forKey: .id)
+        title = try c.decode(String.self, forKey: .title)
+        supplierProfileID = try c.decode(String.self, forKey: .supplierProfileID)
+        formatID = try c.decode(String.self, forKey: .formatID)
+        world = try c.decode(String.self, forKey: .world)
+        cover = try c.decodeIfPresent(Cover.self, forKey: .cover)
+        spreads = try c.decode([Spread].self, forKey: .spreads)
+        photos = try c.decode([PhotoID: Photo].self, forKey: .photos)
+        source = try c.decodeIfPresent(SourceQuery.self, forKey: .source)
+        createdAt = try c.decode(Date.self, forKey: .createdAt)
+        marginMM = try c.decodeIfPresent(Double.self, forKey: .marginMM) ?? Album.defaultMarginMM
     }
 
     /// The photos the product shows and counts: everything except videos. An album created by an

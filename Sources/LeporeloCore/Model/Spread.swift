@@ -48,9 +48,11 @@ public struct Spread: Sendable, Codable, Equatable, Identifiable {
     public var frames: [Frame]
     public var texts: [TextBox]
     public var manuallyEdited: Bool
+    /// True once the user has changed the layout by hand (move, resize, add, delete).
+    public var customLayout: Bool
 
     public init(id: String, kind: SpreadKind, templateID: String, dayKey: DayKey?,
-                frames: [Frame], texts: [TextBox], manuallyEdited: Bool) {
+                frames: [Frame], texts: [TextBox], manuallyEdited: Bool, customLayout: Bool = false) {
         self.id = id
         self.kind = kind
         self.templateID = templateID
@@ -58,6 +60,20 @@ public struct Spread: Sendable, Codable, Equatable, Identifiable {
         self.frames = frames
         self.texts = texts
         self.manuallyEdited = manuallyEdited
+        self.customLayout = customLayout
+    }
+
+    /// Spreads written before `customLayout` existed decode it as false.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        kind = try c.decode(SpreadKind.self, forKey: .kind)
+        templateID = try c.decode(String.self, forKey: .templateID)
+        dayKey = try c.decodeIfPresent(DayKey.self, forKey: .dayKey)
+        frames = try c.decode([Frame].self, forKey: .frames)
+        texts = try c.decode([TextBox].self, forKey: .texts)
+        manuallyEdited = try c.decode(Bool.self, forKey: .manuallyEdited)
+        customLayout = try c.decodeIfPresent(Bool.self, forKey: .customLayout) ?? false
     }
 }
 

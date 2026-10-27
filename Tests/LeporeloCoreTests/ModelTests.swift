@@ -78,6 +78,36 @@ import Foundation
         #expect(decoded == album)
     }
 
+    @Test func albumWithoutNewKeysDecodesWithDefaults() throws {
+        let spread = Spread(id: "s1", kind: .blank, templateID: "t", dayKey: nil, frames: [], texts: [],
+                            manuallyEdited: false)
+        let album = Album(
+            formatVersion: Album.currentFormatVersion, id: "old", title: "t",
+            supplierProfileID: "s", formatID: "f", world: "journal-gallery", cover: nil, spreads: [spread],
+            photos: [:], source: nil, createdAt: Date(timeIntervalSince1970: 0))
+        let data = try AlbumCoding.encoder().encode(album)
+        var json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        json.removeValue(forKey: "marginMM")
+        var spreads = try #require(json["spreads"] as? [[String: Any]])
+        spreads[0].removeValue(forKey: "customLayout")
+        json["spreads"] = spreads
+        let legacy = try JSONSerialization.data(withJSONObject: json)
+        let text = String(decoding: legacy, as: UTF8.self)
+        #expect(!text.contains("marginMM") && !text.contains("customLayout"))
+
+        let decoded = try AlbumCoding.decoder().decode(Album.self, from: legacy)
+        #expect(decoded.marginMM == 10)
+        #expect(decoded.spreads[0].customLayout == false)
+
+        var changed = decoded
+        changed.marginMM = 14
+        changed.spreads[0].customLayout = true
+        let again = try AlbumCoding.decoder().decode(Album.self, from: try AlbumCoding.encoder().encode(changed))
+        #expect(again.marginMM == 14)
+        #expect(again.spreads[0].customLayout == true)
+        #expect(again == changed)
+    }
+
     @Test func photoInitDefaultsToUndecided() {
         let photo = Photo(id: "x", sourceIdentifier: "x", capturedAt: Date(timeIntervalSince1970: 0),
                           timeZoneSeconds: nil, location: nil, pixelWidth: 1, pixelHeight: 1, kind: .photo,
