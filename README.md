@@ -22,7 +22,7 @@ Všechny příkazy se spouštějí v kořeni repozitáře. `make help` vypíše 
 | `make run-app` | otevře `App/DerivedData/Build/Products/Debug/Leporelo.app` (nejdřív `make build-app`) |
 | `make all` | `test`, `test-app`, `build-app` za sebou |
 
-Aplikace není podepsaná (ad hoc, bez týmu). O přístup k Fotkám systém požádá až po kliknutí na „Povolit přístup k Fotkám“ v dialogu „Nové album“ (ne při spuštění); potřebný je plný přístup.
+Aplikace není podepsaná (ad hoc, bez týmu). O přístup k Fotkám systém požádá až po kliknutí na „Povolit přístup k Fotkám“ v úvodním okně (ne při spuštění); potřebný je plný přístup.
 
 ### Příkazový řádek
 
@@ -47,6 +47,10 @@ Návratové kódy: `0` hotovo, `1` kontrola před tiskem našla chyby (PDF se ne
 - `docs/superpowers/plans/`: implementační plán ([2026-10-26-leporelo-v1.md](docs/superpowers/plans/2026-10-26-leporelo-v1.md)).
 - `docs/manual-verification.md`: kontrolní seznam toho, co nešlo ověřit bez spuštěné aplikace, knihovny Photos a účtu Canva.
 
+## Úvodní okno
+
+Po spuštění se místo systémového panelu Otevřít ukáže okno „Leporelo“ ve stylu Fotek. Vlevo jsou „Moje knihy“ (naposledy otevřené knihy, klik knihu otevře), „Alba v iCloudu“ (běžná i sdílená alba z Fotek s počtem fotek; sdílené má ikonu dvou postav a upozornění na zmenšené fotky) a „Jinak“ > „Podle data…“. Vpravo je název, počet a mřížka fotek vybraného alba nebo rozmezí dat (jen k prohlížení, výběr fotek je až v třídění). „Udělat z toho knihu“ otevře list s názvem (předvyplněný názvem alba, u data „Nové album“), dodavatelem (jen když je jich víc), formátem a upozorněními; „Založit“ se zeptá na místo uložení, knihu založí a otevře a úvodní okno zavře. Bez přístupu k Fotkám ukáže pravá strana výzvu k povolení. Okno znovu otevře Soubor > Nové album… (Cmd-N), tlačítko „Nové album…“ v liště alba a Okno > Úvod.
+
 ## Editor dvoustran
 
 Šablona dvoustrany je jen doporučené rozložení. Rámečky a texty jde na plátně přímo posouvat a za rohy či strany měnit jejich velikost (Shift drží poměr stran, Cmd vypne přichytávání). Přichytávají se k okrajům a středům stránek, k okrajové čáře, k hranám a středům ostatních rámečků i k mezeře 4 mm; zapnutá „Mřížka“ v liště přidá čáry po 5 mm. Okraj knihy („Okraj“ v liště, výchozí 10 mm, od bezpečné zóny profilu do 30 mm) platí pro všechny úpravy: hrana rámečku leží buď na hraně stránky (fotka jde do spadávky), nebo aspoň na okrajové čáře, nikdy mezi nimi, a text zůstává uvnitř okraje. Dvojklik na fotku zapne režim výřezu, ve kterém tažení posouvá fotku v rámečku (Escape ho ukončí). „Přidat rámeček“ a „Přidat text“ jsou v liště i v kontextové nabídce plátna; v té je u položky pod ukazatelem také „Smazat“, „Odebrat fotku“, „Upravit výřez“ a „Obnovit výřez“. Každá úprava je jeden krok zpět. Obálka se zatím jen zobrazuje.
@@ -65,7 +69,7 @@ Zápisy na pozadí (náhledy, originály) jdou přes `NSFileCoordinator` a dokum
 
 ## Jak přidat profil dodavatele
 
-Profil je data, ne kód. `ProfileCatalog.all()` načte každý soubor `*.json` ze složky `Sources/LeporeloCore/Resources/Profiles` (řazeno podle názvu souboru), takže stačí přidat nový soubor a znovu sestavit; `Package.swift` kopíruje celou složku `Resources`. Nový profil se pak nabídne v dialogu „Nové album“ a jde zadat v CLI přes `--profile <id>`. Soubor se dekóduje do `SupplierProfile` (`Sources/LeporeloCore/Supplier/SupplierProfile.swift`); chybějící nebo špatné pole dekódování shodí, nevalidují se ale věcné hodnoty (například `multipleOf: 0` nebo prázdné `formats`), na to si dej pozor sám.
+Profil je data, ne kód. `ProfileCatalog.all()` načte každý soubor `*.json` ze složky `Sources/LeporeloCore/Resources/Profiles` (řazeno podle názvu souboru), takže stačí přidat nový soubor a znovu sestavit; `Package.swift` kopíruje celou složku `Resources`. Nový profil se pak nabídne v listu „Udělat z toho knihu“ úvodního okna a jde zadat v CLI přes `--profile <id>`. Soubor se dekóduje do `SupplierProfile` (`Sources/LeporeloCore/Supplier/SupplierProfile.swift`); chybějící nebo špatné pole dekódování shodí, nevalidují se ale věcné hodnoty (například `multipleOf: 0` nebo prázdné `formats`), na to si dej pozor sám.
 
 Pole profilu:
 
@@ -130,7 +134,7 @@ Co profil sám nepokryje a co je v kódu:
 - Návrh alba dává do galerie 2 fotky na dvoustranu; když by album přesáhlo maximum stran dodavatele (Canva 98), navrhne 3 fotky na dvoustranu. Dlouhou cestu s velkým výběrem to nemusí stačit zkrátit: třídění pak ukáže „Přesahuje maximum 98 stran“ a export je zablokovaný, dokud se výběr nezmenší.
 - Vrácení ke starší verzi (Soubor > Vrátit se k, Verze) obnoví i složku `originals/` a smaže originály stažené později (viz výše).
 - Balík alba smazaný z disku, zatímco je otevřený (například `rm -rf` v Terminálu), už nejde uložit; práce od posledního uložení se ztratí.
-- Tlačítko „Nový dokument“ v panelu pro otevření při spuštění vytvoří prázdné okno bez názvu, ve kterém nejde nic dělat. Album se zakládá přes Soubor > Nové album (Cmd-N).
+- Prázdný dokument bez názvu aplikace nezakládá (ani při spuštění, ani po kliknutí na ikonu v Docku bez otevřených oken); kniha vzniká jen z úvodního okna.
 - Text delší než jeho rámeček se do tisku nevejde a konec se ořízne. Editor ho ukáže (překryv při psaní roluje, na plátně je u textu varování) a kontrola před exportem varuje „Text se nevejde do rámečku“; zkrátit ho musí člověk.
 
 ## Licence a písma

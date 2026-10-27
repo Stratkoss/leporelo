@@ -27,8 +27,9 @@ enum NewAlbumError: LocalizedError, Equatable {
     }
 }
 
-/// The "Nové album" form: title, supplier format and photo source, plus the checks shown before
-/// creating (photo count, empty source, reduced photos, shared albums) and `createAlbum`.
+/// The book form ("Udělat z toho knihu", preset by `StartModel`): title, supplier format and
+/// photo source, plus the checks shown before creating (photo count, empty source, reduced
+/// photos, shared albums) and `createAlbum`.
 ///
 /// `createAlbum` is fast on purpose (spec section 8: grid in 5 s, days in 30 s, geocoding never
 /// blocks): it fetches, groups days with an EMPTY place resolver and saves the first state.

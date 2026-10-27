@@ -24,7 +24,6 @@ struct AlbumWindow: View {
     }
 
     @State private var session = AlbumSession()
-    @State private var showsNewAlbum = false
     /// Triage or editor as the user chose; nil = by the album (editor when it has spreads). Kept
     /// across rebinds (revert, reload, move) of the same window.
     @State private var requestedMode: WindowMode?
@@ -32,6 +31,7 @@ struct AlbumWindow: View {
     @State private var access = PhotoAccess(PhotoKitAuthorization.currentStatus())
     @State private var refreshAlert: RefreshText.Alert?
     @Environment(\.photoSourceProvider) private var photoSourceProvider
+    @Environment(\.openWindow) private var openWindow
     /// The document's undo manager (one per window); capped once here for every view of it.
     @Environment(\.undoManager) private var undoManager
 
@@ -49,11 +49,8 @@ struct AlbumWindow: View {
         .navigationTitle(store?.album.title ?? document.currentAlbum.title)
         .toolbar {
             ToolbarItem {
-                Button("Nové album…", systemImage: "plus") { showsNewAlbum = true }
+                Button("Nové album…", systemImage: "plus") { openWindow(id: StartView.windowID) }
             }
-        }
-        .sheet(isPresented: $showsNewAlbum) {
-            NewAlbumSheet(onClose: { showsNewAlbum = false })
         }
         .task(id: BindKey(document: document, fileURL: fileURL)) {
             // Binds the store once SwiftUI knows the file URL, again after a move, and to the new

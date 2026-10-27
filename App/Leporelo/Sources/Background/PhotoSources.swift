@@ -2,7 +2,7 @@ import LeporeloCore
 import SwiftUI
 
 /// The app's photo sources for background work: PhotoKit for albums created by the app (they
-/// have a source query), and only with full access. Never prompts (the "Nové album" sheet asks).
+/// have a source query), and only with full access. Never prompts (the start window asks).
 enum AppPhotoSources {
     @MainActor
     static func source(for album: Album) -> (any PhotoSource)? {

@@ -1,7 +1,7 @@
 import Foundation
 import Photos
 
-/// What the "Nové album" sheet shows for each Photos authorization status. Only full access
+/// What the start window shows for each Photos authorization status. Only full access
 /// enables the form: `PhotoKitSource` refuses everything else (a limited set would make
 /// `SourceSync` flag the photos outside it as deleted).
 enum PhotoAccess: Equatable {

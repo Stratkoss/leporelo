@@ -13,6 +13,7 @@ final class FakePhotoSource: PhotoSource, @unchecked Sendable {
     private struct State {
         var photos: [SourcePhoto] = []
         var albums: [SourceAlbum] = []
+        var albumsError: PhotoSourceError?
         var photosError: PhotoSourceError?
         var thumbnailError: PhotoSourceError?
         var holdThumbnails = false
@@ -41,6 +42,8 @@ final class FakePhotoSource: PhotoSource, @unchecked Sendable {
     }
 
     func setPhotos(_ photos: [SourcePhoto]) { locked { $0.photos = photos } }
+    /// `albums()` throws `error` (nil: lists the albums again).
+    func setAlbumsError(_ error: PhotoSourceError?) { locked { $0.albumsError = error } }
     func setPhotosError(_ error: PhotoSourceError?) { locked { $0.photosError = error } }
     func holdThumbnails(_ on: Bool = true) { locked { $0.holdThumbnails = on } }
     /// Every later `thumbnail` call throws `error` (nil: serve images again).
@@ -73,7 +76,12 @@ final class FakePhotoSource: PhotoSource, @unchecked Sendable {
         waiting.forEach { $0.resume() }
     }
 
-    func albums() async throws -> [SourceAlbum] { locked { $0.albums } }
+    func albums() async throws -> [SourceAlbum] {
+        try locked { s -> Result<[SourceAlbum], PhotoSourceError> in
+            if let error = s.albumsError { return .failure(error) }
+            return .success(s.albums)
+        }.get()
+    }
 
     func photos(matching query: SourceQuery) async throws -> [SourcePhoto] {
         try await wait(while: \.holdPhotos)

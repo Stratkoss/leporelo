@@ -6,20 +6,25 @@ Příprava: `make build-app`, pak `make run-app`. Chyby a diagnostika jdou do Ko
 
 ## A. První spuštění a oprávnění k Photos
 
-- [ ] Nové album (Cmd-N) při nerozhodnutém přístupu ukáže vysvětlení a tlačítko „Povolit přístup k Fotkám“. Po kliknutí se objeví systémový dotaz právě jednou. Očekávání: po povolení plného přístupu se objeví formulář.
-- [ ] V Nastavení systému > Soukromí > Fotky přepni aplikaci na „Vybrané fotky“ (limited) a vrať se do sheetu „Nové album“. Očekávání: sheet ukáže vysvětlení omezeného přístupu a tlačítko „Otevřít Nastavení systému“ otevře správný panel. Volání nad knihovnou nesmí vrátit částečný seznam fotek.
+- [ ] **Nejdřív:** spuštění aplikace (bez otevřených dokumentů k obnovení) ukáže úvodní okno „Leporelo“, žádný systémový panel Otevřít a žádné prázdné okno bez názvu. Potlačení panelu je postavené jen na registraci `NSShowAppCentricOpenPanelInsteadOfUntitledFile = false` v `LeporeloApp.init()` a na `applicationShouldOpenUntitledFile` = false v delegátu aplikace; při stavbě to ověřit nešlo. Když se panel Otevřít nebo prázdné okno přesto ukáže, zapiš co přesně. Zkus i spuštění s otevřenou knihou z minula (obnoví se kniha a k ní úvodní okno) a klik na ikonu v Docku, když nejsou otevřená žádná okna (zapiš, co se stane; prázdné okno bez názvu se objevit nesmí). Spusť aplikaci i dvojklikem na `.leporelo` ve Finderu a zapiš, jestli se vedle knihy ukáže i úvodní okno (`defaultLaunchBehavior(.presented)` ho ukazuje při každém spuštění).
+- [ ] Úvodní okno při nerozhodnutém přístupu ukáže vpravo vysvětlení a tlačítko „Povolit přístup k Fotkám“. Po kliknutí se objeví systémový dotaz právě jednou. Očekávání: po povolení plného přístupu se vlevo objeví alba z Fotek a vpravo mřížka prvního alba.
+- [ ] V Nastavení systému > Soukromí > Fotky přepni aplikaci na „Vybrané fotky“ (limited) a vrať se do úvodního okna. Očekávání: pravá strana ukáže vysvětlení omezeného přístupu a tlačítko „Otevřít Nastavení systému“ otevře správný panel. Volání nad knihovnou nesmí vrátit částečný seznam fotek.
 - [ ] Totéž pro „Žádné“ (denied) a, pokud to jde nasimulovat, pro omezený přístup správcem (restricted). Očekávání: v restricted se tlačítko nastavení nezobrazuje.
 - [ ] Odeber přístup za běhu u otevřeného, už zanalyzovaného alba. Očekávání: album dál funguje, banner ukáže chybějící přístup s tlačítkem „Otevřít Nastavení systému“. U nového alba bez náhledů se ukáže celookenní obrazovka s vysvětlením. Po vrácení přístupu a návratu do aplikace práce na pozadí znovu naběhne.
 
-## B. Založení alba z posledních 7 dní
+## B. Úvodní okno a založení knihy
 
-- [ ] Nové album: výchozí hodnoty jsou název „Nové album“, formát „Na šířku 8 × 6 in (Canva)“ s poznámkou „Rozměry formátu nejsou ověřené u dodavatele.“ a rozmezí od před 7 dny do dneška. Po chvíli se ukáže „Fotek ve zdroji: N“ a N odpovídá počtu fotek (bez videí) ve Photos za dané období.
-- [ ] Rozmezí bez fotek ukáže „V tomto rozmezí nejsou žádné fotky“ a „Založit album“ je vypnuté. Režim Album vypíše alba z Photos; sdílené album ukáže oranžovou poznámku o sdílených albech iCloudu (zmenšené fotky) a dovolí vytvoření.
-- [ ] „Založit album“ nabídne uložení jako „Nové album.leporelo“. Ulož na plochu. Očekávání: okno alba se otevře do několika sekund, banner ukazuje „Analyzuji fotky 0 / N“ a počítá nahoru, okno zůstává plynulé, po skončení banner zmizí (nebo ukáže „Zjišťuji místa…“, dokud běží geocoding).
+- [ ] „Alba v iCloudu“ odpovídají Fotkám: stejná běžná i sdílená alba (i alba ve složkách), stejné názvy a počty fotek (bez videí). Sdílené album má ikonu dvou postav a po najetí myší ukáže upozornění na zmenšené fotky.
+- [ ] Mřížka alba se scrolluje plynule i u alba kolem 3 000 fotek: náhledy se dotahují při scrollu, okno nezamrzá a výběr jiného alba během načítání ukáže fotky nově vybraného alba (ne předchozího). Když scroll drhne, zapiš to (náhrada je `NSCollectionView` jako v třídění).
+- [ ] „Moje knihy“ ukazují naposledy otevřené knihy (bez přípony); klik knihu otevře a úvodní okno zavře. Kniha, která už je otevřená, se jen přenese dopředu.
+- [ ] Soubor > Nové album… (Cmd-N) úvodní okno znovu otevře, i když je vepředu okno knihy; totéž tlačítko „Nové album…“ v liště knihy a Okno > Úvod. V nabídce Okno je „Úvod“ jen jednou (bez další položky „Leporelo“).
+- [ ] „Jinak“ > „Podle data…“: výchozí rozmezí je od před 7 dny do dneška, „Od“ a „Do“ mění mřížku i počet. Rozmezí bez fotek ukáže „V tomto rozmezí nejsou žádné fotky“ a „Udělat z toho knihu“ je vypnuté.
+- [ ] „Udělat z toho knihu“ u alba: list má název alba, formát „Na šířku 8 × 6 in (Canva)“ s poznámkou „Rozměry formátu nejsou ověřené u dodavatele.“ a po chvíli „Fotek ve zdroji: N“. U data je název „Nové album“. U sdíleného alba ukáže oranžovou poznámku o sdílených albech iCloudu (zmenšené fotky) a dovolí založení.
+- [ ] „Založit“ nabídne uložení jako „<název>.leporelo“ (u data „Nové album.leporelo“). Ulož na plochu. Očekávání: okno alba se otevře do několika sekund, banner ukazuje „Analyzuji fotky 0 / N“ a počítá nahoru, okno zůstává plynulé, po skončení banner zmizí (nebo ukáže „Zjišťuji místa…“, dokud běží geocoding).
 - [ ] Názvy míst se objeví později, ne hned; třídění po dnech je použitelné dřív. Fotky s GPS mají po dokončení v `album.json` (Zobrazit obsah balíku) pole `placeName`.
 - [ ] Zavři okno uprostřed analýzy a balík znovu otevři. Očekávání: analýza pokračuje se zbývajícím počtem. Po dokončení má `album.json` vyplněné `analysis` a část fotek `isSelected: true`. Otevření dokončeného alba nezmění výběr a neukáže banner.
 - [ ] V uložení vyber existující `.leporelo` a potvrď. Očekávání: panel zůstane otevřený a ukáže „Na tomto místě už album je. Zvolte jiný název.“; systémový dotaz „Nahradit?“ se neobjeví. Pokud se objeví (pořadí volání delegáta je jiné, než se předpokládalo), existující balík se přesto nesmí přepsat a ukáže se „Album s tímto názvem už existuje.“.
-- [ ] Během „Zakládám album…“ jsou formulář i „Zrušit“ vypnuté.
+- [ ] Během „Zakládám album…“ jsou formulář i „Zrušit“ vypnuté. Po otevření knihy se list i úvodní okno zavřou.
 - [ ] Smaž z `thumbs/` jeden soubor v hotovém albu a album otevři. Očekávání: krátce se ukáže „Analyzuji fotky 0 / 1“, soubor je zpět a výběr se nezměnil.
 
 ## C. Fakta o PhotoKit k potvrzení
@@ -84,8 +89,8 @@ Otevři album s fotkami, které ještě nemá dvoustrany (nebo jeho kopii). Fotk
 - [ ] Ručně upravená dvoustrana (posunutý rámeček) a výběr TÉŽE šablony v „Doporučená rozložení“: zeptá se „Ruční rozložení se nahradí doporučeným.“ a po potvrzení vrátí doporučené rozložení (jedno Cmd-Z ho zase vrátí na ruční).
 - [ ] Ručně upravená dvoustrana s textem a výběr šablony, která by text zahodila: jedno společné potvrzení „Ruční rozložení se nahradí doporučeným.“ obsahuje i „Tyto texty by se ztratily: …“; „Nahradit“ změnu provede a nepřijde druhý dialog za ním.
 - [ ] Fotka, která už v knize je, přetažená ze zásobníku na rámeček: sheet „Tahle fotka už v knize je“ s „Je na: …“ a tlačítky „Dát i sem“, „Přesunout sem“, „Zrušit“ se ukáže správně (sheet se otevírá zevnitř upuštění, nesmí se zaseknout ani zmizet) a každá volba udělá, co říká.
-- [ ] Nabídka Úpravy: titulky „Odvolat: …“ a „Znovu: …“ se po každé změně hned obnoví. Položka se záměrně nikdy nevypíná: když není co odvolat, říká jen „Odvolat“ a Cmd-Z nic neudělá. V okně „Nové album“ Cmd-Z v poli názvu pořád vrací psaní.
-- [ ] Cmd-Z v sheetu „Nové album“ otevřeném z okna alba (Cmd-N, když je album vepředu): napiš do pole názvu pár znaků a stiskni Cmd-Z. Očekávání: vrátí se psaní v poli, album za sheetem se nezmění (třeba výběr fotky nebo text zůstanou). Totéž v sheetu exportu, ve výběru šablony a v potvrzovacích dialozích.
+- [ ] Nabídka Úpravy: titulky „Odvolat: …“ a „Znovu: …“ se po každé změně hned obnoví. Položka se záměrně nikdy nevypíná: když není co odvolat, říká jen „Odvolat“ a Cmd-Z nic neudělá. V listu „Udělat z toho knihu“ Cmd-Z v poli názvu pořád vrací psaní.
+- [ ] Cmd-Z v listu „Udělat z toho knihu“ úvodního okna otevřeného z okna alba (Cmd-N, když je album vepředu): napiš do pole názvu pár znaků a stiskni Cmd-Z. Očekávání: vrátí se psaní v poli, album se nezmění (třeba výběr fotky nebo text zůstanou). Totéž v sheetu exportu, ve výběru šablony a v potvrzovacích dialozích.
 - [ ] Cmd-W nebo Cmd-Q do 0,5 s po posledním písmenu psaného textu a následné otevření: poslední znaky mohou chybět (ověř a zapiš; zaručené je jen uložení po 0,5 s nečinnosti).
 - [ ] Varování: nízké DPI, chybějící originál a text mimo bezpečnou zónu mají oranžové nebo červené ikony u rámečku či rohu textu s popiskem; prázdné tělo deníku dá pruh „1 problém na této dvoustraně“ s popoverem; chyba počtu stran je v záhlaví pásu („N problémů alba“).
 - [ ] Panel nástrojů: „Navrhnout znovu“ ukáže „Zachovám N ručně upravených dvoustran. Pokračovat?“ se správným N; „Formát“ vypíše formáty se zatržením a změna ukáže „Rozložení se přepočítá, obsah zůstane.“ a přepočítá.
@@ -103,7 +108,6 @@ Otevři album s fotkami, které ještě nemá dvoustrany (nebo jeho kopii). Fotk
 - [ ] Verze a originály: vyber fotky, nech stáhnout jejich originály, pak Soubor > Vrátit se k > Poslední otevřená verze (nebo „Procházet všechny verze…“ > Obnovit starší verzi). Zjisti a zapiš, co se stane se složkou `originals/`. Očekávané (a proto varování v README): obnovení nahradí celý balík včetně `originals/`, originály stažené po té verzi z disku zmizí a znovu se stáhnou; když fotka mezitím zmizela z Fotek, její jediná kopie je pryč.
 - [ ] Automatické ukládání při první analýze velkého alba (kolem 3 000 fotek): během analýzy sleduj plynulost okna (rolování mřížky). Zapiš, jestli okno zhruba každých 10 s na chvíli (asi 1 s) zamrzne kvůli uložení; při analýze se ukládá s odstupem 10 s, ne 3 s.
 - [ ] Balík smazaný, zatímco je otevřený, nejde uložit (známé omezení). Jen zjisti, jak se aplikace chová, a zapiš to.
-- [ ] Panel pro otevření při spuštění aplikace má tlačítko „Nový dokument“. Očekávání (známé omezení): vytvoří prázdné okno bez názvu, ve kterém nejde nic dělat; zavři ho a album založ přes Soubor > Nové album.
 
 ## G. Načíst nové fotky ze zdroje
 
