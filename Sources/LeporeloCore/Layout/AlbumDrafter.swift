@@ -130,7 +130,8 @@ public enum AlbumDrafter {
                                           geometry: geometry, marginMM: margin))
         }
         for plan in plans {
-            spreads += daySpreads(plan, geometry: geometry, marginMM: margin)
+            spreads += daySpreads(plan.pages, dayKey: plan.group.dayKey, placeNames: plan.group.placeNames,
+                                  geometry: geometry, marginMM: margin)
         }
         for k in stride(from: 1, through: blanks, by: 1) {
             spreads.append(templateSpread("blank", id: "blank-\(k)", photos: [], texts: [:],
@@ -212,20 +213,21 @@ public enum AlbumDrafter {
         return spread
     }
 
-    /// The day's pages paired into spreads (left, right); frame `L.photoK` / `R.photoK` gets the
-    /// page's K-th photo. The first spread is the `journal` when it starts with an opener page,
-    /// whose texts get the day's date and places (body empty); every other spread is a `gallery`
-    /// and all other texts (captions) stay empty. Ids: `2026-06-18-journal`, then
-    /// `2026-06-18-gallery-1`, `-gallery-2`, ...
-    private static func daySpreads(_ plan: DayPlan, geometry: PageGeometry, marginMM: Double) -> [Spread] {
-        let key = plan.group.dayKey
+    /// The day's pages paired into spreads (left, right; an odd last page gets an `empty` right
+    /// page); frame `L.photoK` / `R.photoK` gets the page's K-th photo. The first spread is the
+    /// `journal` when it starts with an opener page, whose texts get the day's date and places
+    /// (`noPlaceTitle` without places; body empty); every other spread is a `gallery` and all other
+    /// texts (captions) stay empty. Ids: `2026-06-18-journal`, then `2026-06-18-gallery-1`,
+    /// `-gallery-2`, ... Shared with `AlbumUpdater`, which re-plans a day after a new photo.
+    static func daySpreads(_ pages: [PlannedPage], dayKey key: DayKey, placeNames: [String],
+                           geometry: PageGeometry, marginMM: Double) -> [Spread] {
         let base = dayString(key)
-        let title = plan.group.placeNames.isEmpty ? noPlaceTitle : plan.group.placeNames.joined(separator: ", ")
+        let title = placeNames.isEmpty ? noPlaceTitle : placeNames.joined(separator: ", ")
         let empty = PlannedPage(layoutID: "empty", photos: [])
         var galleries = 0
-        return stride(from: 0, to: plan.pages.count, by: 2).map { i in
-            let left = plan.pages[i]
-            let right = i + 1 < plan.pages.count ? plan.pages[i + 1] : empty
+        return stride(from: 0, to: pages.count, by: 2).map { i in
+            let left = pages[i]
+            let right = i + 1 < pages.count ? pages[i + 1] : empty
             let journal = i == 0 && PageLayoutCatalog.layout(id: left.layoutID)?.role == .opener
             let id: String
             if journal {

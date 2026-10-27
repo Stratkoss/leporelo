@@ -139,44 +139,168 @@ import Foundation
         #expect(a.spreads.count == count)
     }
 
-    @Test func selectedPhotoAddsGalleryWhenFull() throws {
+    /// A page spread's empty frames take a photo of the fitting orientation first (frame
+    /// orientation from the page layout; a manual page's frames fit anything).
+    @Test func selectedPhotoFillsFittingFrameOfPageSpread() throws {
         let (p, f) = try D.canva(Self.lax)
-        let days = [D.day(Self.june18, D.dayPhotos("a", Self.june18, count: 8)),
+        let g = Self.geometry(p, f)
+        var a = D.draft([D.day(Self.june18, D.dayPhotos("a", Self.june18, count: 6))], profile: p, format: f)
+        var spread = PageSpread.compose(left: try #require(PageLayoutCatalog.layout(id: "portrait-left-2l")),
+                                        right: try #require(PageLayoutCatalog.layout(id: "framed-1")),
+                                        kind: .gallery, dayKey: Self.june18, id: "2026-06-18-gallery-9",
+                                        geometry: g, marginMM: a.marginMM)
+        spread.pageLayouts[1] = nil
+        a.spreads.insert(spread, at: a.spreads.count - 1)
+        a = Self.adding(D.photo("tall", day: Self.june18, minute: 40, landscape: false), to: a)
+        a = Self.adding(D.photo("wide", day: Self.june18, minute: 41), to: a)
+        a = Self.adding(D.photo("any", day: Self.june18, minute: 42, landscape: false), to: a)
+        let count = a.spreads.count
+        a = AlbumUpdater.photoSelected("wide", in: a, geometry: g)
+        a = AlbumUpdater.photoSelected("tall", in: a, geometry: g)
+        let filled = try #require(a.spreads.first { $0.id == spread.id })
+        #expect(filled.frames.first { $0.id == "L.photo2" }?.photoID == "wide")   // ▭ frame
+        #expect(filled.frames.first { $0.id == "L.photo1" }?.photoID == "tall")   // ▯ frame
+        // L.photo3 (▭) is still empty, but the manual page's frame fits a portrait photo.
+        a = AlbumUpdater.photoSelected("any", in: a, geometry: g)
+        let again = try #require(a.spreads.first { $0.id == spread.id })
+        #expect(again.frames.first { $0.id == "R.photo1" }?.photoID == "any")
+        #expect(again.frames.first { $0.id == "L.photo3" }?.photoID == nil)
+        #expect(a.spreads.count == count)
+    }
+
+    /// Spec 4.5.2 on an old book: a day without an empty frame is planned again page by page with
+    /// the new photo; its spreads keep their ids in order and the next day follows.
+    @Test func selectedPhotoReplansFullLegacyDay() throws {
+        let (p, f) = try D.canva(Self.lax)
+        let ravello = D.dayPhotos("a", Self.june18, count: 8).map { p in
+            var p = p
+            p.placeName = "Ravello"
+            return p
+        }
+        let days = [D.day(Self.june18, ravello, places: ["Ravello"]),
                     D.day(Self.june19, D.dayPhotos("b", Self.june19, count: 4))]
         var a = Self.legacyDraft(days, profile: p, format: f)
-        let lastJune18 = try #require(a.spreads.lastIndex { $0.dayKey == Self.june18 })
+        let oldIDs = a.spreads.filter { $0.dayKey == Self.june18 }.map(\.id)
+        #expect(oldIDs == ["2026-06-18-journal", "2026-06-18-gallery-1", "2026-06-18-gallery-2"])
+        let june19 = a.spreads.filter { $0.dayKey == Self.june19 }
         a = Self.adding(D.photo("new", day: Self.june18, minute: 50), to: a)
         let before = a
         a = AlbumUpdater.photoSelected("new", in: a, geometry: Self.geometry(p, f))
-        #expect(a.spreads.count == before.spreads.count + 1)
-        let added = a.spreads[lastJune18 + 1]
-        #expect(added.templateID == "gallery-1" && added.kind == .gallery)
-        #expect(added.dayKey == Self.june18)
-        #expect(added.frames.map(\.photoID) == ["new"])
-        #expect(added.id == "2026-06-18-gallery-3")
-        #expect(added.manuallyEdited == false)
+        let day = a.spreads.filter { $0.dayKey == Self.june18 }
+        #expect(day.allSatisfy { $0.templateID == PageSpread.templateID && $0.pageLayouts.count == 2 })
+        #expect(Array(day.map(\.id).prefix(oldIDs.count)) == Array(oldIDs.prefix(day.count)))
+        #expect(day.first?.kind == .journal && day.first?.pageLayouts.first.flatMap { $0 }?.hasPrefix("opener") == true)
+        #expect(D.text(try #require(day.first), .date) == "čtvrtek 18. června 2026")
+        #expect(D.text(try #require(day.first), .title) == "Ravello")
+        #expect(day.dropFirst().allSatisfy { $0.kind == .gallery && $0.texts.allSatisfy { $0.text.isEmpty } })
+        #expect(day.allSatisfy { !$0.manuallyEdited })
+        for s in day { #expect(s.frames.allSatisfy { $0.photoID != nil }, "\(s.id)") }
+        let placed = D.placed(day)
+        #expect(placed.count == 9 && Set(placed) == Set((0..<8).map { "a\($0)" } + ["new"]))
+        // The day does not shrink, so the book keeps its page count.
+        #expect(day.count >= oldIDs.count)
         #expect(Set(a.spreads.map(\.id)).count == a.spreads.count)
-        #expect(a.spreads[lastJune18 + 2].dayKey == Self.june19)
+        #expect(a.spreads.filter { $0.dayKey == Self.june19 } == june19)
+        let last18 = try #require(a.spreads.lastIndex { $0.dayKey == Self.june18 })
+        #expect(a.spreads[last18 + 1].dayKey == Self.june19)
+        #expect(a.spreads.first == before.spreads.first && a.spreads.last == before.spreads.last)
         // Idempotent: a placed photo is not placed twice.
         #expect(AlbumUpdater.photoSelected("new", in: a, geometry: Self.geometry(p, f)) == a)
     }
 
-    @Test func selectedPhotoOfNewDayGetsGalleryInChronologicalPlace() throws {
+    /// Spec 4.5.2 and 9: the day's automatic spreads are planned again with the new photo; a manual
+    /// spread between them stays as it is and the new spreads come after the last automatic one.
+    @Test func selectingPhotoReplansAutomaticDay() throws {
+        let (p, f) = try D.canva(Self.lax)
+        let g = Self.geometry(p, f)
+        let days = [D.day(Self.june18, D.mixedPhotos("a", Self.june18, count: 16), places: ["Ravello"]),
+                    D.day(Self.june19, D.dayPhotos("b", Self.june19, count: 4))]
+        var a = D.draft(days, profile: p, format: f)
+        let day18 = a.spreads.indices.filter { a.spreads[$0].dayKey == Self.june18 }
+        try #require(day18.count >= 3)
+        a.spreads[day18[1]].manuallyEdited = true
+        let manual = a.spreads[day18[1]]
+        let autoIDs = day18.filter { $0 != day18[1] }.map { a.spreads[$0].id }
+        for i in day18 { #expect(a.spreads[i].frames.allSatisfy { $0.photoID != nil }) }
+        let june19 = a.spreads.filter { $0.dayKey == Self.june19 }
+        a = Self.adding(D.photo("new", day: Self.june18, minute: 7), to: a)
+
+        let b = AlbumUpdater.photoSelected("new", in: a, geometry: g)
+        #expect(b.photos["new"]?.isSelected == true)
+        #expect(Self.frames(holding: "new", in: b).count == 1)
+        let day = b.spreads.filter { $0.dayKey == Self.june18 }
+        #expect(day.first == manual)
+        let replanned = Array(day.dropFirst())
+        #expect(Array(replanned.map(\.id).prefix(autoIDs.count)) == Array(autoIDs.prefix(replanned.count)))
+        #expect(replanned.first?.kind == .journal)
+        #expect(D.text(try #require(replanned.first), .date) == "čtvrtek 18. června 2026")
+        for s in day {
+            #expect(s.pageLayouts.count == 2, "\(s.id)")   // whole spreads: an even page count
+            #expect(s.frames.allSatisfy { $0.photoID != nil }, "\(s.id)")
+        }
+        let placed = D.placed(day)
+        #expect(placed.count == Set(placed).count)
+        #expect(Set(placed) == Set((0..<16).map { "a\($0)" } + ["new"]))
+        #expect(b.spreads.filter { $0.dayKey == Self.june19 } == june19)
+        #expect(Set(b.spreads.map(\.id)).count == b.spreads.count)
+        #expect(D.misfits(b).isEmpty)
+    }
+
+    /// Spec 4.5.3: every spread of the day is manual, so a new spread follows the day's last one:
+    /// the photo on `framed-1` (▭) or `portrait-text` (▯) on the left, an empty right page.
+    @Test func selectingPhotoAllManualAddsSpread() throws {
+        let (p, f) = try D.canva(Self.lax)
+        let g = Self.geometry(p, f)
+        let days = [D.day(Self.june18, D.dayPhotos("a", Self.june18, count: 8)),
+                    D.day(Self.june19, D.dayPhotos("b", Self.june19, count: 4))]
+        var a = D.draft(days, profile: p, format: f)
+        for i in a.spreads.indices where a.spreads[i].dayKey == Self.june18 { a.spreads[i].manuallyEdited = true }
+        let last18 = try #require(a.spreads.lastIndex { $0.dayKey == Self.june18 })
+        a = Self.adding(D.photo("wide", day: Self.june18, minute: 50), to: a)
+        a = Self.adding(D.photo("tall", day: Self.june18, minute: 51, landscape: false), to: a)
+
+        for (id, layout) in [("wide", "framed-1"), ("tall", "portrait-text")] {
+            let b = AlbumUpdater.photoSelected(id, in: a, geometry: g)
+            #expect(b.spreads.count == a.spreads.count + 1)
+            let added = b.spreads[last18 + 1]
+            #expect(added.pageLayouts == [layout, "empty"])
+            #expect(added.templateID == PageSpread.templateID && added.kind == .gallery)
+            #expect(added.dayKey == Self.june18 && !added.manuallyEdited && !added.customLayout)
+            #expect(added.frames.map(\.id) == ["L.photo1"] && added.frames.map(\.photoID) == [id])
+            #expect(added.texts.allSatisfy { $0.text.isEmpty })
+            #expect(!a.spreads.map(\.id).contains(added.id) && added.id.hasPrefix("2026-06-18-gallery-"))
+            #expect(b.spreads[last18 + 2].dayKey == Self.june19)
+            var without = b.spreads
+            without.remove(at: last18 + 1)
+            #expect(without == a.spreads)
+            let fresh = PageSpread.compose(left: try #require(PageLayoutCatalog.layout(id: layout)),
+                                           right: try #require(PageLayoutCatalog.layout(id: "empty")),
+                                           kind: .gallery, dayKey: Self.june18, id: added.id, geometry: g,
+                                           marginMM: a.marginMM)
+            #expect(added.frames.map(\.rect) == fresh.frames.map(\.rect))
+        }
+    }
+
+    @Test func selectedPhotoOfNewDayGetsJournalInChronologicalPlace() throws {
         let (p, f) = try D.canva(Self.lax)
         let days = [D.day(Self.june18, D.dayPhotos("a", Self.june18, count: 3)),
                     D.day(Self.june20, D.dayPhotos("c", Self.june20, count: 3))]
         var a = D.draft(days, profile: p, format: f)
         #expect(a.spreads.map(\.kind) == [.intro, .journal, .journal, .closing])
         a = Self.adding(D.photo("mid", day: Self.june19, minute: 0, place: "Positano"), to: a)
-        a = Self.adding(D.photo("first", day: Self.june17, minute: 0), to: a)
+        a = Self.adding(D.photo("first", day: Self.june17, minute: 0, landscape: false), to: a)
         a = AlbumUpdater.photoSelected("mid", in: a, geometry: Self.geometry(p, f))
         a = AlbumUpdater.photoSelected("first", in: a, geometry: Self.geometry(p, f))
         #expect(a.spreads.map(\.dayKey) == [nil, Self.june17, Self.june18, Self.june19, Self.june20, nil])
         let mid = a.spreads[3]
-        #expect(mid.templateID == "gallery-1" && mid.id == "2026-06-19-gallery-1")
+        #expect(mid.kind == .journal && mid.id == "2026-06-19-journal")
+        #expect(mid.pageLayouts == ["opener-text", "full"])   // 4000 × 3000 px: a whole page
         #expect(mid.frames.map(\.photoID) == ["mid"])
-        #expect(D.text(mid, .caption) == "pátek 19. června 2026, Positano")
-        #expect(D.text(a.spreads[1], .caption) == "středa 17. června 2026")
+        #expect(D.text(mid, .date) == "pátek 19. června 2026")
+        #expect(D.text(mid, .title) == "Positano")
+        #expect(a.spreads[1].pageLayouts == ["opener-text", "portrait-text"])
+        #expect(D.text(a.spreads[1], .date) == "středa 17. června 2026")
+        #expect(D.text(a.spreads[1], .title) == AlbumDrafter.noPlaceTitle)
         for s in a.spreads where s.kind != .blank { #expect(s.frames.allSatisfy { $0.photoID != nil }) }
     }
 
@@ -334,6 +458,26 @@ import Foundation
         for g in generated {
             #expect(g.texts.filter { $0.role == .caption }.allSatisfy { $0.text.isEmpty }, "\(g.id)")
         }
+        // The kept date caption is the day's header (spec 4.1): no opener page, so no second date.
+        #expect(generated.allSatisfy { $0.kind == .gallery })
+        let dates = Self.daySpreads(r).filter { $0.dayKey == Self.june18 }.flatMap(\.texts)
+            .filter { $0.role == .date && !$0.text.isEmpty }
+        #expect(dates.isEmpty)
+    }
+
+    /// A kept gallery with an ordinary caption is not a day header: the day still gets its opener.
+    @Test func redraftWithKeptPlainCaptionKeepsOpener() throws {
+        let (p, f) = try D.canva(Self.lax)
+        let days = [D.day(Self.june18, D.dayPhotos("a", Self.june18, count: 8), places: ["Ravello"])]
+        var a = D.draft(days, profile: p, format: f)
+        let s = try #require(a.spreads.firstIndex { $0.kind == .gallery })
+        a.spreads[s].manuallyEdited = true
+        a.spreads[s].texts.append(TextBox(id: "R.note", rect: Rect(x: 300, y: 180, width: 100, height: 15),
+                                          role: .caption, text: "Večer"))
+        let (r, kept) = AlbumUpdater.redraft(album: a, days: days, profile: p, format: f)
+        #expect(kept == 1)
+        let journal = try #require(r.spreads.first { $0.kind == .journal && $0.dayKey == Self.june18 })
+        #expect(D.text(journal, .date) == "čtvrtek 18. června 2026")
     }
 
     @Test func redraftWithoutManualMatchesDraft() throws {
@@ -344,6 +488,11 @@ import Foundation
         let (r, kept) = AlbumUpdater.redraft(album: a, days: days, profile: p, format: f)
         #expect(kept == 0)
         #expect(r == a)
+        // The liked layouts reach the drafter.
+        let weights = LayoutWeights(liked: ["opener-2l"])
+        let liked = D.draft(days, profile: p, format: f, options: DraftOptions(layoutWeights: weights))
+        #expect(liked != a)
+        #expect(AlbumUpdater.redraft(album: a, days: days, profile: p, format: f, weights: weights).album == liked)
     }
 
     // MARK: - changeFormat
@@ -544,6 +693,105 @@ import Foundation
         #expect(date.minY == 20 && date.maxY <= title.minY && title.maxY <= body.minY && body.maxY <= 190)
     }
 
+    // MARK: - Page spreads
+
+    /// Spec 4.4: a margin change rebuilds every page with a layout id from the catalog; going back
+    /// restores the book exactly, with photos and crops.
+    @Test func marginChangeRebuildsPagesKeepsPhotos() throws {
+        let (p, f) = try D.canva(formatID: "landscape-8x6in")
+        let g = Self.geometry(p, f)
+        let days = [D.day(Self.june18, D.mixedPhotos("a", Self.june18, count: 12), places: ["Ravello"]),
+                    D.day(Self.june19, D.dayPhotos("b", Self.june19, count: 5))]
+        var a = D.draft(days, profile: p, format: f)
+        #expect(a.marginMM == 10)
+        let s = try #require(a.spreads.firstIndex { $0.templateID == PageSpread.templateID && $0.frames.count >= 2 })
+        a.spreads[s].frames[1].offset = Point(x: 0.4, y: -0.3)
+        a.spreads[s].frames[1].zoom = 1.6
+
+        let wide = AlbumUpdater.settingMargin(20, in: a, profile: p, format: f)
+        #expect(wide.marginMM == 20)
+        #expect(wide.spreads.map(\.id) == a.spreads.map(\.id))
+        #expect(wide.spreads.map(\.pageLayouts) == a.spreads.map(\.pageLayouts))
+        #expect(wide.spreads.map(\.customLayout) == a.spreads.map(\.customLayout))
+        #expect(wide.spreads.map { $0.frames.map(\.photoID) } == a.spreads.map { $0.frames.map(\.photoID) })
+        #expect(wide.spreads.map { $0.frames.map(\.offset) } == a.spreads.map { $0.frames.map(\.offset) })
+        #expect(wide.spreads.map { $0.frames.map(\.zoom) } == a.spreads.map { $0.frames.map(\.zoom) })
+        #expect(wide.spreads.map { $0.texts.map(\.text) } == a.spreads.map { $0.texts.map(\.text) })
+        for spread in wide.spreads where spread.templateID == PageSpread.templateID {
+            let fresh = PageSpread.compose(left: try #require(PageLayoutCatalog.layout(id: spread.pageLayouts[0]!)),
+                                           right: try #require(PageLayoutCatalog.layout(id: spread.pageLayouts[1]!)),
+                                           kind: spread.kind, dayKey: spread.dayKey, id: spread.id,
+                                           geometry: g, marginMM: 20)
+            #expect(spread.frames.map(\.id) == fresh.frames.map(\.id), "\(spread.id)")
+            #expect(spread.frames.map(\.rect) == fresh.frames.map(\.rect), "\(spread.id)")
+            #expect(spread.texts.map(\.rect) == fresh.texts.map(\.rect), "\(spread.id)")
+        }
+        let journal = try #require(a.spreads.firstIndex { $0.kind == .journal })
+        #expect(wide.spreads[journal].texts.map(\.rect) != a.spreads[journal].texts.map(\.rect))
+
+        let back = AlbumUpdater.settingMargin(10, in: wide, profile: p, format: f)
+        #expect(back.spreads == a.spreads)
+    }
+
+    /// Spec 4.4: on a format change a page with a layout id is rebuilt from the catalog for the
+    /// new format; a manual page is scaled proportionally, as a custom layout.
+    @Test func formatChangeKeepsManualPage() throws {
+        let (p, small) = try D.canva(Self.lax, formatID: "landscape-8x6in")
+        let a4 = try #require(p.formats.first { $0.id == "landscape-a4" })
+        let g = Self.geometry(p, small)
+        var a = D.draft([D.day(Self.june18, D.dayPhotos("a", Self.june18, count: 4))], profile: p, format: small)
+        let grid = try #require(PageLayoutCatalog.layout(id: "grid-4"))
+        var spread = PageSpread.compose(left: grid, right: try #require(PageLayoutCatalog.layout(id: "framed-1")),
+                                        kind: .gallery, dayKey: Self.june18, id: "manual", geometry: g,
+                                        marginMM: a.marginMM)
+        for i in spread.frames.indices { spread.frames[i].photoID = "m\(i)" }
+        let l2 = try #require(spread.frames.firstIndex { $0.id == "L.photo2" })
+        spread.frames[l2].offset = Point(x: -0.5, y: 0.25)
+        spread.frames[l2].zoom = 1.3
+        let r1 = try #require(spread.frames.firstIndex { $0.id == "R.photo1" })
+        let moved = Rect(x: 230, y: 20, width: 120, height: 90)
+        spread.frames[r1].rect = moved
+        let caption = try #require(spread.texts.firstIndex { $0.id == "R.caption" })
+        spread.texts[caption].text = "Večer"
+        let captionRect = spread.texts[caption].rect
+        spread.pageLayouts = ["grid-4", nil]
+        spread.customLayout = true
+        spread.manuallyEdited = true
+        a.spreads.insert(spread, at: a.spreads.count - 1)
+
+        let b = AlbumUpdater.changeFormat(album: a, to: a4, profile: p)
+        let new = try #require(b.spreads.first { $0.id == "manual" })
+        #expect(new.pageLayouts == ["grid-4", nil])
+        #expect(new.customLayout && new.manuallyEdited && new.templateID == PageSpread.templateID)
+        #expect(new.frames.map(\.id) == spread.frames.map(\.id))
+        #expect(new.frames.map(\.photoID) == spread.frames.map(\.photoID))
+        #expect(new.frames.map(\.offset) == spread.frames.map(\.offset))
+        #expect(new.frames.map(\.zoom) == spread.frames.map(\.zoom))
+        let ga4 = Self.geometry(p, a4)
+        let rule = MarginRule(geometry: ga4, marginMM: 10)
+        let left = PageSpread.pageItems(grid, side: .left, geometry: ga4, marginMM: 10)
+        #expect(new.frames.filter { $0.id.hasPrefix("L.") }.map(\.rect)
+            == left.frames.map { rule.conformFrame($0.rect, area: .spread) })
+        let sx = a4.pageWidthMM / small.pageWidthMM, sy = a4.pageHeightMM / small.pageHeightMM
+        func scaled(_ r: Rect) -> Rect {
+            Rect(x: r.minX * sx, y: r.minY * sy, width: r.size.width * sx, height: r.size.height * sy)
+        }
+        let right = try #require(new.frames.first { $0.id == "R.photo1" }).rect
+        #expect(right == rule.conformFrame(scaled(moved), area: .spread))
+        #expect(abs(right.minX - 230 * sx) < 1e-9 && abs(right.size.width - 120 * sx) < 1e-9)
+        let newCaption = try #require(new.texts.first { $0.id == "R.caption" })
+        #expect(newCaption.text == "Večer")
+        #expect(newCaption.rect == rule.conformText(scaled(captionRect), area: .spread))
+        // The other spreads follow their page layouts on A4.
+        let other = try #require(b.spreads.first { $0.kind == .journal })
+        let fresh = PageSpread.compose(left: try #require(PageLayoutCatalog.layout(id: other.pageLayouts[0]!)),
+                                       right: try #require(PageLayoutCatalog.layout(id: other.pageLayouts[1]!)),
+                                       kind: other.kind, dayKey: other.dayKey, id: other.id, geometry: ga4,
+                                       marginMM: 10)
+        #expect(other.frames.map(\.rect) == fresh.frames.map(\.rect))
+        #expect(other.texts.map(\.rect) == fresh.texts.map(\.rect))
+    }
+
     // MARK: - photoMoved (Task 21a)
 
     @Test func movedPhotoLeavesItsDaySpreadAndJoinsTheNewDay() throws {
@@ -554,6 +802,7 @@ import Foundation
         let gallery = try #require(a.spreads.first { $0.kind == .gallery && $0.dayKey == Self.june18 })
         let id = try #require(gallery.frames.compactMap(\.photoID).first)
         let decided = a.photos[id]?.selectionDecidedByUser
+        let june19IDs = a.spreads.filter { $0.dayKey == Self.june19 }.map(\.id)
 
         let b = AlbumUpdater.photoMoved(id, to: Self.june19, in: a, geometry: Self.geometry(p, f))
 
@@ -563,10 +812,13 @@ import Foundation
         #expect(b.spreads.first { $0.id == gallery.id }?.frames.contains { $0.photoID == id } == false)
         let holders = b.spreads.filter { $0.frames.contains { $0.photoID == id } }
         #expect(holders.map(\.dayKey) == [Self.june19])
-        #expect(holders.map(\.templateID) == ["gallery-1"])
-        // Inserted after June 19's last spread.
-        let lastJune19 = try #require(b.spreads.lastIndex { $0.dayKey == Self.june19 })
-        #expect(b.spreads[lastJune19].id == holders[0].id)
+        // June 19 had no empty frame: its automatic spreads are planned again with the photo.
+        let june19 = b.spreads.filter { $0.dayKey == Self.june19 }
+        #expect(holders.map(\.templateID) == [PageSpread.templateID])
+        #expect(Array(june19.map(\.id).prefix(june19IDs.count)) == Array(june19IDs.prefix(june19.count)))
+        for s in june19 { #expect(s.frames.allSatisfy { $0.photoID != nil }, "\(s.id)") }
+        #expect(Set(D.placed(june19)) == Set((0..<4).map { "b\($0)" } + [id]))
+        #expect(D.text(try #require(june19.first), .date) == "pátek 19. června 2026")
     }
 
     @Test func movedIntroPhotoKeepsIntroAndCover() throws {
