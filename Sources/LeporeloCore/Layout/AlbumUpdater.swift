@@ -420,10 +420,13 @@ public enum AlbumUpdater {
     /// A spread composed of pages, rebuilt for `geometry` and `marginMM` page by page (spec 4.4):
     /// - a page whose `pageLayouts` entry is a catalog id gets that layout's frames and texts afresh
     ///   (`PageSpread.pageItems`), taking over photoID, offset and zoom by frame id and the text by
-    ///   text id (old items without a slot are dropped);
+    ///   text id (old items without a slot are dropped); of two old items with the id, the one whose
+    ///   centre lies on the page;
     /// - a manual page (nil, or an id not in the catalog) keeps the frames and texts whose centre lies
     ///   on it in `from`'s geometry, scaled proportionally from `from` to the new format (nil `from`:
-    ///   not scaled); an item whose id a catalog page of the spread produces is left to that page.
+    ///   not scaled), except an item a catalog page took over; a kept item whose id a catalog page
+    ///   uses gets a free `frame-N` / `text-N` (`PageEditing.freeItemID`), so nothing leaves the
+    ///   book and ids stay unique.
     /// The left page's items come first; a spread without any catalog page keeps its item order.
     /// Then the whole spread is conformed (`MarginRule.conform`). Id, kind, dayKey, `templateID`,
     /// `manuallyEdited`, `customLayout` and `pageLayouts` are kept, so with nothing manual the
@@ -445,38 +448,54 @@ public enum AlbumUpdater {
                 layouts[i].map { PageSpread.pageItems($0, side: sides[i], geometry: geometry, marginMM: marginMM) }
                     ?? ([], [])
             }
-            let catalogIDs = Set(catalog.flatMap { $0.frames.map(\.id) + $0.texts.map(\.id) })
+            func oldSide(_ rect: Rect) -> PageSide { PageSpread.side(of: rect, geometry: oldGeometry) }
+            // The old item with `id` a catalog page on `side` takes over: the one on that page first
+            // (two items share an id only in a book saved before `PageEditing.applying` kept them unique).
+            func source(_ rects: [(id: String, rect: Rect)], _ id: String, _ side: PageSide) -> Int? {
+                rects.indices.first { rects[$0].id == id && oldSide(rects[$0].rect) == side }
+                    ?? rects.indices.first { rects[$0].id == id }
+            }
+            let oldFrames = old.frames.map { (id: $0.id, rect: $0.rect) }
+            let oldTexts = old.texts.map { (id: $0.id, rect: $0.rect) }
+            var takenFrames = Set<Int>(), takenTexts = Set<Int>()
+            for (i, side) in sides.enumerated() where layouts[i] != nil {
+                for f in catalog[i].frames.indices {
+                    guard let o = source(oldFrames, catalog[i].frames[f].id, side) else { continue }
+                    takenFrames.insert(o)
+                    catalog[i].frames[f].photoID = old.frames[o].photoID
+                    catalog[i].frames[f].offset = old.frames[o].offset
+                    catalog[i].frames[f].zoom = old.frames[o].zoom
+                }
+                for t in catalog[i].texts.indices {
+                    guard let o = source(oldTexts, catalog[i].texts[t].id, side) else { continue }
+                    takenTexts.insert(o)
+                    catalog[i].texts[t].text = old.texts[o].text
+                }
+            }
+            let catalogFrameIDs = catalog.flatMap { $0.frames.map(\.id) }
+            let catalogTextIDs = catalog.flatMap { $0.texts.map(\.id) }
             spread.frames = []
             spread.texts = []
             for (i, side) in sides.enumerated() {
                 if layouts[i] != nil {
-                    for f in catalog[i].frames.indices {
-                        guard let o = old.frames.first(where: { $0.id == catalog[i].frames[f].id }) else { continue }
-                        catalog[i].frames[f].photoID = o.photoID
-                        catalog[i].frames[f].offset = o.offset
-                        catalog[i].frames[f].zoom = o.zoom
-                    }
-                    for t in catalog[i].texts.indices {
-                        if let o = old.texts.first(where: { $0.id == catalog[i].texts[t].id }) {
-                            catalog[i].texts[t].text = o.text
-                        }
-                    }
                     spread.frames += catalog[i].frames
                     spread.texts += catalog[i].texts
                 } else {
-                    func onPage(_ id: String, _ rect: Rect) -> Bool {
-                        !catalogIDs.contains(id) && PageSpread.side(of: rect, geometry: oldGeometry) == side
+                    func kept(_ o: Int, _ taken: Set<Int>, _ rect: Rect) -> Bool {
+                        !taken.contains(o) && oldSide(rect) == side
                     }
-                    spread.frames += old.frames.filter { onPage($0.id, $0.rect) }.map { f in
-                        var f = f
+                    let frames = old.frames.indices.filter { kept($0, takenFrames, old.frames[$0].rect) }.map { o in
+                        var f = old.frames[o]
                         f.rect = scale(f.rect)
                         return f
                     }
-                    spread.texts += old.texts.filter { onPage($0.id, $0.rect) }.map { t in
-                        var t = t
+                    let texts = old.texts.indices.filter { kept($0, takenTexts, old.texts[$0].rect) }.map { o in
+                        var t = old.texts[o]
                         t.rect = scale(t.rect)
                         return t
                     }
+                    spread.frames += PageEditing.freeingIDs(frames, id: \.id, reserved: catalogFrameIDs, prefix: "frame")
+                    spread.texts += PageEditing.freeingIDs(texts, id: \.id, reserved: catalogTextIDs, prefix: "text")
                 }
             }
         }

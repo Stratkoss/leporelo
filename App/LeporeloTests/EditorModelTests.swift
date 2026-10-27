@@ -1904,6 +1904,34 @@ struct EditorLayoutTests {
         #expect(Set(rebuilt.frames.compactMap(\.photoID)) == ["sq", "r0", "r1", "r2", "r3"])
     }
 
+    /// Review finding: after a drag across the spine, a new layout for the page the frame came
+    /// from must not give the spread a second `L.photo1`; the next margin change keeps every photo.
+    @Test func pageLayoutAfterADragAcrossTheSpineKeepsIDsUnique() throws {
+        let (model, store, undo) = try makeModel(try pagesAlbum(left: "framed-1"))
+        let g = model.geometry
+        let frame = try #require(spread(store.album, pagesGalleryID)?.frames.first { $0.id == "L.photo1" })
+        step(undo) {
+            model.beginLayoutChange(.frame(frame.id), in: pagesGalleryID)
+            model.updateLayout(.frame(frame.id), rect: moved(frame.rect, dx: g.format.pageWidthMM * 0.6, dy: 0),
+                               mode: .move)
+            model.endLayoutChange()
+        }
+        model.currentSpreadID = pagesGalleryID
+        model.currentPageSide = .left
+        #expect(step(undo) { model.changePageLayout(to: "framed-1", confirmLayoutReplace: true) }
+            == .applied(unplacedPhotoIDs: []))
+        let relaid = try #require(spread(store.album, pagesGalleryID))
+        #expect(Set(relaid.frames.map(\.id)).count == relaid.frames.count, "\(relaid.frames.map(\.id))")
+        #expect(relaid.pageLayouts == ["framed-1", nil])
+        // The dragged frame is now `frame-1` on the right page, still holding its photo.
+        #expect(relaid.frames.first { $0.id == "frame-1" }?.photoID == "sq")
+
+        step(undo) { model.setMargin(15) }
+        let rebuilt = try #require(spread(store.album, pagesGalleryID))
+        #expect(Set(rebuilt.frames.map(\.id)).count == rebuilt.frames.count)
+        #expect(Set(rebuilt.frames.compactMap(\.photoID)) == ["sq", "r0", "r1", "r2", "r3"])
+    }
+
     @Test func insertGalleryComposesPages() throws {
         let (model, store, undo) = try makeModel(try pagesAlbum())
         let g = model.geometry

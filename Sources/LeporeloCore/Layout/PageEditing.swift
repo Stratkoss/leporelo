@@ -80,6 +80,9 @@ public enum PageEditing {
     ///   are `unplacedPhotoIDs` (chronological), extra frames stay empty;
     /// - texts: a slot takes the old text with its id, else the first unused one with its role;
     ///   non-empty ones without a slot are `droppedTexts`;
+    /// - an item of the other page whose id the new page uses (a frame or text dragged across the
+    ///   spine keeps its `L.`/`R.` id) gets a free `frame-N` / `text-N` (`freeItemID`), so ids stay
+    ///   unique;
     /// - `manuallyEdited = true`, `customLayout = pageLayouts.contains(nil)`;
     /// - an old spread (no `pageLayouts`) becomes `"pages"` and its other page manual (`nil`),
     ///   keeping its frames and texts; a `blank` spread becomes a gallery whose other page is `empty`, or manual (`nil`) when it holds items.
@@ -150,11 +153,36 @@ public enum PageEditing {
             !used.contains(i) && !oldTexts[i].text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }.map { oldTexts[$0] }
 
-        let otherFrames = spread.frames.filter { !onPage($0.rect, side, geometry) }
-        let otherTexts = spread.texts.filter { !onPage($0.rect, side, geometry) }
+        let otherFrames = freeingIDs(spread.frames.filter { !onPage($0.rect, side, geometry) }, id: \.id,
+                                     reserved: frames.map(\.id), prefix: "frame")
+        let otherTexts = freeingIDs(spread.texts.filter { !onPage($0.rect, side, geometry) }, id: \.id,
+                                    reserved: texts.map(\.id), prefix: "text")
         result.frames = side == .left ? frames + otherFrames : otherFrames + frames
         result.texts = side == .left ? texts + otherTexts : otherTexts + texts
         return RetemplateResult(spread: result, unplacedPhotoIDs: unplaced, droppedTexts: dropped)
+    }
+
+    /// `prefix-N` with the smallest N >= 1 not in `taken`: the id of a frame (`frame-N`) or a text
+    /// (`text-N`) added by hand, or given to an item whose id another item of the spread has.
+    public static func freeItemID(_ prefix: String, taken: Set<String>) -> String {
+        AlbumUpdater.freeID(prefix: prefix, bareFirst: false, taken: taken)
+    }
+
+    /// `items` in order, each whose id is in `reserved` or repeats an earlier item's id renamed to
+    /// a free `prefix-N` (`freeItemID`, never an id of `reserved` or `items`).
+    static func freeingIDs<Item>(_ items: [Item], id: WritableKeyPath<Item, String>, reserved: [String],
+                                 prefix: String) -> [Item] {
+        let reservedSet = Set(reserved)
+        var taken = reservedSet.union(items.map { $0[keyPath: id] })
+        var seen = Set<String>()
+        return items.map { item in
+            var item = item
+            if reservedSet.contains(item[keyPath: id]) || !seen.insert(item[keyPath: id]).inserted {
+                item[keyPath: id] = freeItemID(prefix, taken: taken)
+                taken.insert(item[keyPath: id])
+            }
+            return item
+        }
     }
 
     /// `spread` after a manual change on page `side`: a spread of pages gets `nil` for that page;

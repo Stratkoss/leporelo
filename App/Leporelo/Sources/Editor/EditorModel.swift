@@ -850,7 +850,7 @@ final class EditorModel {
         commitSessions()
         guard let id = spreadID ?? currentSpreadID,
               var spread = store.album.spreads.first(where: { $0.id == id }) else { return nil }
-        let frameID = Self.freeID("frame", taken: spread.frames.map(\.id))
+        let frameID = PageEditing.freeItemID("frame", taken: Set(spread.frames.map(\.id)))
         let page = geometry.pageRect(side: side)
         let rect = Rect(x: page.minX + page.size.width / 4, y: page.minY + page.size.height / 4,
                         width: page.size.width / 2, height: page.size.height / 2)
@@ -867,7 +867,7 @@ final class EditorModel {
         commitSessions()
         guard let id = spreadID ?? currentSpreadID,
               var spread = store.album.spreads.first(where: { $0.id == id }) else { return nil }
-        let textID = Self.freeID("text", taken: spread.texts.map(\.id))
+        let textID = PageEditing.freeItemID("text", taken: Set(spread.texts.map(\.id)))
         let page = geometry.pageRect(side: side)
         let width = 60.0, height = 12.0
         let rect = Rect(x: page.minX + (page.size.width - width) / 2, y: page.maxY - marginMM - height,
@@ -922,14 +922,6 @@ final class EditorModel {
         let updated = AlbumUpdater.settingMargin(mm, in: store.album, profile: g.profile, format: g.format)
         startStepAfterSessionCommit()
         store.replace(album: updated, actionName: "Změnit okraj", undoManager: undoManager)
-    }
-
-    /// `prefix-N` with the smallest N >= 1 not in `taken`.
-    private static func freeID(_ prefix: String, taken: [String]) -> String {
-        let taken = Set(taken)
-        var n = 1
-        while taken.contains("\(prefix)-\(n)") { n += 1 }
-        return "\(prefix)-\(n)"
     }
 
     /// The rectangle of a frame or text of `spread`; nil when it has no such item.

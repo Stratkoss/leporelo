@@ -794,6 +794,92 @@ import Foundation
         #expect(other.texts.map(\.rect) == fresh.texts.map(\.rect))
     }
 
+    /// A frame or text dragged across the spine keeps its `L.`/`R.` id (both pages become manual);
+    /// re-laying the page it came from must not give the spread a second item with that id, and the
+    /// next margin change must keep every photo and typed text.
+    @Test func crossSpineDragThenPageLayoutKeepsEverythingOnMarginChange() throws {
+        let (p, f) = try D.canva(Self.lax, formatID: "landscape-8x6in")
+        let g = Self.geometry(p, f)
+        var a = D.draft([D.day(Self.june18, D.dayPhotos("a", Self.june18, count: 3))], profile: p, format: f)
+        let ids = ["a0", "a1", "a2"]
+        let framed = try #require(PageLayoutCatalog.layout(id: "framed-1"))
+        let base = PageSpread.compose(left: framed, right: try #require(PageLayoutCatalog.layout(id: "landscape-2")),
+                                      kind: .gallery, dayKey: Self.june18, id: "drag", geometry: g,
+                                      marginMM: a.marginMM)
+        let leftPage = g.pageRect(side: .left), rightPage = g.pageRect(side: .right)
+        func unique(_ s: Spread) -> Bool {
+            Set(s.frames.map(\.id)).count == s.frames.count && Set(s.texts.map(\.id)).count == s.texts.count
+        }
+
+        // A photo: R.photo1 dragged onto the left page, then the right page re-laid.
+        var photoDrag = base
+        for (i, id) in zip(photoDrag.frames.indices, ids) { photoDrag.frames[i].photoID = id }
+        let r1 = try #require(photoDrag.frames.firstIndex { $0.id == "R.photo1" })
+        let dragged = try #require(photoDrag.frames[r1].photoID)
+        photoDrag.frames[r1].rect = Rect(x: leftPage.minX + 20, y: leftPage.minY + 20, width: 40, height: 30)
+        photoDrag = PageEditing.markingCustom(PageEditing.markingCustom(photoDrag, side: .right), side: .left)
+        let photoResult = PageEditing.applying("framed-1", to: photoDrag, side: .right, geometry: g,
+                                               photos: a.photos, marginMM: a.marginMM).spread
+        #expect(unique(photoResult), "\(photoResult.frames.map(\.id))")
+        #expect(Set(photoResult.frames.compactMap(\.photoID)) == Set(ids))
+
+        // A typed text: L.caption dragged onto the right page, then the left page re-laid.
+        var textDrag = base
+        for (i, id) in zip(textDrag.frames.indices, ids) { textDrag.frames[i].photoID = id }
+        let caption = try #require(textDrag.texts.firstIndex { $0.id == "L.caption" })
+        textDrag.texts[caption].text = "Večer v Ravellu"
+        textDrag.texts[caption].rect = Rect(x: rightPage.minX + 20, y: rightPage.minY + 20, width: 60, height: 12)
+        textDrag = PageEditing.markingCustom(PageEditing.markingCustom(textDrag, side: .left), side: .right)
+        let textResult = PageEditing.applying("framed-1", to: textDrag, side: .left, geometry: g,
+                                              photos: a.photos, marginMM: a.marginMM).spread
+        #expect(unique(textResult), "\(textResult.texts.map(\.id))")
+
+        a.spreads.insert(contentsOf: [photoResult, textResult].enumerated().map { i, s in
+            var s = s
+            s.id = "drag-\(i)"
+            return s
+        }, at: a.spreads.count - 1)
+        let wide = AlbumUpdater.settingMargin(20, in: a, profile: p, format: f)
+        let photoAfter = try #require(wide.spreads.first { $0.id == "drag-0" })
+        let textAfter = try #require(wide.spreads.first { $0.id == "drag-1" })
+        #expect(unique(photoAfter) && unique(textAfter))
+        #expect(Set(photoAfter.frames.compactMap(\.photoID)) == Set(ids))
+        #expect(photoAfter.frames.contains { $0.photoID == dragged
+            && PageSpread.side(of: $0.rect, geometry: g) == .left })
+        #expect(Set(textAfter.frames.compactMap(\.photoID)) == Set(ids))
+        #expect(textAfter.texts.contains { $0.text == "Večer v Ravellu"
+            && PageSpread.side(of: $0.rect, geometry: g) == .right })
+    }
+
+    /// Defence in depth: a spread that already holds two items with the same id (a book saved
+    /// before the fix) keeps both through a margin change, each on its page, with unique ids.
+    @Test func marginChangeKeepsDuplicateIDItemsOnTheirPages() throws {
+        let (p, f) = try D.canva(Self.lax, formatID: "landscape-8x6in")
+        let g = Self.geometry(p, f)
+        var a = D.draft([D.day(Self.june18, D.dayPhotos("a", Self.june18, count: 3))], profile: p, format: f)
+        var s = PageSpread.compose(left: try #require(PageLayoutCatalog.layout(id: "framed-1")),
+                                   right: try #require(PageLayoutCatalog.layout(id: "framed-1")),
+                                   kind: .gallery, dayKey: Self.june18, id: "dup", geometry: g, marginMM: a.marginMM)
+        let r1 = try #require(s.frames.firstIndex { $0.id == "R.photo1" })
+        s.frames[r1].photoID = "a1"
+        var stray = s.frames[r1]
+        stray.photoID = "a2"
+        stray.rect = Rect(x: g.pageRect(side: .left).minX + 20, y: 20, width: 40, height: 30)
+        s.frames.insert(stray, at: 0)   // first in the list: the old rule took it for the catalog page
+        s.frames[s.frames.firstIndex { $0.id == "L.photo1" }!].photoID = "a0"
+        s.pageLayouts = [nil, "framed-1"]
+        s.customLayout = true
+        s.manuallyEdited = true
+        a.spreads.insert(s, at: a.spreads.count - 1)
+
+        let wide = AlbumUpdater.settingMargin(20, in: a, profile: p, format: f)
+        let new = try #require(wide.spreads.first { $0.id == "dup" })
+        #expect(Set(new.frames.map(\.id)).count == new.frames.count, "\(new.frames.map(\.id))")
+        #expect(new.frames.first { $0.id == "R.photo1" }?.photoID == "a1")
+        #expect(new.frames.contains { $0.photoID == "a2" && PageSpread.side(of: $0.rect, geometry: g) == .left })
+        #expect(Set(new.frames.compactMap(\.photoID)) == ["a0", "a1", "a2"])
+    }
+
     // MARK: - photoMoved (Task 21a)
 
     @Test func movedPhotoLeavesItsDaySpreadAndJoinsTheNewDay() throws {
