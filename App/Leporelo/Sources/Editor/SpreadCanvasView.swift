@@ -773,6 +773,8 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
         let selected = isEditable ? model.selectedItem : nil
         switch event.keyCode {
         case 51, 117:  // delete, forward delete
+            // One press, one action: a held key must not delete the frame its first press emptied.
+            if event.isARepeat { return }
             if let selected { deleteOrClear(selected); return }
         case 53:  // escape: leaves crop mode, else deselects
             endGestures()
