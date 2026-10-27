@@ -163,7 +163,10 @@ struct ExportSheet: View {
 
     // MARK: Actions
 
+    /// The folder panel as a sheet on the export sheet's window (modal to it: the export sheet
+    /// cannot be closed while the panel is open), one at a time (`beginChoosingFolder`).
     private func chooseFolder() {
+        guard model.beginChoosingFolder() else { return }
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canCreateDirectories = true
@@ -171,13 +174,21 @@ struct ExportSheet: View {
         panel.allowsMultipleSelection = false
         panel.prompt = "Exportovat"
         panel.message = "Vyberte složku, do které se uloží soubory pro tisk"
-        panel.begin { response in
-            guard response == .OK, let url = panel.url else { return }
-            MainActor.assumeIsolated { choose(url) }
+        let finish: (NSApplication.ModalResponse) -> Void = { response in
+            MainActor.assumeIsolated {
+                model.endChoosingFolder()
+                if response == .OK, let url = panel.url { choose(url) }
+            }
+        }
+        if let window = NSApp.keyWindow {
+            panel.beginSheetModal(for: window, completionHandler: finish)
+        } else {
+            finish(panel.runModal())
         }
     }
 
     private func choose(_ directory: URL) {
+        guard !model.isClosed else { return }
         switch model.check(destination: directory) {
         case .ok: model.startExport(to: directory)
         case let .invalid(message): destinationProblem = message

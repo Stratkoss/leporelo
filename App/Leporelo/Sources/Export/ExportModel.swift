@@ -82,6 +82,10 @@ final class ExportModel: Identifiable {
     @ObservationIgnored private var exportGeneration = 0
     @ObservationIgnored private var warningKeys: Set<String>?
     @ObservationIgnored private var observing = false
+    /// Set by `close()`: the sheet is gone, nothing may start any more.
+    @ObservationIgnored private(set) var isClosed = false
+    /// The folder panel is open (one at a time; the export button is disabled meanwhile).
+    private(set) var isChoosingFolder = false
 
     init(store: AlbumStore,
          geometry: @escaping @MainActor () -> PageGeometry?,
@@ -114,7 +118,7 @@ final class ExportModel: Identifiable {
     var hasErrors: Bool { Preflight.hasErrors(issues) }
     var hasWarnings: Bool { issues.contains { $0.severity == .warning } }
 
-    var canExport: Bool { preflightAllowsExport && !isExporting }
+    var canExport: Bool { preflightAllowsExport && !isExporting && !isChoosingFolder && !isClosed }
 
     private var preflightAllowsExport: Bool {
         hasPreflight && geometry() != nil && !hasErrors && (!hasWarnings || acceptedWarnings)
@@ -155,6 +159,7 @@ final class ExportModel: Identifiable {
 
     /// Stops observing and cancels a running export (the sheet went away).
     func close() {
+        isClosed = true
         observing = false
         debounceTask?.cancel()
         exportTask?.cancel()
@@ -217,7 +222,7 @@ final class ExportModel: Identifiable {
 
     /// Starts `export(to:)` as a cancellable task (the sheet's "Exportovat").
     func startExport(to directory: URL) {
-        guard !isExporting else { return }
+        guard !isExporting, !isClosed else { return }
         let generation = beginExport()
         exportTask = Task { [weak self] in
             _ = try? await self?.runExport(to: directory, generation: generation)
@@ -230,6 +235,7 @@ final class ExportModel: Identifiable {
 
     func export(to directory: URL) async throws -> ExportResult {
         guard !isExporting else { throw ExportFailure(message: "Export už běží.") }
+        guard !isClosed else { throw ExportFailure(message: "Okno exportu je zavřené.") }
         return try await runExport(to: directory, generation: beginExport())
     }
 
@@ -249,16 +255,24 @@ final class ExportModel: Identifiable {
         }
         let album = store.album, revision = store.revision
 
-        if issuesRevision != revision {
-            // A changed warning set resets `acceptedWarnings` (publish).
-            publish(await Self.evaluate(album: album, geometry: g), revision: revision)
+        // The warnings the user accepted are the ones shown now.
+        let acceptedKeys = acceptedWarnings ? warningKeys : nil
+        // The gate is decided on the result for EXACTLY this snapshot, never on the published
+        // state (which may already belong to a newer revision).
+        let checked: (issues: [PreflightIssue], waiting: Int)
+        if issuesRevision == revision {
+            checked = (issues, waitingForOriginals)
+        } else {
+            checked = await Self.evaluate(album: album, geometry: g)
+            publish(checked, revision: revision)  // a changed warning set resets `acceptedWarnings`
         }
-        guard preflightAllowsExport else {
+        let keys = ExportLogic.warningKeys(checked.issues)
+        let errors = Preflight.hasErrors(checked.issues)
+        guard !errors, keys.isEmpty || keys == acceptedKeys else {
             phase = .idle
-            let message = hasErrors ? "Album se od kontroly změnilo a má chyby. Opravte je a zkuste to znovu."
-                                    : "Přibyla varování. Projděte je a potvrďte, že jim rozumíte."
+            let message = errors ? ExportLogic.changedWithErrorsNotice : ExportLogic.newWarningsNotice
             notice = message
-            throw ExportFailure(message: message, issues: issues)
+            throw ExportFailure(message: message, issues: checked.issues)
         }
 
         let job = ExportJob(album: album, profile: g.profile, format: g.format, package: store.package,
@@ -269,8 +283,8 @@ final class ExportModel: Identifiable {
             Task { @MainActor in self?.progressed(done: done, total: total, generation: generation) }
         }
         do {
+            // A returned result is a success, even when a cancel arrived too late to stop it.
             let result = try await runner.run(job, progress)
-            try Task.checkCancellation()
             let readme = result.readmeURL
             let text = await Task.detached { try? String(contentsOf: readme, encoding: .utf8) }.value
             let summary = ExportSummary(result: result, headline: ExportLogic.headline(result),
@@ -301,6 +315,20 @@ final class ExportModel: Identifiable {
     private func progressed(done: Int, total: Int, generation: Int) {
         guard generation == exportGeneration, case let .exporting(current, _) = phase, done > current else { return }
         phase = .exporting(done: done, total: total)
+    }
+
+    // MARK: Folder panel
+
+    /// Claims the folder panel; false when one is already open, an export runs or the sheet is
+    /// closed (the view then shows no panel).
+    func beginChoosingFolder() -> Bool {
+        guard !isChoosingFolder, !isExporting, !isClosed else { return false }
+        isChoosingFolder = true
+        return true
+    }
+
+    func endChoosingFolder() {
+        isChoosingFolder = false
     }
 
     // MARK: Finder

@@ -64,15 +64,33 @@ private struct FakeImageProvider: ImageProvider {
     }
 }
 
+/// Counts runner invocations (thread-safe: the runner runs off the main actor).
+private final class RunCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var n = 0
+    var count: Int { lock.withLock { n } }
+    func bump() { lock.withLock { n += 1 } }
+}
+
+/// The real PDF runner, counting how often it is invoked.
+private func countingRunner(_ counter: RunCounter, images: FakeImageProvider = .init()) -> ExportRunner {
+    let real = ExportRunner.pdf(images: { _ in images })
+    return ExportRunner { job, progress in
+        counter.bump()
+        return try await real.run(job, progress)
+    }
+}
+
 @MainActor
 private func makeModel(_ album: Album? = nil, verified: Bool = false, images: FakeImageProvider = .init(),
+                       runner: ExportRunner? = nil,
                        onJump: (@MainActor (String, String?) -> Void)? = nil) throws -> (ExportModel, AlbumStore) {
     let album = try album ?? draftedAlbum()
     let url = makeTempDir().appendingPathComponent("Export.leporelo")
     let package = try ProjectPackage.create(at: url, album: album)
     let store = AlbumStore(album: album, package: package)
     let g = try laxGeometry(verified: verified)
-    let model = ExportModel(store: store, geometry: { g }, runner: .pdf(images: { _ in images }),
+    let model = ExportModel(store: store, geometry: { g }, runner: runner ?? .pdf(images: { _ in images }),
                             onJump: onJump)
     model.preflightDebounce = .milliseconds(10)
     return (model, store)
@@ -281,7 +299,8 @@ struct ExportModelTests {
     }
 
     @Test func exportRefusesWhenAlbumGotErrorsSincePreflight() async throws {
-        let (model, store) = try makeModel()
+        let counter = RunCounter()
+        let (model, store) = try makeModel(runner: countingRunner(counter))
         await model.runPreflight().value
         model.acceptedWarnings = true
         #expect(model.canExport)
@@ -289,20 +308,68 @@ struct ExportModelTests {
         try store.applyWithoutUndo(.setFramePhoto(spreadID: f.spread, frameID: f.frame, photoID: nil))
         let dir = makeTempDir()
         await #expect(throws: ExportFailure.self) { try await model.export(to: dir) }
+        // The app's gate refused, not Core's `.preflightFailed`: the runner never ran.
+        #expect(counter.count == 0)
+        #expect(model.notice == ExportLogic.changedWithErrorsNotice)
+        #expect(model.phase == .idle)
         #expect(Preflight.hasErrors(model.issues))
         #expect(model.issuesRevision == store.revision)
         #expect(!FileManager.default.fileExists(atPath: dir.appendingPathComponent("pages.pdf").path))
     }
 
     @Test func exportRefusesWhenNewWarningIsNotAccepted() async throws {
-        let (model, store) = try makeModel()
+        let counter = RunCounter()
+        let (model, store) = try makeModel(runner: countingRunner(counter))
         await model.runPreflight().value
         model.acceptedWarnings = true
         try store.applyWithoutUndo(.setSelected("u", true))
         let dir = makeTempDir()
         await #expect(throws: ExportFailure.self) { try await model.export(to: dir) }
         #expect(!model.acceptedWarnings)
+        #expect(counter.count == 0)
+        #expect(model.notice == ExportLogic.newWarningsNotice)
         #expect(!FileManager.default.fileExists(atPath: dir.appendingPathComponent("pages.pdf").path))
+    }
+
+    @Test func runnerInvokedOnceForAcceptedExport() async throws {
+        let counter = RunCounter()
+        let (model, _) = try makeModel(runner: countingRunner(counter))
+        await model.runPreflight().value
+        model.acceptedWarnings = true
+        _ = try await model.export(to: makeTempDir())
+        #expect(counter.count == 1)
+    }
+
+    @Test func closedModelRefusesToStart() async throws {
+        let counter = RunCounter()
+        let (model, _) = try makeModel(runner: countingRunner(counter))
+        await model.runPreflight().value
+        model.acceptedWarnings = true
+        model.close()
+        #expect(!model.canExport)
+        let dir = makeTempDir()
+        model.startExport(to: dir)
+        #expect(model.exportTask == nil)
+        #expect(!model.isExporting)
+        await #expect(throws: ExportFailure.self) { try await model.export(to: dir) }
+        #expect(counter.count == 0)
+        #expect(!model.beginChoosingFolder())
+        #expect(try FileManager.default.contentsOfDirectory(atPath: dir.path).isEmpty)
+    }
+
+    @Test func secondFolderPanelRequestIgnored() async throws {
+        let (model, _) = try makeModel()
+        await model.runPreflight().value
+        model.acceptedWarnings = true
+        #expect(model.beginChoosingFolder())
+        #expect(model.isChoosingFolder)
+        #expect(!model.canExport)
+        #expect(!model.beginChoosingFolder())
+        model.endChoosingFolder()
+        #expect(!model.isChoosingFolder)
+        #expect(model.canExport)
+        #expect(model.beginChoosingFolder())
+        model.endChoosingFolder()
     }
 
     @Test func cancelReturnsToIdleWithNoFiles() async throws {

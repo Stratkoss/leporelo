@@ -54,6 +54,8 @@ struct ExportSummary: Equatable {
 enum ExportLogic {
     static let exportFileNames = [PDFExporter.pagesFileName, PDFExporter.coverFileName, ExportInstructions.fileName]
     static let cancelledNotice = "Export byl zrušen"
+    static let changedWithErrorsNotice = "Album se od kontroly změnilo a má chyby. Opravte je a zkuste to znovu."
+    static let newWarningsNotice = "Přibyla varování. Projděte je a potvrďte, že jim rozumíte."
     static let overwriteTitle = "Ve složce už jsou soubory z dřívějšího exportu. Přepsat?"
     static let insidePackageMessage =
         "Do balíku alba nejde exportovat, soubory by ho poškodily. Vyberte jinou složku, třeba v Dokumentech."
