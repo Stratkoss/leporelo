@@ -36,7 +36,9 @@ struct AlbumWindow: View {
     var body: some View {
         VStack(spacing: 0) {
             // The banner observes the work's counters itself; this body only reads `session.work`.
-            if let work = session.work { ProgressBanner(work: work) }
+            if session.work != nil || session.originals != nil {
+                ProgressBanner(work: session.work, originals: session.originals)
+            }
             content.frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(minWidth: 720, minHeight: 480)
@@ -54,9 +56,16 @@ struct AlbumWindow: View {
             // document after a reload; the old store's background work is cancelled first.
             session.bind(document: document, fileURL: fileURL, sourceProvider: photoSourceProvider)
         }
+        .focusedSceneValue(\.albumRetryDownloads, retryDownloadsAction)
         .onAppear { AlbumStore.configure(undoManager) }
         .onChange(of: undoManager) { _, manager in AlbumStore.configure(manager) }
         .onDisappear { session.close() }
+    }
+
+    /// File > "Stáhnout znovu": while some originals could not be downloaded.
+    private var retryDownloadsAction: RetryDownloadsAction? {
+        guard let originals = session.originals, originals.failedCount > 0 else { return nil }
+        return RetryDownloadsAction { originals.retryFailed() }
     }
 
     @ViewBuilder private var content: some View {

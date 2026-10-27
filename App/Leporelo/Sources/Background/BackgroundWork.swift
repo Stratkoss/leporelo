@@ -7,12 +7,15 @@ import os
 /// (no source query, no Photos access). Supplied at the app level (`\.photoSourceProvider`).
 typealias PhotoSourceProvider = @MainActor (Album) -> (any PhotoSource)?
 
-/// What the banner at the top of the album window shows.
+/// What the banner at the top of the album window shows (one line; `BannerText.line` picks it).
 enum BackgroundActivity: Equatable, Sendable {
     case idle
     case analyzing(done: Int, total: Int)
+    case downloading(done: Int, total: Int)
     case resolvingPlaces
     case sourceUnavailable
+    /// Originals that could not be downloaded ("Stáhnout znovu" retries them).
+    case failedOriginals(Int)
 }
 
 /// The background work of ONE bound `AlbumStore` (Task 17 contract): image analysis, then the
@@ -173,8 +176,8 @@ final class BackgroundWork {
             store.applyRecommendations()
             recommendationsApplied = true
         }
-        // HOOK(Task 23): request an explicit autosave here (Task 17 contract addition (b): after
-        // background changes, do not rely on the change count alone). No such API exists yet.
+        // Every no-undo store change (these flushes, the recommendations, the places) also asks
+        // for an explicit autosave (`AlbumStore.requestAutosave`, Task 17 ruling (b)).
 
         // One bounded repair pass for thumbnails lost while the first pass ran (e.g. dropped by
         // an autosave swap). Photos whose analysis failed are not retried here (next session).

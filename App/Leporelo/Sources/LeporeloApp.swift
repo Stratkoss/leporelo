@@ -14,6 +14,7 @@ struct LeporeloApp: App {
         .commands {
             FileCommands()
             ExportCommands()
+            SourceCommands()
             UndoCommands()
         }
 
@@ -51,6 +52,18 @@ struct ExportCommands: Commands {
             Button("Exportovat…") { export?.run() }
                 .keyboardShortcut("e", modifiers: [.command, .shift])
                 .disabled(export == nil)
+        }
+    }
+}
+
+/// File > "Stáhnout znovu" (originals that could not be downloaded).
+struct SourceCommands: Commands {
+    @FocusedValue(\.albumRetryDownloads) private var retryDownloads
+
+    var body: some Commands {
+        CommandGroup(after: .saveItem) {
+            Button(BannerText.retry) { retryDownloads?.run() }
+                .disabled(retryDownloads == nil)
         }
     }
 }

@@ -11,15 +11,19 @@ import Observation
 final class AlbumSession {
     private(set) var store: AlbumStore?
     private(set) var work: BackgroundWork?
+    /// The originals download of the same store (Task 23), bound and cancelled with `work`.
+    private(set) var originals: OriginalsWork?
     private(set) var bindError: String?
 
     @ObservationIgnored private let placeResolver: @Sendable () -> any PlaceResolver
     @ObservationIgnored private let options: BackgroundWork.Options
+    @ObservationIgnored private let originalsOptions: OriginalsWork.Options
 
     init(placeResolver: @escaping @Sendable () -> any PlaceResolver = { GeocoderPlaceResolver() },
-         options: BackgroundWork.Options = .init()) {
+         options: BackgroundWork.Options = .init(), originalsOptions: OriginalsWork.Options = .init()) {
         self.placeResolver = placeResolver
         self.options = options
+        self.originalsOptions = originalsOptions
     }
 
     /// Binds to `document`'s store for `fileURL` and starts that store's background work. Also
@@ -36,6 +40,9 @@ final class AlbumSession {
                                       placeResolver: placeResolver, options: options)
             self.work = work
             work.start()
+            let originals = OriginalsWork(store: store, sourceProvider: sourceProvider, options: originalsOptions)
+            self.originals = originals
+            originals.start()
         } catch {
             bindError = error.localizedDescription
         }
@@ -47,5 +54,7 @@ final class AlbumSession {
         store?.flushPendingEdits()
         work?.cancel()
         work = nil
+        originals?.cancel()
+        originals = nil
     }
 }

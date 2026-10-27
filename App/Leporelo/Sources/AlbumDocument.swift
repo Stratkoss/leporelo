@@ -3,6 +3,7 @@ import Foundation
 import LeporeloCore
 import SwiftUI
 import Synchronization
+import os
 import UniformTypeIdentifiers
 
 extension UTType {
@@ -152,6 +153,22 @@ final class AlbumDocument: ReferenceFileDocument {
         store.markChanged = { [weak store] in
             if cached == nil, let url = store?.package.url { cached = Self.platformDocument(for: url) }
             cached?.updateChangeCount(.changeDone)
+        }
+        // Task 17 ruling (b): an explicit save after background changes. `autosave(
+        // withImplicitCancellability:)` would write nothing when a user Undo has brought the change
+        // count back to "saved", so this saves in place unconditionally (the same operation
+        // AppKit's autosave uses); `AlbumStore.requestAutosave` debounces it.
+        store.autosaveHandler = { [weak store] in
+            guard let url = store?.package.url, let document = Self.platformDocument(for: url),
+                  let fileURL = document.fileURL, let fileType = document.fileType else { return }
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                document.save(to: fileURL, ofType: fileType, for: .autosaveInPlaceOperation) { error in
+                    if let error {
+                        Logger.document.error("Background autosave failed: \(error.localizedDescription, privacy: .public)")
+                    }
+                    continuation.resume()
+                }
+            }
         }
         return store
     }

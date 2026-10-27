@@ -19,6 +19,9 @@ final class FakePhotoSource: PhotoSource, @unchecked Sendable {
         var waiters: [UUID: CheckedContinuation<Void, Error>] = [:]
         var thumbnailCalls = 0
         var queries: [SourceQuery] = []
+        var originalErrors: [String: PhotoSourceError] = [:]
+        var originalCalls: [String: Int] = [:]
+        var holdOriginals = false
     }
 
     private let lock = NSLock()
@@ -41,6 +44,12 @@ final class FakePhotoSource: PhotoSource, @unchecked Sendable {
     /// Every later `thumbnail` call throws `error` (nil: serve images again).
     func failThumbnails(with error: PhotoSourceError?) { locked { $0.thumbnailError = error } }
     var thumbnailCalls: Int { locked { $0.thumbnailCalls } }
+    /// `original(for: identifier)` throws `error` (nil: serves bytes again).
+    func failOriginal(_ identifier: String, with error: PhotoSourceError?) { locked { $0.originalErrors[identifier] = error } }
+    func originalCalls(_ identifier: String) -> Int { locked { $0.originalCalls[identifier, default: 0] } }
+    var totalOriginalCalls: Int { locked { $0.originalCalls.values.reduce(0, +) } }
+    /// While on, `original` calls suspend like held thumbnails (until `releaseAll()` or cancel).
+    func holdOriginals(_ on: Bool = true) { locked { $0.holdOriginals = on } }
     var queries: [SourceQuery] { locked { $0.queries } }
     /// Number of `thumbnail` calls currently suspended by `holdThumbnails`.
     var heldCalls: Int { locked { $0.waiters.count } }
@@ -48,6 +57,7 @@ final class FakePhotoSource: PhotoSource, @unchecked Sendable {
     func releaseAll() {
         let waiting = locked { s -> [CheckedContinuation<Void, Error>] in
             s.holdThumbnails = false
+            s.holdOriginals = false
             let all = Array(s.waiters.values)
             s.waiters.removeAll()
             return all
@@ -93,7 +103,25 @@ final class FakePhotoSource: PhotoSource, @unchecked Sendable {
     }
 
     func original(for identifier: String) async throws -> (data: Data, ext: String) {
-        (Data("original:\(identifier)".utf8), "jpg")
+        locked { $0.originalCalls[identifier, default: 0] += 1 }
+        let token = UUID()
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (c: CheckedContinuation<Void, Error>) in
+                let outcome: Int = locked { s in
+                    if Task.isCancelled { return 2 }
+                    if !s.holdOriginals { return 0 }
+                    s.waiters[token] = c
+                    return 1
+                }
+                if outcome == 0 { c.resume() }
+                if outcome == 2 { c.resume(throwing: CancellationError()) }
+            }
+        } onCancel: {
+            let c = locked { $0.waiters.removeValue(forKey: token) }
+            c?.resume(throwing: CancellationError())
+        }
+        if let error = locked({ $0.originalErrors[identifier] }) { throw error }
+        return (Data("original:\(identifier)".utf8), "jpg")
     }
 
     /// A photo-like test image: a colour gradient with pseudo-random speckles (sharp, not a

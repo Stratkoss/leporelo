@@ -31,6 +31,16 @@ final class AlbumStore {
     @ObservationIgnored private let snapshotBox: AlbumSnapshotBox
     /// Marks the document changed for edits that register no undo (set by `AlbumDocument.bind`).
     @ObservationIgnored var markChanged: (@MainActor () -> Void)?
+    /// Saves the document now (set by `AlbumDocument.bind`; see `requestAutosave`).
+    @ObservationIgnored var autosaveHandler: (@MainActor () async -> Void)?
+    /// How long `requestAutosave` waits so a burst of background flushes makes one save.
+    @ObservationIgnored var autosaveDelay: Duration = .seconds(3)
+    /// Saves made through `autosaveHandler` (tests).
+    @ObservationIgnored private(set) var autosaveCount = 0
+    /// The scheduled autosave (nil once it started: later requests schedule the next one).
+    @ObservationIgnored private var autosaveTask: Task<Void, Never>?
+    /// The most recent autosave, also while its save runs (for `waitForPendingAutosave`).
+    @ObservationIgnored private var lastAutosave: Task<Void, Never>?
     @ObservationIgnored private var pendingEditsFlushers: [@MainActor () -> Void] = []
 
     init(album: Album, package: ProjectPackage, snapshotBox: AlbumSnapshotBox? = nil) {
@@ -68,7 +78,7 @@ final class AlbumStore {
         album = updated
         publish()
         guard let undoManager else {
-            markChanged?()
+            backgroundChanged()
             return
         }
         let undoEdits = Array(inverses.reversed())
@@ -131,7 +141,7 @@ final class AlbumStore {
     func applyWithoutUndo(_ edit: AlbumEdit) throws {
         album = try album.applying(edit).album
         publish()
-        markChanged?()
+        backgroundChanged()
     }
 
     /// Replaces the album with a background result: no undo, snapshot published at once, document
@@ -139,7 +149,42 @@ final class AlbumStore {
     func replaceWithoutUndo(album newAlbum: Album) {
         album = newAlbum
         publish()
+        backgroundChanged()
+    }
+
+    /// Every no-undo change: marks the document changed AND asks for an autosave. Task 17 ruling
+    /// (b): NSDocument's change count alone is not enough, because a user Undo after a background
+    /// change can bring the count back to "saved" and the background change would never be
+    /// written. This covers all background results (analysis, places, recommendations, originals,
+    /// source refresh), since they all take this path.
+    private func backgroundChanged() {
         markChanged?()
+        requestAutosave()
+    }
+
+    /// Saves the document after `autosaveDelay` (debounced: requests while one is pending join
+    /// it). Does nothing without an `autosaveHandler` (a store no document is bound to).
+    func requestAutosave() {
+        guard autosaveHandler != nil, autosaveTask == nil else { return }
+        let delay = autosaveDelay
+        autosaveTask = Task { [weak self] in
+            try? await Task.sleep(for: delay)
+            guard let self, !Task.isCancelled else { return }
+            self.autosaveTask = nil
+            guard let handler = self.autosaveHandler else { return }
+            self.autosaveCount += 1
+            await handler()
+        }
+        lastAutosave = autosaveTask
+    }
+
+    /// Returns when the requested autosaves have run (tests).
+    func waitForPendingAutosave() async {
+        while let task = autosaveTask ?? lastAutosave {
+            await task.value
+            if lastAutosave == task { lastAutosave = nil }
+            if autosaveTask == task { autosaveTask = nil }
+        }
     }
 
     // MARK: Background results (no undo; `BackgroundWork` calls these on the CURRENT album)
@@ -154,6 +199,20 @@ final class AlbumStore {
             changed = true
         }
         if changed { replaceWithoutUndo(album: updated) }
+    }
+
+    /// Sets the original states of a batch of photos (`OriginalsWork`) as ONE no-undo mutation.
+    /// Photos no longer in the album are ignored. Returns whether anything changed.
+    @discardableResult
+    func setOriginalStates(_ states: [PhotoID: OriginalState]) -> Bool {
+        var updated = album
+        var changed = false
+        for (id, state) in states where updated.photos[id] != nil && updated.photos[id]?.originalState != state {
+            updated.photos[id]?.originalState = state
+            changed = true
+        }
+        if changed { replaceWithoutUndo(album: updated) }
+        return changed
     }
 
     /// Applies resolved places to the album as it is NOW (`GroupingService.applyRefinement`), in
