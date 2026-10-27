@@ -30,20 +30,23 @@ struct PhotoKitMappingTests {
         #expect(parts.last?.rightExpression.constantValue as? Date == end)
     }
 
-    @Test func queryPredicateKeepsImagesAndVideosOnly() {
+    @Test func queryPredicateKeepsImagesOnly() {
         let predicate = PhotoKitMapping.predicate(for: .dateRange(start: start, end: end))
         func matches(_ type: PHAssetMediaType, _ date: Date) -> Bool {
             predicate.evaluate(with: ["creationDate": date, "mediaType": type.rawValue] as NSDictionary)
         }
         let inside = start.addingTimeInterval(10)
         #expect(matches(.image, inside))
-        #expect(matches(.video, inside))
+        #expect(!matches(.video, inside))
         #expect(!matches(.audio, inside))
         #expect(!matches(.image, end))
 
         let album = PhotoKitMapping.predicate(for: .album(identifier: "x", name: "X"))
         #expect(album.evaluate(with: ["mediaType": PHAssetMediaType.image.rawValue] as NSDictionary))
         #expect(!album.evaluate(with: ["mediaType": PHAssetMediaType.audio.rawValue] as NSDictionary))
+        #expect(!album.evaluate(with: ["mediaType": PHAssetMediaType.video.rawValue] as NSDictionary))
+        #expect(PhotoKitMapping.mediaTypePredicate().evaluate(with: ["mediaType": PHAssetMediaType.image.rawValue] as NSDictionary))
+        #expect(!PhotoKitMapping.mediaTypePredicate().evaluate(with: ["mediaType": PHAssetMediaType.video.rawValue] as NSDictionary))
         #expect(PhotoKitMapping.fetchSortDescriptors().first?.key == "creationDate")
         #expect(PhotoKitMapping.fetchSortDescriptors().first?.ascending == true)
     }
@@ -70,8 +73,8 @@ struct PhotoKitMappingTests {
         #expect(PhotoKitMapping.kind(mediaType: .image, subtypes: []) == .photo)
         #expect(PhotoKitMapping.kind(mediaType: .image, subtypes: [.photoHDR]) == .photo)
         #expect(PhotoKitMapping.kind(mediaType: .image, subtypes: [.photoLive, .photoHDR]) == .livePhoto)
-        #expect(PhotoKitMapping.kind(mediaType: .video, subtypes: []) == .video)
-        #expect(PhotoKitMapping.kind(mediaType: .video, subtypes: [.videoHighFrameRate]) == .video)
+        #expect(PhotoKitMapping.kind(mediaType: .video, subtypes: []) == nil)
+        #expect(PhotoKitMapping.kind(mediaType: .video, subtypes: [.videoHighFrameRate]) == nil)
         #expect(PhotoKitMapping.kind(mediaType: .audio, subtypes: []) == nil)
         #expect(PhotoKitMapping.kind(mediaType: .unknown, subtypes: []) == nil)
     }
@@ -108,8 +111,7 @@ struct PhotoKitMappingTests {
         let video = PhotoKitMapping.sourcePhoto(identifier: "v", creationDate: created, modificationDate: nil,
                                                 coordinate: nil, pixelWidth: 1920, pixelHeight: 1080,
                                                 mediaType: .video, subtypes: [])
-        #expect(video?.kind == .video)
-        #expect(video?.location == nil)
+        #expect(video == nil)
     }
 
     // MARK: Originals

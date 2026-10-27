@@ -70,6 +70,28 @@ private func album(_ photos: [Photo]) -> Album {
         #expect(reopened == built)
     }
 
+    @Test func buildAlbumDropsVideos() async throws {
+        let source = FakePhotoSource(photos: [
+            sourcePhoto("a.jpg", day1 + 3600),
+            SourcePhoto(identifier: "v.mov", capturedAt: Date(timeIntervalSince1970: day1 + 5000),
+                        timeZoneSeconds: 7200, location: nil, pixelWidth: 1920, pixelHeight: 1080,
+                        kind: .video, isCloudOnly: false),
+            sourcePhoto("b.jpg", day1 + 7200),
+        ])
+        let dir = tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let package = try ProjectPackage.create(at: dir.appendingPathComponent("T.leporelo"), album: album([]))
+        let built = try await Workflow.buildAlbum(
+            from: source, query: .album(identifier: "trip", name: "Trip"), title: "Léto",
+            profileID: "canva-photobook", formatID: "landscape-a4", package: package,
+            resolver: InMemoryPlaceResolver([]))
+        #expect(built.photos.count == 2)
+        #expect(Set(built.photos.values.map(\.sourceIdentifier)) == ["a.jpg", "b.jpg"])
+        #expect(built.photos.values.allSatisfy { $0.kind != .video })
+        let (_, reopened) = try ProjectPackage.open(package.url)
+        #expect(reopened.photos.count == 2)
+    }
+
     @Test func buildAlbumPropagatesSourceErrors() async throws {
         let source = FakePhotoSource()
         source.setPhotosError(.notAuthorized)

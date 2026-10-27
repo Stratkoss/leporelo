@@ -26,9 +26,9 @@ enum AlbumScreenLogic {
     /// browsable or fully downloaded opens without Photos access: triage, editing and export work
     /// from the package (the banner says what cannot be fetched).
     static func screen(album: Album, access: PhotoAccess) -> AlbumScreen {
-        if album.photos.isEmpty { return .empty }
+        if album.visiblePhotos.isEmpty { return .empty }
         if access.allowsForm || !needsSource(album) { return .content }
-        let browsable = album.photos.values.contains { $0.analysis != nil }
+        let browsable = album.visiblePhotos.contains { $0.analysis != nil }
         return browsable ? .content : .noPermission(access)
     }
 }

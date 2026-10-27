@@ -16,6 +16,7 @@ public enum SourceSync {
     ///   `.missing`, `dayKey == nil`;
     /// - photos no longer returned get `deletedInSource = true`; everything else about them stays
     ///   (selection, placement in frames, the stored original), so the album keeps working;
+    /// - videos are ignored both ways (not added; an old video is never flagged);
     /// - flagged photos that are returned again get the flag cleared.
     ///
     /// `added` counts new photos, `deleted` counts photos flagged by THIS refresh (not ones
@@ -28,14 +29,16 @@ public enum SourceSync {
     public static func refresh(album: Album, source: any PhotoSource) async throws
         -> (album: Album, added: Int, deleted: Int) {
         guard let query = album.source else { return (album, 0, 0) }
-        let found = try await source.photos(matching: query)
-        if found.isEmpty && !album.photos.isEmpty { throw SourceSyncError.emptyResult }
+        // Videos are not part of the product: never added, and never flagged as deleted.
+        let found = try await source.photos(matching: query).filter { $0.kind != .video }
+        if found.isEmpty && album.photos.values.contains(where: { $0.kind != .video }) { throw SourceSyncError.emptyResult }
         let foundIdentifiers = Set(found.map(\.identifier))
 
         var result = album
         var deleted = 0
         var known: Set<String> = []
         for (id, photo) in album.photos {
+            if photo.kind == .video { continue }
             known.insert(photo.sourceIdentifier)
             let present = foundIdentifiers.contains(photo.sourceIdentifier)
             if !present && !photo.deletedInSource {

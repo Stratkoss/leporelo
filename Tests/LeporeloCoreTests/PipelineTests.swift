@@ -390,7 +390,7 @@ private func isOriginalStart(_ event: FakePhotoSource.Event) -> Bool {
 
         let result = try await SourceSync.refresh(album: before, source: source)
 
-        #expect(result.added == 2)
+        #expect(result.added == 1)   // the video "id-new2" is not added
         #expect(result.deleted == 1)
         #expect(source.queries == [Self.query])
         let after = result.album
@@ -404,11 +404,37 @@ private func isOriginalStart(_ event: FakePhotoSource.Event) -> Bool {
         #expect(after.photos["kept"] == kept)
         // New photos: unselected, missing original, no day yet, fresh ids.
         let added = after.photos.values.filter { $0.sourceIdentifier.hasPrefix("id-new") }
-        #expect(added.count == 2)
+        #expect(added.count == 1)
         #expect(added.allSatisfy { !$0.isSelected && $0.originalState == .missing && $0.dayKey == nil })
         #expect(added.allSatisfy { before.photos[$0.id] == nil })
-        #expect(Set(added.map(\.sourceIdentifier)) == ["id-new", "id-new2"])
-        #expect(after.photos.count == 4)
+        #expect(Set(added.map(\.sourceIdentifier)) == ["id-new"])
+        #expect(after.photos.count == 3)
+    }
+
+    @Test func refreshNeverFlagsAnOldVideoAsDeleted() async throws {
+        var video = photo("vid")
+        video.sourceIdentifier = "id-vid"
+        video.kind = .video
+        var kept = photo("kept")
+        kept.sourceIdentifier = "id-kept"
+        let before = album([video, kept], source: Self.query)
+        let source = FakePhotoSource(photos: [.fake("id-kept")])   // the source no longer returns videos
+
+        let result = try await SourceSync.refresh(album: before, source: source)
+
+        #expect(result.added == 0 && result.deleted == 0)
+        #expect(result.album.photos["vid"]?.deletedInSource == false)
+        #expect(result.album == before)
+    }
+
+    @Test func refreshWithOnlyVideosInAlbumAndEmptyResultDoesNotThrow() async throws {
+        var video = photo("vid")
+        video.sourceIdentifier = "id-vid"
+        video.kind = .video
+        let before = album([video], source: Self.query)
+        let result = try await SourceSync.refresh(album: before, source: FakePhotoSource(photos: []))
+        #expect(result.album == before)
+        #expect(result.added == 0 && result.deleted == 0)
     }
 
     @Test func refreshClearsFlagOnReappearanceAndCountsOnlyNewlyDeleted() async throws {

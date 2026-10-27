@@ -13,7 +13,7 @@ Příprava: `make build-app`, pak `make run-app`. Chyby a diagnostika jdou do Ko
 
 ## B. Založení alba z posledních 7 dní
 
-- [ ] Nové album: výchozí hodnoty jsou název „Nové album“, formát „Na šířku 8 × 6 in (Canva)“ s poznámkou „Rozměry formátu nejsou ověřené u dodavatele.“ a rozmezí od před 7 dny do dneška. Po chvíli se ukáže „Fotek ve zdroji: N“ a N odpovídá počtu fotek a videí ve Photos za dané období.
+- [ ] Nové album: výchozí hodnoty jsou název „Nové album“, formát „Na šířku 8 × 6 in (Canva)“ s poznámkou „Rozměry formátu nejsou ověřené u dodavatele.“ a rozmezí od před 7 dny do dneška. Po chvíli se ukáže „Fotek ve zdroji: N“ a N odpovídá počtu fotek (bez videí) ve Photos za dané období.
 - [ ] Rozmezí bez fotek ukáže „V tomto rozmezí nejsou žádné fotky“ a „Založit album“ je vypnuté. Režim Album vypíše alba z Photos; sdílené album ukáže oranžovou poznámku o sdílených albech iCloudu (zmenšené fotky) a dovolí vytvoření.
 - [ ] „Založit album“ nabídne uložení jako „Nové album.leporelo“. Ulož na plochu. Očekávání: okno alba se otevře do několika sekund, banner ukazuje „Analyzuji fotky 0 / N“ a počítá nahoru, okno zůstává plynulé, po skončení banner zmizí (nebo ukáže „Zjišťuji místa…“, dokud běží geocoding).
 - [ ] Názvy míst se objeví později, ne hned; třídění po dnech je použitelné dřív. Fotky s GPS mají po dokončení v `album.json` (Zobrazit obsah balíku) pole `placeName`.
@@ -24,7 +24,7 @@ Příprava: `make build-app`, pak `make run-app`. Chyby a diagnostika jdou do Ko
 
 ## C. Fakta o PhotoKit k potvrzení
 
-Dosud nikdo neprošel PhotoKit proti skutečné knihovně. Nejjednodušší je dočasné tlačítko v `App/Leporelo/Sources/AlbumWindow.swift`, které zavolá `PhotoKitAuthorization.request()`, `PhotoKitSource().photos(matching: .dateRange(start:end:))`, `albums()`, u první nevideo fotky `thumbnail(for:maxPixel: 512)`, `original(for:)` a `isLocallyAvailable(identifier:)` a vypíše výsledky (potom tlačítko odstraň). Většinu lze vyčíst i z chování v oddílech B, D a F.
+Dosud nikdo neprošel PhotoKit proti skutečné knihovně. Nejjednodušší je dočasné tlačítko v `App/Leporelo/Sources/AlbumWindow.swift`, které zavolá `PhotoKitAuthorization.request()`, `PhotoKitSource().photos(matching: .dateRange(start:end:))`, `albums()`, u první fotky `thumbnail(for:maxPixel: 512)`, `original(for:)` a `isLocallyAvailable(identifier:)` a vypíše výsledky (potom tlačítko odstraň). Většinu lze vyčíst i z chování v oddílech B, D a F.
 
 - [ ] Rozměry z `PHAsset` jsou upright. U portrétní fotky z iPhonu je `pixelWidth < pixelHeight`, náhled je na výšku s delší stranou 512 px a původní HEIC v Náhledu stojí správně. Když vyjdou otočené, musí se opravit zdroj (zbytek aplikace počítá s upright rozměry).
 - [ ] Upravená nebo ořezaná fotka (úprava ve Photos) vrátí upravenou verzi a rozměry jí odpovídají.
@@ -33,7 +33,7 @@ Dosud nikdo neprošel PhotoKit proti skutečné knihovně. Nejjednodušší je d
 - [ ] Volba zdroje originálu a přípona: iPhone fotka dá příponu `heic`, upravená fotka dá upravenou verzi, RAW dá velký soubor (dng), Live Photo dá fotku.
 - [ ] Fotka jen v iCloudu (Optimalizovat úložiště): před stažením je `isLocallyAvailable` `false`, po stažení `true`.
 - [ ] Cena `isLocallyAvailable` (čte celý lokální soubor): s několika sty vybranými fotkami otevření alba a změna stavu stahování nezpomalí okno.
-- [ ] Počet za posledních 7 dní odpovídá Photos a načtení trvá výrazně méně než 5 s. Videa se vrátí jako video, zobrazují se zašedlá a do alba se nedávají.
+- [ ] Počet za posledních 7 dní odpovídá Photos a načtení trvá výrazně méně než 5 s. Videa se nenačtou vůbec, v mřížce nejsou ani prázdné buňky, a počet alba ve výběru Photos počítá jen fotky.
 
 ## D. Třídění
 

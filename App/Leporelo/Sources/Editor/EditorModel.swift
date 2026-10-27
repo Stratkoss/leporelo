@@ -121,7 +121,7 @@ final class EditorModel {
             d.days = d.photosByDay.keys.sorted()
             d.placed = album.placedPhotoIDs
             d.unplacedSelected = album.unplacedSelectedPhotos
-            d.selected = album.selectedPhotos.filter { $0.kind != .video }
+            d.selected = album.selectedPhotos
             derivedCache = d
             derivedRevision = revision
         }

@@ -301,9 +301,21 @@ struct EditorModelTests {
         #expect(Set(model.trayPhotos.map(\.id)) == ["a0", "a1", "a2", "a-off", "b0", "b1", "b2", "b-off"])
 
         model.trayShowsAll = true
-        #expect(model.trayPhotos.map(\.id) == store.album.selectedPhotos.filter { $0.kind != .video }.map(\.id))
+        #expect(model.trayPhotos.map(\.id) == store.album.selectedPhotos.map(\.id))
         #expect(!model.trayPhotos.contains { !$0.isSelected })
         #expect(model.placedPhotoIDs == store.album.placedPhotoIDs)
+    }
+
+    @Test func trayExcludesVideosEvenWhenSelected() throws {
+        var photos = dayPhotos("a", day1, count: 3) + dayPhotos("b", day2, count: 3)
+        photos += [photo("a-vid", day: day1, minute: 9, selected: true, kind: .video),
+                   photo("b-vid", day: day2, minute: 9, selected: false, kind: .video)]
+        let (model, _, _) = try makeModel(try drafted(makeAlbum(photos)))
+        model.trayDay = day1
+        #expect(!model.trayPhotos.contains { $0.kind == .video })
+        #expect(Set(model.trayPhotos.map(\.id)) == ["a0", "a1", "a2", "b0", "b1", "b2"])
+        model.trayShowsAll = true
+        #expect(!model.trayPhotos.contains { $0.kind == .video })
     }
 
     @Test func trayDayFollowsTheCurrentSpread() throws {

@@ -26,7 +26,7 @@ struct PhotoKitRequestError: Error, Equatable, CustomStringConvertible {
 /// - `.dateRange(start, end)` is half-open on `creationDate` (`start <= date < end`) over the
 ///   library (PhotoKit's default source for a plain asset fetch: the user library, which includes
 ///   the iCloud Shared Photo Library; iCloud *shared albums* are reached through `.album` queries).
-///   Images and videos only; hidden assets and Recently Deleted are excluded; of a burst only the
+///   Images only (no videos, also in albums); hidden assets and Recently Deleted are excluded; of a burst only the
 ///   representative photo is returned (PhotoKit defaults).
 /// - `.album(identifier:)` fetches the collection by local identifier; unknown => `notFound`.
 /// - Results are sorted by (capturedAt, identifier).
@@ -56,7 +56,7 @@ struct PhotoKitSource: PhotoSource {
         for (subtype, isShared) in kinds {
             let collections = PHAssetCollection.fetchAssetCollections(with: .album, subtype: subtype, options: nil)
             collections.enumerateObjects { collection, _, _ in
-                // Exact count of images + videos, because `estimatedAssetCount` is often
+                // Exact count of images, because `estimatedAssetCount` is often
                 // NSNotFound for shared albums. A count-only fetch is cheap (no objects are
                 // materialised), so this stays fast for dozens of albums.
                 let count = PHAsset.fetchAssets(in: collection, options: countOptions).count

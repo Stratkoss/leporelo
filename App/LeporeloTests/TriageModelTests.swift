@@ -175,14 +175,29 @@ struct TriageModelTests {
         #expect(undo.undoActionName == "Vybrat fotku")
     }
 
-    @Test func videosCannotBeSelected() throws {
-        let (model, store, undo) = try makeModel([photo("v", minute: 0, kind: .video)])
-        model.toggleSelection("v")
-        #expect(store.album.photos["v"]?.isSelected == false)
+    @Test func videosAreNeverShownOrCounted() throws {
+        var photos = (0..<6).map { photo("p\($0)", minute: $0 * 5, selected: $0 < 3) }
+        photos += [photo("v1", minute: 1, selected: true, kind: .video), photo("v2", minute: 2, kind: .video),
+                   photo("v3", minute: 3, day: nil, kind: .video)]
+        let (model, store, undo) = try makeModel(photos)
+        let clean = try makeModel(Array(photos.prefix(6))).0
+
+        let items = model.photos(for: june18)
+        #expect(items.map(\.photo.id) == (0..<6).map { "p\($0)" })
+        #expect(!items.contains { $0.badges.contains(.video) })
+        #expect(model.dayEntries.map(\.id) == [.day(june18)])   // the undated video makes no "Bez data"
+        #expect(model.dayEntries.first?.total == 6)
+        #expect(model.dayEntries.first?.selected == 3)
+        #expect(model.selectedTotal == 3)
+        #expect(model.footerText == clean.footerText)
+        #expect(model.estimatedPages == clean.estimatedPages)
+        model.showOnlyRecommended = true
+        #expect(!model.photos(for: june18).contains { $0.photo.kind == .video })
+        // The stored photos stay as they are, and a video cannot be selected.
+        #expect(store.album.photos["v2"] != nil)
+        model.toggleSelection("v2")
+        #expect(store.album.photos["v2"]?.isSelected == false)
         #expect(!undo.canUndo)
-        let item = try #require(model.photos(for: june18).first)
-        #expect(item.badges.contains(.video))
-        #expect(!item.isSelectable)
     }
 
     // MARK: Badges

@@ -15,11 +15,10 @@ enum PhotoKitMapping {
         NSPredicate(format: "creationDate >= %@ AND creationDate < %@", start as NSDate, end as NSDate)
     }
 
-    /// Images and videos. Videos are returned (as `.video`) so triage can show them greyed out;
-    /// audio and unknown media types are not.
+    /// Images only. Videos (and audio and unknown media types) are not part of the product and are
+    /// never fetched, neither for a date range nor for an album.
     static func mediaTypePredicate() -> NSPredicate {
-        NSPredicate(format: "mediaType == %d OR mediaType == %d",
-                    PHAssetMediaType.image.rawValue, PHAssetMediaType.video.rawValue)
+        NSPredicate(format: "mediaType == %d", PHAssetMediaType.image.rawValue)
     }
 
     /// Full predicate for a query: the media types, plus the date range for `.dateRange`.
@@ -59,13 +58,12 @@ enum PhotoKitMapping {
 
     // MARK: Asset metadata
 
-    /// `.livePhoto` for images with the live subtype, `.photo` for other images, `.video` for
-    /// videos, nil (skipped) for audio/unknown.
+    /// `.livePhoto` for images with the live subtype, `.photo` for other images; nil (skipped)
+    /// for videos, audio and unknown (the product has no videos).
     static func kind(mediaType: PHAssetMediaType, subtypes: PHAssetMediaSubtype) -> PhotoKind? {
         switch mediaType {
         case .image: subtypes.contains(.photoLive) ? .livePhoto : .photo
-        case .video: .video
-        case .audio, .unknown: nil
+        case .video, .audio, .unknown: nil
         @unknown default: nil
         }
     }

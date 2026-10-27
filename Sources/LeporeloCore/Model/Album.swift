@@ -37,20 +37,27 @@ public struct Album: Sendable, Codable, Equatable {
         self.createdAt = createdAt
     }
 
-    /// Photos grouped by `dayKey` (photos without one are skipped), sorted by `capturedAt` within a day
+    /// The photos the product shows and counts: everything except videos. An album created by an
+    /// earlier version may still hold videos in its stored `photos`; they are never deleted from
+    /// the file, but no list, count, recommendation, draft or export uses them.
+    public var visiblePhotos: [Photo] {
+        photos.values.filter(\.isUsable)
+    }
+
+    /// Photos grouped by `dayKey` (videos and photos without one are skipped), sorted by `capturedAt` within a day
     /// (ties broken by id).
     public func photosByDay() -> [DayKey: [Photo]] {
         var result: [DayKey: [Photo]] = [:]
-        for photo in photos.values {
+        for photo in photos.values where photo.isUsable {
             guard let key = photo.dayKey else { continue }
             result[key, default: []].append(photo)
         }
         return result.mapValues { $0.sorted(by: Photo.chronological) }
     }
 
-    /// Selected photos, chronological (ties broken by id).
+    /// Selected photos (never videos), chronological (ties broken by id).
     public var selectedPhotos: [Photo] {
-        photos.values.filter(\.isSelected).sorted(by: Photo.chronological)
+        photos.values.filter { $0.isUsable && $0.isSelected }.sorted(by: Photo.chronological)
     }
 
     /// Ids of the photos in any frame of the spreads or the cover (front and back).
@@ -72,6 +79,9 @@ public struct Album: Sendable, Codable, Equatable {
 }
 
 extension Photo {
+    /// False for videos: the product has none (see `Album.visiblePhotos`).
+    public var isUsable: Bool { kind != .video }
+
     /// Deterministic chronological order: `capturedAt`, then `id`.
     public static func chronological(_ a: Photo, _ b: Photo) -> Bool {
         (a.capturedAt, a.id) < (b.capturedAt, b.id)

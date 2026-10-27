@@ -112,6 +112,7 @@ Co profil sám nepokryje a co je v kódu:
 
 - Aplikace čte jednu knihovnu Photos (knihovnu přihlášeného uživatele). Fotky partnerky musí být v téže knihovně, ideálně v originálech.
 - Jediný profil je Canva Print a jeho rozměry (formáty, spadávka, bezpečná zóna, 98 stran) jsou označené jako neověřené u dodavatele. Profil Saal Digital zatím není.
+- Videa se nepodporují a z knihovny se nenačítají. Starší projekt, který videa už obsahuje, je v aplikaci nezobrazuje ani nepočítá; v souboru alba zůstávají beze změny.
 - Jen svět „deník + galerie“. Scrapbook a mozaika nejsou.
 - Není „rozdělit den na dvě“. Ručně jde použít „Vložit dvoustranu za“ a přetahování fotek.
 - Plátno editoru nemá položky přístupnosti pro jednotlivé rámečky (VoiceOver vidí plátno jako jednu skupinu). Mřížka, pás dvoustran a zásobník fotek popisky mají.

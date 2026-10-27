@@ -20,7 +20,7 @@ public enum Workflow {
         return try ProjectPackage.create(at: url, album: empty)
     }
 
-    /// Fetches the photos matching `query`, builds a new album from them (no selection, no spreads),
+    /// Fetches the photos matching `query` (videos are dropped: the product has none), builds a new album from them (no selection, no spreads),
     /// assigns days and places (`GroupingService.assignDays`) and saves it to `package`.
     /// Analysis, recommendation and drafting are separate steps.
     public static func buildAlbum(from source: PhotoSource, query: SourceQuery, title: String,
@@ -28,7 +28,7 @@ public enum Workflow {
                                   resolver: PlaceResolver) async throws -> Album {
         let sourcePhotos = try await source.photos(matching: query)
         var photos: [PhotoID: Photo] = [:]
-        for sourcePhoto in sourcePhotos {
+        for sourcePhoto in sourcePhotos where sourcePhoto.kind != .video {
             let photo = Photo(source: sourcePhoto)
             photos[photo.id] = photo
         }
@@ -97,7 +97,7 @@ public enum Workflow {
     /// (stored day keys win; place names come from the photos' `placeName`). Also what
     /// `AlbumUpdater.redraft` needs.
     public static func days(of album: Album) -> [DayGroup] {
-        DayGrouper.group(album.photos.values.filter { $0.dayKey != nil }, timeZones: [:], places: [:])
+        DayGrouper.group(album.visiblePhotos.filter { $0.dayKey != nil }, timeZones: [:], places: [:])
     }
 
     /// The selection half of `recommendAndDraft`, without drafting (the app runs it once after the
@@ -115,7 +115,7 @@ public enum Workflow {
         for (id, photo) in album.photos where !photo.selectionDecidedByUser {
             result.photos[id]?.isSelected = false
         }
-        let dated = album.photos.values.filter { $0.dayKey != nil }
+        let dated = album.visiblePhotos.filter { $0.dayKey != nil }
         var days = DayGrouper.group(Array(dated), timeZones: [:], places: [:])
         var recommended = Set<PhotoID>()
         for i in days.indices {

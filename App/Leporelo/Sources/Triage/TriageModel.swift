@@ -254,7 +254,7 @@ final class TriageModel {
         var d = Derived()
         var dated: [Photo] = []
         dated.reserveCapacity(album.photos.count)
-        for photo in album.photos.values {
+        for photo in album.photos.values where photo.isUsable {
             if photo.dayKey != nil { dated.append(photo) } else { d.undated.append(photo) }
             if photo.isSelected {
                 d.totalSelected += 1
