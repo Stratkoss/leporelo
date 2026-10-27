@@ -234,9 +234,10 @@ import Foundation
         #expect(Array(replanned.map(\.id).prefix(autoIDs.count)) == Array(autoIDs.prefix(replanned.count)))
         #expect(replanned.first?.kind == .journal)
         #expect(D.text(try #require(replanned.first), .date) == "čtvrtek 18. června 2026")
-        for s in day {
-            #expect(s.pageLayouts.count == 2, "\(s.id)")   // whole spreads: an even page count
-            #expect(s.frames.allSatisfy { $0.photoID != nil }, "\(s.id)")
+        for s in day { #expect(s.frames.allSatisfy { $0.photoID != nil }, "\(s.id)") }
+        // Spec 4.3: the re-planned day has an even number of real pages, so no `empty` filler page.
+        for s in replanned {
+            #expect(s.pageLayouts.count == 2 && s.pageLayouts.allSatisfy { $0 != nil && $0 != "empty" }, "\(s.id)")
         }
         let placed = D.placed(day)
         #expect(placed.count == Set(placed).count)
