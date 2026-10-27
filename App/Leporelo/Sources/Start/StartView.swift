@@ -14,6 +14,9 @@ struct StartView: View {
     @State private var access = PhotoAccess(PhotoKitAuthorization.currentStatus())
     @State private var draft: NewAlbumModel?
     @State private var alert: (title: String, message: String)?
+    /// The book being opened: a double-click (two taps and the list's primary action) and Return
+    /// must open it once.
+    @State private var openingBook: URL?
 
     var body: some View {
         NavigationSplitView {
@@ -58,7 +61,7 @@ struct StartView: View {
                     Text("Zatím žádná kniha").foregroundStyle(.secondary)
                 }
                 // Selecting a book (arrow keys) only shows it; a click, a double-click or Return
-                // opens it (`primaryAction` below).
+                // opens it (`primaryAction` below), once (`open` ignores repeats while opening).
                 ForEach(model.books, id: \.self) { url in
                     Label(Self.bookName(url), systemImage: "book.closed")
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -219,15 +222,21 @@ struct StartView: View {
         }
     }
 
-    /// Opens a recent book through SwiftUI's document opening, then closes this window.
+    /// Opens a recent book through SwiftUI's document opening, then closes this window. A
+    /// double-click delivers up to three requests (two taps and the list's primary action):
+    /// while a book is opening, and for a double-click interval after, the others are ignored.
     private func open(_ url: URL) {
+        guard openingBook == nil else { return }
+        openingBook = url
         Task {
             do {
                 try await openDocument(at: url)
                 dismissWindow(id: Self.windowID)
+                try? await Task.sleep(for: .seconds(NSEvent.doubleClickInterval))
             } catch {
                 alert = ("Knihu nejde otevřít", error.localizedDescription)
             }
+            openingBook = nil
         }
     }
 }
