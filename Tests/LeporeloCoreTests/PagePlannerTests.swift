@@ -221,3 +221,17 @@ import Foundation
         #expect(zip(pages, pages.dropFirst()).allSatisfy { $0.layoutID != $1.layoutID })
     }
 }
+
+extension PagePlannerTests {
+    /// Review finding: a ▯-heavy day whose parity split hits only 2- and 3-photo pages (▯▭▭, ▯▯)
+    /// must cut the fullest page chronologically instead of adding an `empty` page (spec 4.3).
+    @Test func odd23PhotoDayCutsAPageInsteadOfEmpty() {
+        let pattern = Array("PPLPPLPLPLPLLPPPPPLLPPP").map { $0 == "L" }
+        let photos = Self.photos(pattern)
+        let pages = Self.plan(photos)
+        Self.checkCommon(pages, photos)
+        #expect(!pages.contains { $0.layoutID == "empty" }, "\(pages.map(\.layoutID))")
+        #expect(Self.placements(pages).allSatisfy { TemplateLayout.fits($0.photo, $0.slot) },
+                "\(pages.map(\.layoutID))")
+    }
+}

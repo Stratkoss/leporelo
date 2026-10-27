@@ -454,10 +454,11 @@ private struct Planner {
     /// `pages` with one page split into two: the page with the most photos first (ties: the
     /// earlier page; not an opener, not `full`, at least 2 photos), its photos (chronological)
     /// planned with half the target into exactly 2 pages between its neighbours. With `clean`
-    /// (padding) both new pages must have matching orientations, and when the page does not split
-    /// that way its photos are cut chronologically in two (cuts nearest the middle first), each
-    /// part one page with matching orientations; e.g. `grid-4` of ▭ becomes `landscape-2` twice.
-    /// Nil when no page splits.
+    /// (padding) both new pages must have matching orientations. When the page does not split
+    /// that way (a 2- or 3-photo page re-planned stays one page) its photos are cut
+    /// chronologically in two (cuts nearest the middle first), each part one page with matching
+    /// orientations; e.g. `grid-4` of ▭ becomes `landscape-2` twice, ▯▯ becomes two
+    /// `portrait-text`. Nil when no page splits.
     func splitting(_ pages: [PlannedPage], clean: Bool) -> [PlannedPage]? {
         func role(_ page: PlannedPage) -> PageLayoutRole? { PageLayoutCatalog.layout(id: page.layoutID)?.role }
         let splittable = pages.indices
@@ -472,7 +473,7 @@ private struct Planner {
             var split: [PlannedPage]?
             if two.count == 2 && (!clean || two.allSatisfy { mismatches($0) == 0 }) {
                 split = two
-            } else if clean {
+            } else {
                 let cuts = (1..<photos.count).sorted { (abs(2 * $0 - photos.count), $0) < (abs(2 * $1 - photos.count), $1) }
                 for cut in cuts {
                     guard let first = onePage(Array(photos[..<cut]), before: before, after: nil),
