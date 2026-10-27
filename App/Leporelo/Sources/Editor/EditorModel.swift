@@ -17,6 +17,17 @@ enum TemplateChangeOutcome: Equatable {
     case unavailable
 }
 
+/// Whether "Zkusit jinak" can run on the current page (`EditorModel.tryAnotherAvailability`).
+enum TryAnotherAvailability: Equatable {
+    case available
+    /// No current page: hint "Klikni na stránku".
+    case noPage
+    /// The page's photos fit no other layout: hint "Pro tyhle fotky jiné rozložení není".
+    case noAlternative
+    /// The intro, the closing, the cover, an `empty` page, or nothing shown.
+    case notApplicable
+}
+
 /// A frame or a text box of a spread, by id: what the canvas selects, moves, resizes and deletes.
 enum LayoutItem: Hashable {
     case frame(String)
@@ -78,6 +89,9 @@ final class EditorModel {
     let store: AlbumStore
     /// The window's undo manager (set by the view); nil means edits without undo.
     @ObservationIgnored var undoManager: UndoManager?
+    /// The user's liked layouts for "Navrhnout album", "Navrhnout znovu" and "Zkusit jinak"
+    /// (spec 6); the app sets its preferences, tests keep equal weights.
+    @ObservationIgnored var layoutWeights: () -> LayoutWeights = { LayoutWeights() }
 
     /// `geometry` seeds the page geometry; the model's profile (e.g. a test's page-count rule) is
     /// kept while the album stays on that profile, also across format changes.
@@ -190,6 +204,13 @@ final class EditorModel {
     }
     /// The tray day the user chose for the current spread; nil follows the spread.
     private var chosenTrayDay: DayKey?
+    /// The page the user last clicked, with its spread.
+    private var requestedPage: PageRef?
+
+    private struct PageRef: Equatable {
+        var spreadID: String
+        var side: PageSide
+    }
 
     /// The cover side shown on the canvas instead of the current spread (the strip's cover
     /// thumbnails); nil shows the spread. Choosing a spread (also the export's "Dvoustrana N" jump)
@@ -218,6 +239,25 @@ final class EditorModel {
             requestedSpreadID = newValue
             if let newValue, let index = spreadIndex(of: newValue) { lastSpreadIndex = index }
             chosenTrayDay = nil
+            requestedPage = nil
+        }
+    }
+
+    /// The current page of the shown spread (spec 5): the page of the selected frame or text (by
+    /// its centre, `PageSpread.side(of:geometry:)`, live during a gesture), else the page last
+    /// clicked on this spread; nil on the cover or without either. A click on the canvas sets it;
+    /// choosing another spread clears it.
+    var currentPageSide: PageSide? {
+        get {
+            guard coverSide == nil, let spread = currentSpread else { return nil }
+            if let item = selectedItem, let rect = Self.rect(of: item, in: spread) {
+                return PageSpread.side(of: rect, geometry: geometry)
+            }
+            guard let requestedPage, requestedPage.spreadID == spread.id else { return nil }
+            return requestedPage.side
+        }
+        set {
+            requestedPage = newValue.flatMap { side in currentSpreadID.map { PageRef(spreadID: $0, side: side) } }
         }
     }
 
@@ -303,7 +343,8 @@ final class EditorModel {
         let album = store.album
         guard album.spreads.isEmpty, !album.selectedPhotos.isEmpty else { return false }
         let g = geometry
-        let draft = Workflow.draft(album: album, profile: g.profile, format: g.format)
+        let draft = Workflow.draft(album: album, profile: g.profile, format: g.format,
+                                   options: DraftOptions(layoutWeights: layoutWeights()))
         guard !draft.spreads.isEmpty else { return false }
         startStepAfterSessionCommit()
         store.replace(album: draft, actionName: "Navrhnout album", undoManager: undoManager)
@@ -325,7 +366,7 @@ final class EditorModel {
         let album = store.album
         let g = geometry
         let result = AlbumUpdater.redraft(album: album, days: Workflow.days(of: album),
-                                          profile: g.profile, format: g.format)
+                                          profile: g.profile, format: g.format, weights: layoutWeights())
         if result.album != album {
             startStepAfterSessionCommit()
             store.replace(album: result.album, actionName: "Navrhnout znovu", undoManager: undoManager)
@@ -784,15 +825,20 @@ final class EditorModel {
     }
 
     /// Ends the layout gesture: stores its final rectangle as one step "Upravit rozložení" (nothing
-    /// if unchanged); the spread becomes manually edited with a custom layout.
+    /// if unchanged); the spread becomes manually edited with a custom layout. On a spread of pages
+    /// the item's page becomes manual (`PageEditing.markingCustom`), and when its centre crossed
+    /// the spine BOTH pages do: a catalog page is rebuilt from the catalog on a margin or format
+    /// change and would lose an item it has no slot for.
     func endLayoutChange() {
         guard let session = layoutSession else { return }
         layoutSession = nil
         guard var spread = store.album.spreads.first(where: { $0.id == session.spreadID }),
               let rect = Self.rect(of: session.item, in: spread), rect != session.rect else { return }
         _ = Self.setRect(session.rect, of: session.item, in: &spread)
-        spread.manuallyEdited = true
-        spread.customLayout = true
+        let from = PageSpread.side(of: rect, geometry: geometry)
+        let to = PageSpread.side(of: session.rect, geometry: geometry)
+        spread = PageEditing.markingCustom(spread, side: from)
+        if to != from { spread = PageEditing.markingCustom(spread, side: to) }
         asOwnStep { perform([.replaceSpread(spread)], "Upravit rozložení") }
     }
 
@@ -808,9 +854,9 @@ final class EditorModel {
         let page = geometry.pageRect(side: side)
         let rect = Rect(x: page.minX + page.size.width / 4, y: page.minY + page.size.height / 4,
                         width: page.size.width / 2, height: page.size.height / 2)
-        spread.frames.append(Frame(id: frameID, rect: marginRule.conformFrame(rect, area: .spread), photoID: nil,
-                                   offset: Point(x: 0, y: 0), zoom: 1))
-        return addItem(.frame(frameID), to: spread, "Přidat rámeček")
+        let conformed = marginRule.conformFrame(rect, area: .spread)
+        spread.frames.append(Frame(id: frameID, rect: conformed, photoID: nil, offset: Point(x: 0, y: 0), zoom: 1))
+        return addItem(.frame(frameID), at: conformed, to: spread, "Přidat rámeček")
     }
 
     /// "Přidat text": an empty caption `text-N` (smallest free N), 60 × 12 mm, centred
@@ -826,16 +872,15 @@ final class EditorModel {
         let width = 60.0, height = 12.0
         let rect = Rect(x: page.minX + (page.size.width - width) / 2, y: page.maxY - marginMM - height,
                         width: width, height: height)
-        spread.texts.append(TextBox(id: textID, rect: marginRule.conformText(rect, area: .spread),
-                                    role: .caption, text: ""))
-        return addItem(.text(textID), to: spread, "Přidat text")
+        let conformed = marginRule.conformText(rect, area: .spread)
+        spread.texts.append(TextBox(id: textID, rect: conformed, role: .caption, text: ""))
+        return addItem(.text(textID), at: conformed, to: spread, "Přidat text")
     }
 
-    /// Stores `spread` (with the new item) as one step and selects the item.
-    private func addItem(_ item: LayoutItem, to spread: Spread, _ actionName: String) -> String? {
-        var spread = spread
-        spread.manuallyEdited = true
-        spread.customLayout = true
+    /// Stores `spread` (with the new item at `rect`) as one step and selects the item; the item's
+    /// page becomes manual.
+    private func addItem(_ item: LayoutItem, at rect: Rect, to spread: Spread, _ actionName: String) -> String? {
+        let spread = PageEditing.markingCustom(spread, side: PageSpread.side(of: rect, geometry: geometry))
         guard perform([.replaceSpread(spread)], actionName) else { return nil }
         requestedItem = ItemRef(spreadID: spread.id, item: item)
         switch item {
@@ -844,12 +889,14 @@ final class EditorModel {
     }
 
     /// "Smazat": removes a frame (its photo stays selected but unplaced: tray, preflight) or a
-    /// text box, as one step; the spread gets a custom layout. False for an unknown item or spread.
+    /// text box, as one step; the spread gets a custom layout and the item's page becomes manual.
+    /// False for an unknown item or spread.
     @discardableResult
     func deleteItem(_ item: LayoutItem, in spreadID: String? = nil) -> Bool {
         commitSessions()
         guard let id = spreadID ?? currentSpreadID,
-              var spread = store.album.spreads.first(where: { $0.id == id }) else { return false }
+              var spread = store.album.spreads.first(where: { $0.id == id }),
+              let rect = Self.rect(of: item, in: spread) else { return false }
         switch item {
         case .frame(let frameID):
             guard let i = spread.frames.firstIndex(where: { $0.id == frameID }) else { return false }
@@ -858,8 +905,7 @@ final class EditorModel {
             guard let i = spread.texts.firstIndex(where: { $0.id == textID }) else { return false }
             spread.texts.remove(at: i)
         }
-        spread.manuallyEdited = true
-        spread.customLayout = true
+        spread = PageEditing.markingCustom(spread, side: PageSpread.side(of: rect, geometry: geometry))
         guard perform([.replaceSpread(spread)], "Smazat") else { return false }
         if requestedItem == ItemRef(spreadID: id, item: item) { requestedItem = nil }
         return true
@@ -950,9 +996,128 @@ final class EditorModel {
             ? .applied(unplacedPhotoIDs: result.unplacedPhotoIDs) : .unavailable
     }
 
+    // MARK: Pages ("Zkusit jinak", page layouts)
+
+    /// The current spread as stored (no session preview) and its current page.
+    private var currentPage: (spread: Spread, side: PageSide)? {
+        guard let side = currentPageSide, let id = currentSpreadID,
+              let spread = store.album.spreads.first(where: { $0.id == id }) else { return nil }
+        return (spread, side)
+    }
+
+    /// The catalog layout of page `side`; nil for a manual page (`nil` in `pageLayouts`), a page of
+    /// an old template spread and a blank spread.
+    static func pageLayoutID(_ spread: Spread, side: PageSide) -> String? {
+        let i = side == .left ? 0 : 1
+        guard spread.pageLayouts.indices.contains(i) else { return nil }
+        return spread.pageLayouts[i]
+    }
+
+    /// The catalog layout of the current page (the picker marks it); nil as `pageLayoutID`.
+    var currentPageLayoutID: String? {
+        currentPage.flatMap { Self.pageLayoutID($0.spread, side: $0.side) }
+    }
+
+    /// Whether the picker offers page layouts for the spread (journal, gallery and blank spreads,
+    /// old template ones too) instead of spread templates (intro, closing).
+    func offersPageLayouts(for spreadID: String) -> Bool {
+        guard let spread = store.album.spreads.first(where: { $0.id == spreadID }) else { return false }
+        return [.journal, .gallery, .blank].contains(spread.kind)
+    }
+
+    /// Whether "Doporučené rozložení…" has something to offer for the spread: page layouts, or
+    /// another template of its kind.
+    func offersLayoutChoice(for spreadID: String) -> Bool {
+        offersPageLayouts(for: spreadID) || availableTemplates(for: spreadID).count >= 2
+    }
+
+    /// Whether "Zkusit jinak" runs on the current page; see `TryAnotherAvailability`.
+    var tryAnotherAvailability: TryAnotherAvailability {
+        guard coverSide == nil, let spread = currentSpread, spread.kind != .intro, spread.kind != .closing
+        else { return .notApplicable }
+        guard let side = currentPageSide else { return .noPage }
+        if Self.pageLayoutID(spread, side: side) == "empty" { return .notApplicable }
+        return nextPageLayout(spread, side) == nil ? .noAlternative : .available
+    }
+
+    private func nextPageLayout(_ spread: Spread, _ side: PageSide) -> String? {
+        PageEditing.nextLayout(for: spread, side: side, geometry: geometry, photos: store.album.photos,
+                               weights: layoutWeights())
+    }
+
+    /// "Zkusit jinak" (spec 5): the current page's photos in the next layout of its alternatives
+    /// (`PageEditing.nextLayout`, `applying`), one step "Zkusit jinak"; the number of photos stays.
+    /// A manual page and a page of an old spread ask first (`.needsLayoutReplaceConfirmation`, then
+    /// call again with `confirmLayoutReplace`); a text the next layout has no slot for asks too
+    /// (`.needsTextLossConfirmation`, then `confirmTextLoss`). `.unavailable` unless
+    /// `tryAnotherAvailability` is `.available`.
+    @discardableResult
+    func tryAnotherLayout(confirmLayoutReplace: Bool = false, confirmTextLoss: Bool = false) -> TemplateChangeOutcome {
+        commitSessions()
+        guard tryAnotherAvailability == .available, let page = currentPage,
+              let next = nextPageLayout(page.spread, page.side) else { return .unavailable }
+        let (spread, side) = page
+        if Self.pageLayoutID(spread, side: side) == nil && !confirmLayoutReplace {
+            return .needsLayoutReplaceConfirmation
+        }
+        let result = PageEditing.applying(next, to: spread, side: side, geometry: geometry, photos: store.album.photos,
+                                          marginMM: store.album.marginMM)
+        if !result.droppedTexts.isEmpty && !confirmTextLoss { return .needsTextLossConfirmation(result.droppedTexts) }
+        return perform([.replaceSpread(result.spread)], EditorText.tryAnotherAction)
+            ? .applied(unplacedPhotoIDs: result.unplacedPhotoIDs) : .unavailable
+    }
+
+    /// The layouts the picker offers for the current page: the whole catalog without `empty` on a
+    /// journal, gallery or blank spread (old template spreads too); empty without a current page
+    /// and on the intro, the closing and the cover.
+    func availablePageLayouts() -> [PageLayout] {
+        guard let page = currentPage, coverSide == nil, offersPageLayouts(for: page.spread.id) else { return [] }
+        return PageLayoutCatalog.all.filter { $0.role != .empty }
+    }
+
+    /// What `changePageLayout` would do, without changing anything (the picker's question).
+    func previewPageLayoutChange(to layoutID: String) -> RetemplateResult? {
+        guard let page = currentPage, availablePageLayouts().contains(where: { $0.id == layoutID })
+        else { return nil }
+        return PageEditing.applying(layoutID, to: page.spread, side: page.side, geometry: geometry,
+                                    photos: store.album.photos, marginMM: store.album.marginMM)
+    }
+
+    /// "Doporučená rozložení" for the current page: the rules of `changeTemplate` for one page
+    /// (`PageEditing.applying`, one step "Použít doporučené rozložení"). A manual page (`nil`, or
+    /// an old or blank spread with `customLayout`) asks first, then texts without a slot; extra
+    /// photos stay selected but unplaced, extra frames stay empty. The page's own layout changes
+    /// nothing. A blank spread becomes a gallery of pages.
+    @discardableResult
+    func changePageLayout(to layoutID: String, confirmTextLoss: Bool = false,
+                          confirmLayoutReplace: Bool = false) -> TemplateChangeOutcome {
+        commitSessions()
+        guard let page = currentPage, let result = previewPageLayoutChange(to: layoutID) else {
+            return .unavailable
+        }
+        let (spread, side) = page
+        let current = Self.pageLayoutID(spread, side: side)
+        if current == layoutID { return .applied(unplacedPhotoIDs: []) }
+        let manual = spread.pageLayouts.isEmpty ? spread.customLayout : current == nil
+        if manual && !confirmLayoutReplace { return .needsLayoutReplaceConfirmation }
+        if !result.droppedTexts.isEmpty && !confirmTextLoss { return .needsTextLossConfirmation(result.droppedTexts) }
+        return perform([.replaceSpread(result.spread)], EditorText.applyLayoutAction)
+            ? .applied(unplacedPhotoIDs: result.unplacedPhotoIDs) : .unavailable
+    }
+
     // MARK: Spreads
 
-    /// The template a new spread of `kind` starts from.
+    /// The pages a new gallery or journal spread starts from (spec 5): Galerie = `framed-1` +
+    /// `framed-1`, Deník = `opener-2l` + `grid-4`; nil for the other kinds (`defaultTemplateID`).
+    static func defaultPageLayouts(for kind: SpreadKind) -> (left: String, right: String)? {
+        switch kind {
+        case .gallery: ("framed-1", "framed-1")
+        case .journal: ("opener-2l", "grid-4")
+        case .blank, .intro, .closing: nil
+        }
+    }
+
+    /// The template a new spread of `kind` starts from when it has no `defaultPageLayouts`.
     static func defaultTemplateID(for kind: SpreadKind) -> String {
         switch kind {
         case .blank: "blank"
@@ -963,7 +1128,8 @@ final class EditorModel {
         }
     }
 
-    /// "Přidat dvoustranu": an EMPTY spread of `kind` (`defaultTemplateID`) with id `manual-N`
+    /// "Přidat dvoustranu": an EMPTY spread of `kind` (`defaultPageLayouts`, else
+    /// `defaultTemplateID`) with id `manual-N`
     /// (smallest free N; the drafter never uses that prefix), `manuallyEdited = true` so
     /// "Navrhnout znovu" keeps it. Inserted after spread `after`; nil = at the end, before the
     /// closing spread if the album ends with one (also for `after` = that closing spread). A gallery/journal takes the day of the spread it
@@ -981,7 +1147,6 @@ final class EditorModel {
         } else {
             index = spreads.last?.kind == .closing ? spreads.count - 1 : spreads.count
         }
-        guard let template = TemplateCatalog.template(id: Self.defaultTemplateID(for: kind)) else { return nil }
         let taken = Set(spreads.map(\.id))
         var n = 1
         while taken.contains("manual-\(n)") { n += 1 }
@@ -992,8 +1157,17 @@ final class EditorModel {
                 ?? (index < spreads.count ? spreads[index].dayKey : nil)
                 ?? trayDay
         }
-        var spread = TemplateLayout.instantiate(template, geometry: geometry, dayKey: day, id: id,
+        var spread: Spread
+        if let pages = Self.defaultPageLayouts(for: kind) {
+            guard let left = PageLayoutCatalog.layout(id: pages.left),
+                  let right = PageLayoutCatalog.layout(id: pages.right) else { return nil }
+            spread = PageSpread.compose(left: left, right: right, kind: kind, dayKey: day, id: id, geometry: geometry,
+                                        marginMM: store.album.marginMM)
+        } else {
+            guard let template = TemplateCatalog.template(id: Self.defaultTemplateID(for: kind)) else { return nil }
+            spread = TemplateLayout.instantiate(template, geometry: geometry, dayKey: day, id: id,
                                                 marginMM: store.album.marginMM)
+        }
         spread.manuallyEdited = true
         guard perform([.insertSpread(spread, at: index)], "Přidat dvoustranu") else { return nil }
         currentSpreadID = id

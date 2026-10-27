@@ -18,8 +18,9 @@ extension FocusedValues {
 
 /// Ladění (spec 6.4): the big spread in the middle (`SpreadCanvasView`) with a banner for the
 /// spread's problems that belong to no frame, the tray on the right (`PhotoTrayView`), the strip
-/// at the bottom (`SpreadStripView`); toolbar: "Přidat rámeček", "Přidat text" (on the right page),
-/// "Mřížka", "Přichytávat", "Okraj", "Navrhnout znovu", "Formát", "Exportovat…" (the window adds
+/// at the bottom (`SpreadStripView`); toolbar: "Zkusit jinak" (the current page, spec 5),
+/// "Přidat rámeček", "Přidat text" (on the current page, else the right one), "Mřížka",
+/// "Přichytávat", "Okraj", "Navrhnout znovu", "Formát", "Exportovat…" (the window adds
 /// "Třídění | Dvoustrany" and "Zpět do třídění"). The grid and snapping switches are remembered
 /// for the app (`@AppStorage`); the margin belongs to the book (`EditorModel.setMargin`).
 struct EditorView: View {
@@ -39,6 +40,16 @@ struct EditorView: View {
     @State private var showsRedraft = false
     @State private var redraftKept = 0
     @State private var formatCandidate: BookFormat?
+    /// "Zkusit jinak" asks "Ruční rozložení se nahradí doporučeným." (a manual or old page).
+    @State private var asksTryAnotherReplace = false
+    /// "Zkusit jinak" asks about these texts; separate from the question above, which an answer
+    /// to it may follow.
+    @State private var tryAnotherLoss: TryAnotherLoss?
+
+    private struct TryAnotherLoss {
+        let texts: [TextBox]
+        let layoutConfirmed: Bool
+    }
 
     /// "Mřížka": draws the 5 mm grid and snaps to it.
     @AppStorage("editor.showGrid") private var showGrid = false
@@ -67,7 +78,7 @@ struct EditorView: View {
             SpreadStripView(model: model,
                             coverSide: Binding(get: { model.coverSide }, set: { model.coverSide = $0 }),
                             thumbnails: thumbnails,
-                            onChangeTemplate: { templateSpreadID = $0 },
+                            onChangeTemplate: openLayoutPicker,
                             onDelete: requestDelete,
                             onShowInTray: showInTray)
         }
@@ -76,18 +87,21 @@ struct EditorView: View {
         .onChange(of: undoManager) { _, manager in model.undoManager = manager }
         .onDisappear { model.commitSessions() }
         .sheet(item: Binding(get: { templateSpreadID.map(SheetID.init) }, set: { templateSpreadID = $0?.id })) { sheet in
-            let spread = model.store.album.spreads.first { $0.id == sheet.id }
-            TemplatePicker(templates: model.availableTemplates(for: sheet.id),
-                           currentTemplateID: spread?.templateID,
-                           customLayout: spread?.customLayout ?? false,
-                           geometry: model.geometry,
-                           marginMM: model.marginMM,
-                           droppedTexts: { model.previewTemplateChange(to: $0, in: sheet.id)?.droppedTexts ?? [] },
-                           attempt: { templateID, confirmTextLoss, confirmLayoutReplace in
-                               model.changeTemplate(to: templateID, in: sheet.id, confirmTextLoss: confirmTextLoss,
-                                                    confirmLayoutReplace: confirmLayoutReplace)
-                           },
-                           onDone: { templateSpreadID = nil })
+            layoutPicker(sheet.id)
+        }
+        .alert(EditorText.replaceLayoutQuestion, isPresented: $asksTryAnotherReplace) {
+            Button(EditorText.replaceLayout, role: .destructive) { tryAnother(confirmLayoutReplace: true) }
+            Button("Zrušit", role: .cancel) {}
+        }
+        .alert(EditorText.applyLayoutQuestion, isPresented: Binding(get: { tryAnotherLoss != nil },
+                                                                    set: { if !$0 { tryAnotherLoss = nil } }),
+               presenting: tryAnotherLoss) { loss in
+            Button(EditorText.applyLayout, role: .destructive) {
+                tryAnother(confirmLayoutReplace: loss.layoutConfirmed, confirmTextLoss: true)
+            }
+            Button("Zrušit", role: .cancel) {}
+        } message: { loss in
+            Text(EditorText.textLoss(loss.texts))
         }
         .alert(EditorText.deleteTitle(), isPresented: Binding(get: { deleteCandidate != nil },
                                                              set: { if !$0 { deleteCandidate = nil } }),
@@ -117,6 +131,45 @@ struct EditorView: View {
         let id: String
     }
 
+    /// "Doporučená rozložení" for the spread: page layouts for its current page (journal, gallery,
+    /// blank), else its templates (intro, closing).
+    @ViewBuilder private func layoutPicker(_ spreadID: String) -> some View {
+        let spread = model.store.album.spreads.first { $0.id == spreadID }
+        if model.offersPageLayouts(for: spreadID) {
+            TemplatePicker(content: model.currentPageSide.map { .pageLayouts(model.availablePageLayouts(), side: $0) }
+                               ?? .needsPage,
+                           currentID: model.currentPageLayoutID,
+                           customLayout: false,
+                           geometry: model.geometry,
+                           marginMM: model.marginMM,
+                           droppedTexts: { model.previewPageLayoutChange(to: $0)?.droppedTexts ?? [] },
+                           attempt: { layoutID, confirmTextLoss, confirmLayoutReplace in
+                               model.changePageLayout(to: layoutID, confirmTextLoss: confirmTextLoss,
+                                                      confirmLayoutReplace: confirmLayoutReplace)
+                           },
+                           onDone: { templateSpreadID = nil })
+        } else {
+            TemplatePicker(content: .templates(model.availableTemplates(for: spreadID)),
+                           currentID: spread?.templateID,
+                           customLayout: spread?.customLayout ?? false,
+                           geometry: model.geometry,
+                           marginMM: model.marginMM,
+                           droppedTexts: { model.previewTemplateChange(to: $0, in: spreadID)?.droppedTexts ?? [] },
+                           attempt: { templateID, confirmTextLoss, confirmLayoutReplace in
+                               model.changeTemplate(to: templateID, in: spreadID, confirmTextLoss: confirmTextLoss,
+                                                    confirmLayoutReplace: confirmLayoutReplace)
+                           },
+                           onDone: { templateSpreadID = nil })
+        }
+    }
+
+    /// Opens the picker for a spread. Page layouts apply to the current page, so the spread
+    /// becomes the current one first (keeping its page when it already is).
+    private func openLayoutPicker(_ spreadID: String) {
+        if model.coverSide != nil || model.currentSpreadID != spreadID { model.currentSpreadID = spreadID }
+        templateSpreadID = spreadID
+    }
+
     // MARK: Canvas
 
     private var canvasContent: CanvasContent? {
@@ -133,9 +186,11 @@ struct EditorView: View {
                              geometry: model.geometry, package: store.package,
                              issues: model.issues(for: content.page.id),
                              selectedItem: content.isCover ? nil : model.selectedItem,
+                             currentPageSide: content.isCover ? nil : model.currentPageSide,
                              snapSettings: SnapSettings(grid: showGrid, objects: snapObjects),
                              showGrid: showGrid,
-                             isEditingText: model.isEditingText, model: model)
+                             isEditingText: model.isEditingText, model: model,
+                             onChangeLayout: openLayoutPicker)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             ContentUnavailableView("Album zatím nemá dvoustrany", systemImage: "book.pages",
@@ -182,13 +237,22 @@ struct EditorView: View {
 
     @ToolbarContentBuilder private var toolbar: some ToolbarContent {
         ToolbarItemGroup {
-            Button(EditorText.addFrame, systemImage: "rectangle.badge.plus") { model.addFrame(on: .right) }
-                .disabled(!canEditLayout)
-                .help(EditorText.addFrame)
+            let availability = model.tryAnotherAvailability
+            Button { tryAnother() } label: { Label(EditorText.tryAnother, systemImage: "shuffle") }
+                .disabled(availability != .available)
+                .help(EditorText.tryAnotherHelp(availability))
 
-            Button(EditorText.addText, systemImage: "character.textbox") { model.addText(on: .right) }
-                .disabled(!canEditLayout)
-                .help(EditorText.addText)
+            Button(EditorText.addFrame, systemImage: "rectangle.badge.plus") {
+                model.addFrame(on: model.currentPageSide ?? .right)
+            }
+            .disabled(!canEditLayout)
+            .help(EditorText.addFrame)
+
+            Button(EditorText.addText, systemImage: "character.textbox") {
+                model.addText(on: model.currentPageSide ?? .right)
+            }
+            .disabled(!canEditLayout)
+            .help(EditorText.addText)
 
             Toggle(EditorText.grid, systemImage: "grid", isOn: $showGrid)
                 .help(EditorText.grid)
@@ -244,6 +308,18 @@ struct EditorView: View {
     }
 
     // MARK: Actions
+
+    /// "Zkusit jinak"; a manual page or a lost text asks first.
+    private func tryAnother(confirmLayoutReplace: Bool = false, confirmTextLoss: Bool = false) {
+        switch model.tryAnotherLayout(confirmLayoutReplace: confirmLayoutReplace, confirmTextLoss: confirmTextLoss) {
+        case .applied, .unavailable:
+            break
+        case .needsLayoutReplaceConfirmation:
+            asksTryAnotherReplace = true
+        case .needsTextLossConfirmation(let texts):
+            tryAnotherLoss = TryAnotherLoss(texts: texts, layoutConfirmed: confirmLayoutReplace)
+        }
+    }
 
     /// Confirmation only when the spread holds photos or text; an empty one goes at once (undoable).
     private func requestDelete(_ spreadID: String) {

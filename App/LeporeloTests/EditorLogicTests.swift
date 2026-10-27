@@ -631,6 +631,30 @@ struct EditorTextTests {
         #expect(EditorText.placeholder(templateID: "journal-3", textID: "body") == "Co jsme dnes dělali")
         #expect(EditorText.placeholder(templateID: "nope", textID: "body") == nil)
     }
+
+    @Test func placeholderOfAPageSpreadComesFromTheCatalogSlot() {
+        #expect(EditorText.placeholder(templateID: PageSpread.templateID, textID: "L.caption") == "Popisek")
+        #expect(EditorText.placeholder(templateID: PageSpread.templateID, textID: "R.date") == "Datum")
+        #expect(EditorText.placeholder(templateID: PageSpread.templateID, textID: "L.body") == "Co jsme dnes dělali")
+        #expect(EditorText.placeholder(templateID: PageSpread.templateID, textID: "text-1") == nil)
+        #expect(EditorText.placeholder(templateID: PageSpread.templateID, textID: "caption") == nil)
+    }
+
+    @Test func pickerGroupsPageLayoutsByPhotoCountWithoutPhotosLast() {
+        let groups = TemplatePicker.groups(PageLayoutCatalog.all.filter { $0.role != .empty })
+        #expect(groups.map(\.count) == [1, 2, 3, 4, 5, 6, 0])
+        #expect(groups[0].layouts.map(\.id) == ["full", "framed-1", "portrait-text", "opener-portrait"])
+    }
+
+    @Test func tryAnotherHelpAndGroupTexts() {
+        #expect(EditorText.tryAnotherHelp(.noPage) == "Klikni na stránku")
+        #expect(EditorText.tryAnotherHelp(.noAlternative) == "Pro tyhle fotky jiné rozložení není")
+        #expect(EditorText.tryAnotherHelp(.available) == "Zkusit jinak")
+        #expect(EditorText.pageLayoutGroup(1) == "1 fotka")
+        #expect(EditorText.pageLayoutGroup(3) == "3 fotky")
+        #expect(EditorText.pageLayoutGroup(5) == "5 fotek")
+        #expect(EditorText.pageLayoutGroup(0) == "Bez fotek")
+    }
 }
 
 @MainActor

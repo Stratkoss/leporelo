@@ -549,6 +549,14 @@ enum EditorText {
     static let applyLayout = "Použít"
     /// The undo action name of applying a recommended layout (a template) to a spread.
     static let applyLayoutAction = "Použít doporučené rozložení"
+    static let tryAnother = "Zkusit jinak"
+    /// The undo action name of "Zkusit jinak".
+    static let tryAnotherAction = "Zkusit jinak"
+    static let clickPage = "Klikni na stránku"
+    static let noOtherLayout = "Pro tyhle fotky jiné rozložení není"
+    static let replaceLayoutQuestion = "Ruční rozložení se nahradí doporučeným."
+    static let replaceLayout = "Nahradit"
+    static let recommendedLayouts = "Doporučená rozložení"
     static let insertAfter = "Vložit dvoustranu za"
     static let deleteSpread = "Smazat dvoustranu"
     static let wholeSelection = "Celý výběr"
@@ -567,6 +575,25 @@ enum EditorText {
     static let resetCrop = "Obnovit výřez"
     static let grid = "Mřížka"
     static let snap = "Přichytávat"
+
+    /// The help of the "Zkusit jinak" button: why it is disabled, else its name.
+    static func tryAnotherHelp(_ availability: TryAnotherAvailability) -> String {
+        switch availability {
+        case .noPage: clickPage
+        case .noAlternative: noOtherLayout
+        case .available, .notApplicable: tryAnother
+        }
+    }
+
+    /// The picker's group heading of page layouts with `n` photos: "1 fotka", "2 fotky", "Bez fotek".
+    static func pageLayoutGroup(_ n: Int) -> String {
+        n == 0 ? "Bez fotek" : CzechPlural.photos(n)
+    }
+
+    /// "Čtyři, 4 fotky" (VoiceOver label of a page layout in the picker).
+    static func pageLayoutLabel(_ layout: PageLayout) -> String {
+        "\(layout.name), \(photoCount(layout.photoCount))"
+    }
 
     /// "Okraj: 10 mm" (the toolbar's margin stepper).
     static func margin(_ mm: Double) -> String { "Okraj: \(Int(mm)) mm" }
@@ -639,9 +666,16 @@ enum EditorText {
         role == .body
     }
 
-    /// The template's placeholder for an empty text box ("Co jsme dnes dělali").
+    /// The template's placeholder for an empty text box ("Co jsme dnes dělali"). On a spread of
+    /// pages (`PageSpread.templateID`) a text made from a catalog slot (`L.caption`, `R.date`) shows
+    /// that slot's placeholder ("Popisek", "Datum").
     static func placeholder(templateID: String, textID: String) -> String? {
-        TemplateCatalog.template(id: templateID)?.texts.first { $0.id == textID }?.placeholder
+        if templateID == PageSpread.templateID {
+            guard let slot = [PageSide.left, .right].lazy.map(PageSpread.prefix)
+                .first(where: { textID.hasPrefix($0) }).map({ String(textID.dropFirst($0.count)) }) else { return nil }
+            return PageLayoutCatalog.all.lazy.flatMap(\.texts).first { $0.id == slot }?.placeholder
+        }
+        return TemplateCatalog.template(id: templateID)?.texts.first { $0.id == textID }?.placeholder
     }
 
     /// "čt 18. 6. · 9:05" (the photo's own time zone), for lists of photos.

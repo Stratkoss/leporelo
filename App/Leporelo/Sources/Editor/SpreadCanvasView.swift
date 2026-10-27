@@ -40,6 +40,8 @@ enum CanvasContent: Equatable {
 /// Delete = "Odebrat fotku" on a photo, "Smazat" on an empty frame or a text; arrows = move the
 /// selected item by 1 mm (⇧ 5 mm), in crop mode the crop, one step per key press-and-hold;
 /// without a selection they switch spreads; Escape = deselect; right click = context menu.
+/// Every click on a spread also makes its page the current page (`EditorModel.currentPageSide`,
+/// spec 5), drawn with a 2 pt accent outline inset 1 pt; not on the cover.
 /// `showGrid` draws a 5 mm grid on each page. The cover is read-only. Sessions end on mouse up,
 /// selection change, focus loss, window resign key, window close and app termination.
 struct SpreadCanvasView: NSViewRepresentable {
@@ -50,11 +52,15 @@ struct SpreadCanvasView: NSViewRepresentable {
     let package: ProjectPackage
     let issues: [PreflightIssue]
     let selectedItem: LayoutItem?
+    /// The page outlined as current; nil on the cover.
+    let currentPageSide: PageSide?
     let snapSettings: SnapSettings
     let showGrid: Bool
     /// Read so SwiftUI updates the view when a text session starts or ends (e.g. by Undo).
     let isEditingText: Bool
     let model: EditorModel
+    /// "Doporučené rozložení…" from the context menu, for the spread with this id.
+    let onChangeLayout: (String) -> Void
 
     func makeNSView(context: Context) -> SpreadCanvasNSView {
         let view = SpreadCanvasNSView()
@@ -64,8 +70,10 @@ struct SpreadCanvasView: NSViewRepresentable {
 
     func updateNSView(_ view: SpreadCanvasNSView, context: Context) {
         view.model = model
+        view.onChangeLayout = onChangeLayout
         view.update(content: content, album: album, revision: revision, geometry: geometry, package: package,
-                    issues: issues, selectedItem: selectedItem, snapSettings: snapSettings, showGrid: showGrid)
+                    issues: issues, selectedItem: selectedItem, currentPageSide: currentPageSide,
+                    snapSettings: snapSettings, showGrid: showGrid)
     }
 }
 
@@ -157,6 +165,7 @@ final class CanvasImageCache {
 
 final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NSViewToolTipOwner {
     weak var model: EditorModel?
+    var onChangeLayout: ((String) -> Void)?
 
     private var content: CanvasContent?
     private var album: Album?
@@ -165,6 +174,7 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
     private var package: ProjectPackage?
     private var issues: [PreflightIssue] = []
     private var selectedItem: LayoutItem?
+    private var currentPageSide: PageSide?
     private var snapSettings = SnapSettings(grid: false, objects: true)
     private var showGrid = false
     private let imageCache = CanvasImageCache()
@@ -238,7 +248,8 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
     // MARK: Update from SwiftUI
 
     func update(content: CanvasContent?, album: Album, revision: Int, geometry: PageGeometry, package: ProjectPackage,
-                issues: [PreflightIssue], selectedItem: LayoutItem?, snapSettings: SnapSettings, showGrid: Bool) {
+                issues: [PreflightIssue], selectedItem: LayoutItem?, currentPageSide: PageSide?,
+                snapSettings: SnapSettings, showGrid: Bool) {
         let pageChanged = content?.page.id != self.content?.page.id || content?.isCover != self.content?.isCover
         if pageChanged {
             endGestures()
@@ -252,6 +263,7 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
         self.package = package
         self.issues = issues
         self.selectedItem = selectedItem
+        self.currentPageSide = currentPageSide
         self.snapSettings = snapSettings
         self.showGrid = showGrid
         // Crop mode ends when its frame is no longer the selection or has no photo (undo, Delete).
@@ -311,6 +323,7 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
         drawBleedTint(layout, geometry: geometry)
         drawTextBoxes(page, layout)
         if showGrid, isEditable { drawGrid(layout, geometry: geometry) }
+        drawCurrentPage(layout, geometry: geometry)
         drawSelection(page, layout)
         if let id = dropTargetFrame, let frame = page.frames.first(where: { $0.id == id }) {
             let r = layout.viewRect(geometry.bleedExtended(frame.rect, area: area))
@@ -353,6 +366,22 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
             NSColor.separatorColor.withAlphaComponent(0.4).setStroke()
             path.stroke()
         }
+    }
+
+    /// The current page ("Zkusit jinak", the picker): a 2 pt accent outline inset 1 pt into the
+    /// page's trim. Never on the cover.
+    private func drawCurrentPage(_ layout: CanvasLayout, geometry: PageGeometry) {
+        guard isEditable, let side = currentPageSide else { return }
+        let path = NSBezierPath(rect: layout.viewRect(geometry.pageRect(side: side)).insetBy(dx: 1, dy: 1))
+        path.lineWidth = 2
+        NSColor.controlAccentColor.setStroke()
+        path.stroke()
+    }
+
+    /// The page under `p` (spread mm): left of the spine is the left page.
+    private func pageSide(at p: Point) -> PageSide? {
+        guard let geometry else { return nil }
+        return p.x < geometry.format.pageWidthMM ? .left : .right
     }
 
     /// The selected frame (ring) or text (outline) with its 8 handles; in crop mode the frame gets
@@ -557,7 +586,9 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
 
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
-        guard isEditable, model != nil, let p = mmPoint(event) else { return }
+        guard isEditable, let model, let p = mmPoint(event) else { return }
+        // Any click chooses its page; a selected item's centre still wins (`currentPageSide`).
+        model.currentPageSide = pageSide(at: p)
         let target = hit(p)
         if event.clickCount == 2 {
             switch target {
@@ -870,10 +901,14 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
         endGestures()
         let spreadID = page.id
         let side: PageSide = p.x < geometry.format.pageWidthMM ? .left : .right
+        model.currentPageSide = side
         let menu = NSMenu()
         menu.autoenablesItems = false
         menu.addItem(ActionMenuItem(EditorText.addFrame) { model.addFrame(on: side, in: spreadID) })
         menu.addItem(ActionMenuItem(EditorText.addText) { model.addText(on: side, in: spreadID) })
+        if model.offersLayoutChoice(for: spreadID) {
+            menu.addItem(ActionMenuItem(EditorText.changeTemplate) { [weak self] in self?.onChangeLayout?(spreadID) })
+        }
         switch hit(p) {
         case .frame(let id):
             select(.frame(id))

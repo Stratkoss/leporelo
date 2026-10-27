@@ -12,14 +12,15 @@ private let day4 = DayKey(year: 2026, month: 6, day: 27)
 private let lax = PageCountRule(min: 2, max: nil, multipleOf: 2)
 
 private func photo(_ id: String, day: DayKey?, minute: Int, selected: Bool = true, landscape: Bool = true,
-                   aesthetic: Double = 0.5, kind: PhotoKind = .photo) -> Photo {
+                   aesthetic: Double = 0.5, kind: PhotoKind = .photo, square: Bool = false) -> Photo {
     var calendar = Calendar(identifier: .gregorian)
     calendar.timeZone = TimeZone(secondsFromGMT: 0)!
     let key = day ?? day1
     let date = calendar.date(from: DateComponents(year: key.year, month: key.month, day: key.day,
                                                   hour: 9, minute: minute))!
     return Photo(id: id, sourceIdentifier: "src-\(id)", capturedAt: date, timeZoneSeconds: 0, location: nil,
-                 pixelWidth: landscape ? 4000 : 3000, pixelHeight: landscape ? 3000 : 4000, kind: kind,
+                 pixelWidth: square ? 3000 : landscape ? 4000 : 3000,
+                 pixelHeight: square ? 3000 : landscape ? 3000 : 4000, kind: kind,
                  analysis: PhotoAnalysis(aesthetic: aesthetic, sharpness: 500, isUtility: false, faceRects: [],
                                          closedEyes: false, featurePrint: nil),
                  isSelected: selected, dayKey: day, placeName: nil, seriesID: nil,
@@ -106,6 +107,31 @@ private func standardAlbum() throws -> Album {
     album.cover = AlbumDrafter.cover(title: album.title, photoID: "a4", format: g.format, profile: g.profile,
                                      marginMM: album.marginMM)
     return album
+}
+
+/// A book of page spreads: the legacy intro, then the gallery `pagesGalleryID` of day1 whose left
+/// page is `left` holding the square photo "sq" and whose right page is `grid-4` with r0...r3.
+private let pagesGalleryID = "2026-06-18-gallery-1"
+
+private func pagesAlbum(left: String = "full") throws -> Album {
+    let g = try laxGeometry()
+    var album = makeAlbum([photo("sq", day: day1, minute: 50, square: true)] + dayPhotos("r", day1, count: 4))
+    let intro = try #require(TemplateCatalog.template(id: "intro-1"))
+    var introSpread = TemplateLayout.instantiate(intro, geometry: g, dayKey: nil, id: "intro", marginMM: album.marginMM)
+    introSpread.frames[0].photoID = "r0"
+    var gallery = PageSpread.compose(left: try #require(PageLayoutCatalog.layout(id: left)),
+                                     right: try #require(PageLayoutCatalog.layout(id: "grid-4")),
+                                     kind: .gallery, dayKey: day1, id: pagesGalleryID, geometry: g,
+                                     marginMM: album.marginMM)
+    let photos: [String: PhotoID] = ["L.photo1": "sq", "R.photo1": "r0", "R.photo2": "r1", "R.photo3": "r2",
+                                     "R.photo4": "r3"]
+    for i in gallery.frames.indices { gallery.frames[i].photoID = photos[gallery.frames[i].id] }
+    album.spreads = [introSpread, gallery]
+    return album
+}
+
+private func pageIDs(_ s: Spread?, _ side: PageSide, _ g: PageGeometry) -> [PhotoID] {
+    s.map { PageEditing.photoIDs(on: side, of: $0, geometry: g) } ?? []
 }
 
 @MainActor
@@ -674,7 +700,7 @@ struct EditorModelTests {
         #expect(id == "manual-1")
         #expect(model.spreadIndex(of: id) == journalIndex + 1)
         let inserted = try #require(spread(store.album, id))
-        #expect(inserted.templateID == "gallery-1" && inserted.dayKey == day2)
+        #expect(inserted.templateID == PageSpread.templateID && inserted.dayKey == day2)
         #expect(inserted.frames.allSatisfy { $0.photoID == nil })
         #expect(inserted.manuallyEdited)  // user work survives "Navrhnout znovu"
         #expect(model.currentSpreadID == id)
@@ -1597,10 +1623,15 @@ struct EditorLayoutTests {
             let template = try #require(TemplateCatalog.template(id: templateID))
             return TemplateLayout.instantiate(template, geometry: model.geometry, dayKey: nil, marginMM: margin)
         }
+        func journalPages(margin: Double) throws -> Spread {
+            PageSpread.compose(left: try #require(PageLayoutCatalog.layout(id: "opener-2l")),
+                               right: try #require(PageLayoutCatalog.layout(id: "grid-4")), kind: .journal,
+                               dayKey: nil, id: "x", geometry: model.geometry, marginMM: margin)
+        }
 
         let id = try #require(step(undo) { model.insertSpread(kind: .journal, after: nil) })
-        #expect(rects(spread(store.album, id)) == rects(try instance("journal-3", margin: 25)))
-        #expect(rects(try instance("journal-3", margin: 25)) != rects(try instance("journal-3", margin: 10)))
+        #expect(rects(spread(store.album, id)) == rects(try journalPages(margin: 25)))
+        #expect(rects(try journalPages(margin: 25)) != rects(try journalPages(margin: 10)))
 
         let gallery = try #require(store.album.spreads.first { $0.templateID == "gallery-2" })
         let preview = try #require(model.previewTemplateChange(to: "journal-4", in: gallery.id))
@@ -1675,5 +1706,328 @@ struct EditorLayoutTests {
         model.selectedItem = .text("caption")
         model.nextSpread()
         #expect(model.selectedItem == nil)  // another spread is shown
+    }
+
+    // MARK: Pages: current page, "Zkusit jinak", page layouts
+
+    /// Review Focus 5: three "Zkusit jinak" and three ⌘Z bring the page back step by step.
+    @Test func tryAnotherThreeTimesUndoesStepwise() throws {
+        let (model, store, undo) = try makeModel(try pagesAlbum())
+        let g = model.geometry
+        let before = store.album
+        model.currentSpreadID = pagesGalleryID
+        model.currentPageSide = .left
+        #expect(model.tryAnotherAvailability == .available)
+
+        var states = [try #require(spread(store.album, pagesGalleryID))]
+        for expected in ["framed-1", "portrait-text", "full"] {
+            let outcome = step(undo) { model.tryAnotherLayout() }
+            #expect(outcome == .applied(unplacedPhotoIDs: []))
+            let after = try #require(spread(store.album, pagesGalleryID))
+            #expect(after.pageLayouts == [expected, "grid-4"])
+            #expect(pageIDs(after, .left, g) == ["sq"])  // the page's photos, no more, no less
+            #expect(pageIDs(after, .right, g) == ["r0", "r1", "r2", "r3"])
+            #expect(after.manuallyEdited && !after.customLayout)
+            #expect(undo.undoActionName == "Zkusit jinak")
+            states.append(after)
+        }
+        for i in (0..<3).reversed() {
+            model.undo()
+            #expect(spread(store.album, pagesGalleryID) == states[i])  // one click per step
+        }
+        #expect(store.album == before)
+        #expect(!undo.canUndo)
+    }
+
+    @Test func tryAnotherNeedsPage() throws {
+        let (model, store, _) = try makeModel(try pagesAlbum())
+        model.currentSpreadID = pagesGalleryID
+        #expect(model.currentPageSide == nil)
+        #expect(model.tryAnotherAvailability == .noPage)
+        let revision = store.revision
+        #expect(model.tryAnotherLayout() == .unavailable)
+        #expect(store.revision == revision)
+
+        // A selected frame or text gives its page (by its centre), else the clicked page.
+        model.selectedItem = .frame("R.photo2")
+        #expect(model.currentPageSide == .right)
+        #expect(model.tryAnotherAvailability == .noAlternative)  // grid-4 is the only layout for 4 ▭
+        model.selectedItem = nil
+        #expect(model.currentPageSide == nil)
+        model.currentPageSide = .left
+        #expect(model.tryAnotherAvailability == .available)
+        model.selectedItem = .frame("R.photo1")
+        #expect(model.currentPageSide == .right)
+        model.selectedItem = nil
+        #expect(model.currentPageSide == .left)
+
+        // Another spread forgets the page, also on the way back.
+        model.currentSpreadID = "intro"
+        #expect(model.currentPageSide == nil)
+        model.currentPageSide = .right
+        #expect(model.tryAnotherAvailability == .notApplicable)  // intro
+        model.currentSpreadID = pagesGalleryID
+        #expect(model.currentPageSide == nil)
+
+        model.currentPageSide = .left
+        model.coverSide = .front
+        #expect(model.tryAnotherAvailability == .notApplicable)  // cover
+    }
+
+    @Test func tryAnotherIsNotApplicableOnAnEmptyPage() throws {
+        let (model, store, undo) = try makeModel(try pagesAlbum())
+        let id = try #require(step(undo) { model.insertSpread(kind: .blank, after: nil) })
+        model.currentPageSide = .left
+        #expect(step(undo) { model.changePageLayout(to: "grid-4") } == .applied(unplacedPhotoIDs: []))
+        #expect(spread(store.album, id)?.pageLayouts == ["grid-4", "empty"])
+        model.currentPageSide = .right
+        #expect(model.tryAnotherAvailability == .notApplicable)
+        model.currentPageSide = .left
+        #expect(model.tryAnotherAvailability == .noAlternative)  // empty frames, no photos
+    }
+
+    @Test func tryAnotherAsksOnManualPage() throws {
+        let (model, store, undo) = try makeModel(try pagesAlbum(left: "framed-1"))
+        let g = model.geometry
+        model.currentSpreadID = pagesGalleryID
+        let original = try #require(spread(store.album, pagesGalleryID))
+        let frame = try #require(original.frames.first { $0.id == "L.photo1" })
+        step(undo) {
+            model.beginLayoutChange(.frame(frame.id))
+            model.updateLayout(.frame(frame.id), rect: moved(frame.rect, dx: 0, dy: 5), mode: .move)
+            model.endLayoutChange()
+        }
+        let custom = try #require(spread(store.album, pagesGalleryID))
+        #expect(custom.pageLayouts == [nil, "grid-4"])
+        model.currentPageSide = .left
+        #expect(model.tryAnotherAvailability == .available)
+
+        let revision = store.revision
+        #expect(model.tryAnotherLayout() == .needsLayoutReplaceConfirmation)
+        #expect(store.revision == revision)
+
+        let outcome = step(undo) { model.tryAnotherLayout(confirmLayoutReplace: true) }
+        #expect(outcome == .applied(unplacedPhotoIDs: []))
+        let after = try #require(spread(store.album, pagesGalleryID))
+        #expect(after.pageLayouts == ["full", "grid-4"])  // the first alternative of a manual page
+        #expect(pageIDs(after, .left, g) == ["sq"])
+        func right(_ s: Spread) -> ([Frame], [TextBox]) {
+            (s.frames.filter { PageSpread.side(of: $0.rect, geometry: g) == .right },
+             s.texts.filter { PageSpread.side(of: $0.rect, geometry: g) == .right })
+        }
+        #expect(right(after) == right(custom))
+        #expect(undo.undoActionName == "Zkusit jinak")
+        undo.undo()
+        #expect(spread(store.album, pagesGalleryID) == custom)
+    }
+
+    /// Review Focus 1: a page of an old spread is confirmed first, then only that page is converted.
+    @Test func tryAnotherOnAnOldSpreadAsksThenConvertsOnePage() throws {
+        let (model, store, undo) = try makeModel(try standardAlbum())
+        let g = model.geometry
+        let journal = try #require(store.album.spreads.first { $0.templateID == "journal-5" })
+        model.currentSpreadID = journal.id
+        let side = try #require([PageSide.left, .right].first { side in
+            model.currentPageSide = side
+            return model.tryAnotherAvailability == .available
+        })
+        let other: PageSide = side == .left ? .right : .left
+        #expect(model.tryAnotherLayout() == .needsLayoutReplaceConfirmation)
+        #expect(spread(store.album, journal.id) == journal)
+
+        let outcome = step(undo) { model.tryAnotherLayout(confirmLayoutReplace: true) }
+        guard case .applied = outcome else {
+            Issue.record("expected applied, got \(outcome)")
+            return
+        }
+        let after = try #require(spread(store.album, journal.id))
+        #expect(after.templateID == PageSpread.templateID)
+        #expect(after.pageLayouts[side == .left ? 0 : 1] != nil)
+        #expect(after.pageLayouts[side == .left ? 1 : 0] == nil)
+        #expect(pageIDs(after, other, g) == pageIDs(journal, other, g))
+        #expect(Set(pageIDs(after, side, g)) == Set(pageIDs(journal, side, g)))
+        undo.undo()
+        #expect(spread(store.album, journal.id) == journal)
+    }
+
+    @Test func movingFrameMarksOnlyItsPage() throws {
+        let (model, store, undo) = try makeModel(try pagesAlbum(left: "framed-1"))
+        let original = try #require(spread(store.album, pagesGalleryID))
+        let frame = try #require(original.frames.first { $0.id == "L.photo1" })
+        step(undo) {
+            model.beginLayoutChange(.frame(frame.id), in: pagesGalleryID)
+            model.updateLayout(.frame(frame.id), rect: moved(frame.rect, dx: 0, dy: 5), mode: .move)
+            model.endLayoutChange()
+        }
+        let after = try #require(spread(store.album, pagesGalleryID))
+        #expect(after.pageLayouts == [nil, "grid-4"])
+        #expect(after.customLayout && after.manuallyEdited)
+        #expect(undo.undoActionName == "Upravit rozložení")
+    }
+
+    @Test func addingAndDeletingMarkTheItemsPage() throws {
+        let (model, store, undo) = try makeModel(try pagesAlbum())
+        model.currentSpreadID = pagesGalleryID
+        #expect(step(undo) { model.addText(on: .right) } != nil)
+        #expect(spread(store.album, pagesGalleryID)?.pageLayouts == ["full", nil])
+        undo.undo()
+        #expect(step(undo) { model.addFrame(on: .left) } != nil)
+        #expect(spread(store.album, pagesGalleryID)?.pageLayouts == [nil, "grid-4"])
+        undo.undo()
+        #expect(step(undo) { model.deleteItem(.frame("R.photo3")) })
+        let deleted = try #require(spread(store.album, pagesGalleryID))
+        #expect(deleted.pageLayouts == ["full", nil])
+        #expect(deleted.customLayout && deleted.manuallyEdited)
+    }
+
+    /// A frame dragged across the spine belongs to both pages' changes: neither page may be
+    /// rebuilt from the catalog without it on the next margin change.
+    @Test func draggingAFrameAcrossTheSpineMarksBothPages() throws {
+        let (model, store, undo) = try makeModel(try pagesAlbum(left: "framed-1"))
+        let g = model.geometry
+        let original = try #require(spread(store.album, pagesGalleryID))
+        let frame = try #require(original.frames.first { $0.id == "L.photo1" })
+        step(undo) {
+            model.beginLayoutChange(.frame(frame.id), in: pagesGalleryID)
+            model.updateLayout(.frame(frame.id), rect: moved(frame.rect, dx: g.format.pageWidthMM * 0.6, dy: 0),
+                               mode: .move)
+            model.endLayoutChange()
+        }
+        let after = try #require(spread(store.album, pagesGalleryID))
+        let dragged = try #require(after.frames.first { $0.id == "L.photo1" })
+        #expect(PageSpread.side(of: dragged.rect, geometry: g) == .right)
+        #expect(after.pageLayouts == [nil, nil])
+
+        step(undo) { model.setMargin(15) }
+        let rebuilt = try #require(spread(store.album, pagesGalleryID))
+        #expect(rebuilt.frames.first { $0.id == "L.photo1" }?.photoID == "sq")
+        #expect(Set(rebuilt.frames.compactMap(\.photoID)) == ["sq", "r0", "r1", "r2", "r3"])
+    }
+
+    @Test func insertGalleryComposesPages() throws {
+        let (model, store, undo) = try makeModel(try pagesAlbum())
+        let g = model.geometry
+        func composed(_ left: String, _ right: String, _ kind: SpreadKind, _ id: String) throws -> Spread {
+            var s = PageSpread.compose(left: try #require(PageLayoutCatalog.layout(id: left)),
+                                       right: try #require(PageLayoutCatalog.layout(id: right)), kind: kind,
+                                       dayKey: day1, id: id, geometry: g, marginMM: store.album.marginMM)
+            s.manuallyEdited = true
+            return s
+        }
+        let gallery = try #require(step(undo) { model.insertSpread(kind: .gallery, after: pagesGalleryID) })
+        #expect(spread(store.album, gallery) == (try composed("framed-1", "framed-1", .gallery, gallery)))
+        #expect(model.currentSpreadID == gallery)
+        let journal = try #require(step(undo) { model.insertSpread(kind: .journal, after: pagesGalleryID) })
+        #expect(spread(store.album, journal) == (try composed("opener-2l", "grid-4", .journal, journal)))
+        let blank = try #require(step(undo) { model.insertSpread(kind: .blank, after: nil) })
+        #expect(spread(store.album, blank)?.templateID == "blank")
+        #expect(spread(store.album, blank)?.pageLayouts == [])
+    }
+
+    @Test func pickerAppliesToCurrentPage() throws {
+        let (model, store, undo) = try makeModel(try pagesAlbum())
+        let g = model.geometry
+        model.currentSpreadID = pagesGalleryID
+        #expect(model.availablePageLayouts().isEmpty)  // no page yet
+        #expect(model.changePageLayout(to: "mosaic-6") == .unavailable)
+
+        model.currentPageSide = .right
+        let offered = model.availablePageLayouts().map(\.id)
+        #expect(offered == PageLayoutCatalog.all.map(\.id).filter { $0 != "empty" })
+        #expect(model.changePageLayout(to: "empty") == .unavailable)
+        #expect(model.changePageLayout(to: "no-such-layout") == .unavailable)
+        let revision = store.revision
+        #expect(model.changePageLayout(to: "grid-4") == .applied(unplacedPhotoIDs: []))  // its own: nothing
+        #expect(store.revision == revision)
+
+        let before = try #require(spread(store.album, pagesGalleryID))
+        #expect(step(undo) { model.changePageLayout(to: "mosaic-6") } == .applied(unplacedPhotoIDs: []))
+        let after = try #require(spread(store.album, pagesGalleryID))
+        #expect(after.pageLayouts == ["full", "mosaic-6"])
+        #expect(Set(pageIDs(after, .right, g)) == ["r0", "r1", "r2", "r3"])
+        #expect(after.frames.filter { $0.id.hasPrefix("R.") }.count == 6)  // extra frames stay empty
+        #expect(pageIDs(after, .left, g) == ["sq"])
+        #expect(undo.undoActionName == EditorText.applyLayoutAction)
+
+        // Fewer frames: the extra photos stay selected but unplaced.
+        let fewer = step(undo) { model.changePageLayout(to: "landscape-2") }
+        guard case .applied(let unplaced) = fewer else {
+            Issue.record("expected applied, got \(fewer)")
+            return
+        }
+        #expect(unplaced.count == 2)
+        #expect(Set(unplaced).isSubset(of: ["r0", "r1", "r2", "r3"]))
+        undo.undo()
+        undo.undo()
+        #expect(spread(store.album, pagesGalleryID) == before)
+
+        // Intro and closing keep their templates: no page layouts.
+        model.currentSpreadID = "intro"
+        model.currentPageSide = .left
+        #expect(model.availablePageLayouts().isEmpty)
+    }
+
+    @Test func pickerOnAManualPageAsksAndKeepsTextsUntilConfirmed() throws {
+        let (model, store, undo) = try makeModel(try pagesAlbum(left: "framed-1"))
+        model.currentSpreadID = pagesGalleryID
+        step(undo) { model.setText("L.caption", "Pláž") }
+        model.currentPageSide = .left
+        // framed-1 -> full drops the caption.
+        let loss = model.changePageLayout(to: "full")
+        guard case .needsTextLossConfirmation(let texts) = loss else {
+            Issue.record("expected a text-loss confirmation, got \(loss)")
+            return
+        }
+        #expect(texts.map(\.text) == ["Pláž"])
+        let applied = step(undo) { model.changePageLayout(to: "full", confirmTextLoss: true) }
+        #expect(applied == .applied(unplacedPhotoIDs: []))
+        undo.undo()
+
+        #expect(step(undo) { model.addFrame(on: .left) } != nil)  // the page becomes manual
+        model.selectedItem = nil
+        model.currentPageSide = .left
+        #expect(model.changePageLayout(to: "portrait-text") == .needsLayoutReplaceConfirmation)
+        #expect(step(undo) { model.changePageLayout(to: "portrait-text", confirmLayoutReplace: true) }
+                == .applied(unplacedPhotoIDs: []))
+        #expect(spread(store.album, pagesGalleryID)?.pageLayouts == ["portrait-text", "grid-4"])
+        #expect(spread(store.album, pagesGalleryID)?.texts.first { $0.id == "L.caption" }?.text == "Pláž")
+    }
+
+    @Test func tryAnotherAsksBeforeLosingAText() throws {
+        let (model, store, undo) = try makeModel(try pagesAlbum(left: "portrait-text"))
+        model.currentSpreadID = pagesGalleryID
+        step(undo) { model.setText("L.caption", "Pláž") }
+        model.currentPageSide = .left
+        // portrait-text -> full (the next one round) has no caption.
+        let loss = model.tryAnotherLayout()
+        guard case .needsTextLossConfirmation(let texts) = loss else {
+            Issue.record("expected a text-loss confirmation, got \(loss)")
+            return
+        }
+        #expect(texts.map(\.text) == ["Pláž"])
+        #expect(step(undo) { model.tryAnotherLayout(confirmTextLoss: true) } == .applied(unplacedPhotoIDs: []))
+        #expect(spread(store.album, pagesGalleryID)?.pageLayouts == ["full", "grid-4"])
+    }
+
+    @Test func draftAndRedraftUseTheLayoutWeights() throws {
+        let album = makeAlbum(dayPhotos("a", day1, count: 8))
+        let (model, store, undo) = try makeModel(album)
+        let liked = LayoutWeights(liked: ["mosaic-6"])
+        var calls = 0
+        model.layoutWeights = {
+            calls += 1
+            return liked
+        }
+        let g = model.geometry
+        #expect(step(undo) { model.draftIfEmpty() })
+        #expect(calls == 1)
+        #expect(store.album == Workflow.draft(album: album, profile: g.profile, format: g.format,
+                                              options: DraftOptions(layoutWeights: liked)))
+        let drafted = store.album
+        step(undo) { _ = model.redraft() }
+        #expect(calls == 2)
+        let expected = AlbumUpdater.redraft(album: drafted, days: Workflow.days(of: drafted), profile: g.profile,
+                                            format: g.format, weights: liked)
+        #expect(store.album == expected.album)
     }
 }

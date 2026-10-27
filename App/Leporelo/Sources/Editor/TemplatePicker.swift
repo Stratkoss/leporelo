@@ -2,10 +2,24 @@ import AppKit
 import LeporeloCore
 import SwiftUI
 
-/// "Doporučená rozložení" ("Doporučené rozložení…"): the templates `EditorModel.availableTemplates(for:)`
-/// offers for a spread, each with a small rendered preview (blank grey frames, the placeholders as
-/// text, conformed to the book's `marginMM`) and its frame count. Choosing one runs
-/// `attempt(templateID, confirmTextLoss, confirmLayoutReplace)` (the editor's `changeTemplate`).
+/// What `TemplatePicker` offers.
+enum TemplatePickerContent {
+    /// Spread templates (the intro and the closing).
+    case templates([SpreadTemplate])
+    /// Page layouts for the current page `side` of a journal, gallery or blank spread.
+    case pageLayouts([PageLayout], side: PageSide)
+    /// A spread of pages without a current page: "Klikni na stránku".
+    case needsPage
+}
+
+/// "Doporučená rozložení" ("Doporučené rozložení…"). For the intro and the closing: the templates
+/// `EditorModel.availableTemplates(for:)` offers, each with a small rendered preview (blank grey
+/// frames, the placeholders as text, conformed to the book's `marginMM`) and its frame count. For
+/// a journal, gallery or blank spread: the page layouts for the current page
+/// (`EditorModel.availablePageLayouts`), grouped by their number of photos ("1 fotka", "2 fotky",
+/// …, "Bez fotek" last), each with a `PageLayoutPreview` and its name; without a current page
+/// only "Klikni na stránku". Choosing one runs `attempt(id, confirmTextLoss, confirmLayoutReplace)`
+/// (the editor's `changeTemplate` or `changePageLayout`).
 /// The confirmations are shown INSIDE this sheet, so they can never be dropped by the sheet's
 /// dismissal: a hand-made layout asks "Ruční rozložení se nahradí doporučeným." (with the texts
 /// that would be lost, `droppedTexts`, in the same question), otherwise texts that would be lost
@@ -13,14 +27,15 @@ import SwiftUI
 /// applied or the user cancels. A refused change says so. On a hand-made layout the current
 /// template can be chosen too: it restores the recommended layout.
 struct TemplatePicker: View {
-    let templates: [SpreadTemplate]
-    let currentTemplateID: String?
-    /// The spread's layout was changed by hand (`Spread.customLayout`).
+    let content: TemplatePickerContent
+    /// The spread's template or the current page's layout.
+    let currentID: String?
+    /// The spread's layout was changed by hand (`Spread.customLayout`; false for a page).
     let customLayout: Bool
     let geometry: PageGeometry
     let marginMM: Double
-    let droppedTexts: (_ templateID: String) -> [TextBox]
-    let attempt: (_ templateID: String, _ confirmTextLoss: Bool, _ confirmLayoutReplace: Bool) -> TemplateChangeOutcome
+    let droppedTexts: (_ id: String) -> [TextBox]
+    let attempt: (_ id: String, _ confirmTextLoss: Bool, _ confirmLayoutReplace: Bool) -> TemplateChangeOutcome
     let onDone: () -> Void
 
     private struct PendingLoss: Identifiable {
@@ -41,23 +56,21 @@ struct TemplatePicker: View {
     @State private var showsUnavailable = false
 
     private let columns = [GridItem(.adaptive(minimum: 190), spacing: 14)]
+    private let pageColumns = [GridItem(.adaptive(minimum: 140), spacing: 14)]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Doporučená rozložení").font(.title3.bold())
+            Text(EditorText.recommendedLayouts).font(.title3.bold())
             Text("Fotky se rozmístí znovu, texty zůstanou, kde to jde.")
                 .foregroundStyle(.secondary)
-            ScrollView {
-                LazyVGrid(columns: columns, spacing: 14) {
-                    ForEach(templates, id: \.id) { template in
-                        Button { choose(template.id) } label: { cell(template) }
-                            .buttonStyle(.plain)
-                            .disabled(template.id == currentTemplateID && !customLayout)
-                            .accessibilityLabel(EditorText.templateLabel(template)
-                                                + (template.id == currentTemplateID ? ", současné rozložení" : ""))
-                    }
-                }
-                .padding(2)
+            switch content {
+            case .templates(let templates):
+                ScrollView { templateGrid(templates).padding(2) }
+            case let .pageLayouts(layouts, side):
+                ScrollView { pageGrid(layouts, side: side).padding(2) }
+            case .needsPage:
+                ContentUnavailableView(EditorText.clickPage, systemImage: "cursorarrow.click")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             HStack {
                 Spacer()
@@ -77,10 +90,10 @@ struct TemplatePicker: View {
         } message: { pending in
             Text(EditorText.textLoss(pending.texts))
         }
-        .alert("Ruční rozložení se nahradí doporučeným.",
+        .alert(EditorText.replaceLayoutQuestion,
                isPresented: Binding(get: { pendingLayout != nil }, set: { if !$0 { pendingLayout = nil } }),
                presenting: pendingLayout) { pending in
-            Button("Nahradit", role: .destructive) {
+            Button(EditorText.replaceLayout, role: .destructive) {
                 choose(pending.templateID, confirmTextLoss: !pending.texts.isEmpty, confirmLayoutReplace: true)
             }
             Button("Zrušit", role: .cancel) {}
@@ -111,8 +124,22 @@ struct TemplatePicker: View {
         }
     }
 
+    // MARK: Spread templates
+
+    private func templateGrid(_ templates: [SpreadTemplate]) -> some View {
+        LazyVGrid(columns: columns, spacing: 14) {
+            ForEach(templates, id: \.id) { template in
+                Button { choose(template.id) } label: { cell(template) }
+                    .buttonStyle(.plain)
+                    .disabled(template.id == currentID && !customLayout)
+                    .accessibilityLabel(EditorText.templateLabel(template)
+                                        + (template.id == currentID ? ", současné rozložení" : ""))
+            }
+        }
+    }
+
     private func cell(_ template: SpreadTemplate) -> some View {
-        let isCurrent = template.id == currentTemplateID
+        let isCurrent = template.id == currentID
         return VStack(spacing: 6) {
             Group {
                 if let image = TemplatePreview.image(template, geometry: geometry, marginMM: marginMM, width: 360) {
@@ -126,6 +153,53 @@ struct TemplatePicker: View {
                 .strokeBorder(isCurrent ? Color.accentColor : Color.secondary.opacity(0.4), lineWidth: isCurrent ? 3 : 1))
             HStack(spacing: 4) {
                 Text(EditorText.templateLabel(template)).font(.callout)
+                if isCurrent { Text("· současná").font(.callout).foregroundStyle(.secondary) }
+            }
+        }
+        .padding(6)
+        .contentShape(Rectangle())
+    }
+
+    // MARK: Page layouts
+
+    /// The layouts grouped by photo count, ascending, the layouts without photos last; catalog
+    /// order inside a group.
+    nonisolated static func groups(_ layouts: [PageLayout]) -> [(count: Int, layouts: [PageLayout])] {
+        let counts = Set(layouts.map(\.photoCount)).sorted { a, b in a == 0 ? false : b == 0 ? true : a < b }
+        return counts.map { n in (n, layouts.filter { $0.photoCount == n }) }
+    }
+
+    private func pageGrid(_ layouts: [PageLayout], side: PageSide) -> some View {
+        LazyVGrid(columns: pageColumns, alignment: .leading, spacing: 14) {
+            ForEach(Self.groups(layouts), id: \.count) { group in
+                Section {
+                    ForEach(group.layouts, id: \.id) { layout in
+                        Button { choose(layout.id) } label: { pageCell(layout, side: side) }
+                            .buttonStyle(.plain)
+                            .disabled(layout.id == currentID)
+                            .accessibilityLabel(EditorText.pageLayoutLabel(layout)
+                                                + (layout.id == currentID ? ", současné rozložení" : ""))
+                    }
+                } header: {
+                    Text(EditorText.pageLayoutGroup(group.count))
+                        .font(.headline)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.top, 4)
+                }
+            }
+        }
+    }
+
+    private func pageCell(_ layout: PageLayout, side: PageSide) -> some View {
+        let isCurrent = layout.id == currentID
+        return VStack(spacing: 6) {
+            PageLayoutPreview(layout: layout, side: side)
+                .overlay(Rectangle()
+                    .strokeBorder(isCurrent ? Color.accentColor : Color.secondary.opacity(0.4),
+                                  lineWidth: isCurrent ? 3 : 1))
+                .frame(height: 90)
+            HStack(spacing: 4) {
+                Text(layout.name).font(.callout).lineLimit(2).multilineTextAlignment(.center)
                 if isCurrent { Text("· současná").font(.callout).foregroundStyle(.secondary) }
             }
         }

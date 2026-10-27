@@ -245,7 +245,7 @@ struct SpreadStripView: View {
 
     @ViewBuilder private func contextMenu(_ spread: Spread) -> some View {
         Button(EditorText.changeTemplate) { onChangeTemplate(spread.id) }
-            .disabled(model.availableTemplates(for: spread.id).count < 2)
+            .disabled(!model.offersLayoutChoice(for: spread.id))
         Menu(EditorText.insertAfter) {
             ForEach(EditorText.insertableKinds, id: \.self) { kind in
                 Button(EditorText.insertKindName(kind)) {
