@@ -28,14 +28,20 @@ enum CanvasContent: Equatable {
 /// frames whose image is not loaded yet are grey, and the view redraws when images arrive.
 ///
 /// Interaction (all through `EditorModel`, every gesture one undo step):
-/// click = select a frame (ring), click on the background = deselect; drag in a frame = move the
-/// crop (`beginTransform`/`nudge`/`endTransform` on mouse up); scroll wheel or pinch over a photo
-/// = zoom (one session per gesture); ⌥-drag = carry the photo to another frame (swap); drop a
-/// photo from the tray = `dropPhoto`; double-click a photo = "Obnovit výřez"; double-click a text
-/// = overlay editor (`beginTextEditing`/`updateText`/`endTextEditing`); Delete = "Odebrat
-/// fotku"; arrows = move the crop (one step per key press-and-hold), without a selection they
-/// switch spreads; Escape = deselect. Sessions end on mouse up, selection change, focus loss,
-/// window resign key, window close and app termination.
+/// click = select a frame or text (`selectedItem`; 8 handles), click on the background =
+/// deselect; drag inside an item = move it, drag a handle = resize it (`LayoutDrag`, snapped by
+/// `SnapEngine` unless ⌘ is held, ⇧ on a corner keeps the ratio; `beginLayoutChange`/
+/// `updateLayout`/`endLayoutChange` on mouse up; guides drawn while snapped); double-click a photo
+/// = crop mode (`cropFrameID`: dashed accent border, a drag moves the crop with
+/// `beginTransform`/`nudge`/`endTransform`, Escape, Return or a click elsewhere leave it); scroll
+/// wheel or pinch over a photo = zoom (one session per gesture, also outside crop mode); ⌥-drag =
+/// carry the photo to another frame (swap); drop a photo from the tray = `dropPhoto`;
+/// double-click a text = overlay editor (`beginTextEditing`/`updateText`/`endTextEditing`);
+/// Delete = "Odebrat fotku" on a photo, "Smazat" on an empty frame or a text; arrows = move the
+/// selected item by 1 mm (⇧ 5 mm), in crop mode the crop, one step per key press-and-hold;
+/// without a selection they switch spreads; Escape = deselect; right click = context menu.
+/// `showGrid` draws a 5 mm grid on each page. The cover is read-only. Sessions end on mouse up,
+/// selection change, focus loss, window resign key, window close and app termination.
 struct SpreadCanvasView: NSViewRepresentable {
     let content: CanvasContent?
     let album: Album
@@ -43,7 +49,9 @@ struct SpreadCanvasView: NSViewRepresentable {
     let geometry: PageGeometry
     let package: ProjectPackage
     let issues: [PreflightIssue]
-    let selectedFrameID: String?
+    let selectedItem: LayoutItem?
+    let snapSettings: SnapSettings
+    let showGrid: Bool
     /// Read so SwiftUI updates the view when a text session starts or ends (e.g. by Undo).
     let isEditingText: Bool
     let model: EditorModel
@@ -57,7 +65,7 @@ struct SpreadCanvasView: NSViewRepresentable {
     func updateNSView(_ view: SpreadCanvasNSView, context: Context) {
         view.model = model
         view.update(content: content, album: album, revision: revision, geometry: geometry, package: package,
-                    issues: issues, selectedFrameID: selectedFrameID)
+                    issues: issues, selectedItem: selectedItem, snapSettings: snapSettings, showGrid: showGrid)
     }
 }
 
@@ -156,7 +164,9 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
     private var geometry: PageGeometry?
     private var package: ProjectPackage?
     private var issues: [PreflightIssue] = []
-    private var selectedFrameID: String?
+    private var selectedItem: LayoutItem?
+    private var snapSettings = SnapSettings(grid: false, objects: true)
+    private var showGrid = false
     private let imageCache = CanvasImageCache()
 
     /// Badges in view coordinates (rebuilt on update and layout), for drawing and tooltips.
@@ -174,6 +184,22 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
     }
 
     private var drag: DragState?
+
+    /// A mouse drag that moves (`edges == .all`) or resizes a frame or text.
+    private struct LayoutDragState {
+        var item: LayoutItem
+        var edges: RectEdges
+        var start: CGPoint
+        var startRect: Rect
+        var began = false
+    }
+
+    private var layoutDrag: LayoutDragState?
+    /// The guides of the last snap during a layout drag (cleared on mouse up).
+    private var snapGuides: [SnapGuide] = []
+    /// The photo frame in crop mode (double-click): a drag moves its crop, not the frame.
+    private var cropFrameID: String?
+    private var layoutArrowSession = false
     private var scrollFrame: String?
     private var scrollIdleEnd: Task<Void, Never>?
     private var magnifyFrame: String?
@@ -186,6 +212,10 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
     private var observers: [NSObjectProtocol] = []
 
     static let padding: CGFloat = 24
+    /// Side of a resize handle in points.
+    static let handleSize: CGFloat = 7
+    /// Snapping reaches this far, in points (converted to mm with the layout's scale).
+    static let snapThreshold: CGFloat = 8
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -208,11 +238,12 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
     // MARK: Update from SwiftUI
 
     func update(content: CanvasContent?, album: Album, revision: Int, geometry: PageGeometry, package: ProjectPackage,
-                issues: [PreflightIssue], selectedFrameID: String?) {
+                issues: [PreflightIssue], selectedItem: LayoutItem?, snapSettings: SnapSettings, showGrid: Bool) {
         let pageChanged = content?.page.id != self.content?.page.id || content?.isCover != self.content?.isCover
         if pageChanged {
             endGestures()
             finishTextEditing()
+            cropFrameID = nil
         }
         self.content = content
         self.album = album
@@ -220,7 +251,13 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
         self.geometry = geometry
         self.package = package
         self.issues = issues
-        self.selectedFrameID = selectedFrameID
+        self.selectedItem = selectedItem
+        self.snapSettings = snapSettings
+        self.showGrid = showGrid
+        // Crop mode ends when its frame is no longer the selection or has no photo (undo, Delete).
+        if let crop = cropFrameID, !isEditable || selectedItem != .frame(crop) || frame(crop)?.photoID == nil {
+            cropFrameID = nil
+        }
         syncOverlay()
         rebuildBadges()
         needsDisplay = true
@@ -273,12 +310,8 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
 
         drawBleedTint(layout, geometry: geometry)
         drawTextBoxes(page, layout)
-        if let id = selectedFrameID, let frame = page.frames.first(where: { $0.id == id }) {
-            let path = NSBezierPath(rect: layout.viewRect(frame.rect).insetBy(dx: -1, dy: -1))
-            path.lineWidth = 3
-            NSColor.controlAccentColor.setStroke()
-            path.stroke()
-        }
+        if showGrid, isEditable { drawGrid(layout, geometry: geometry) }
+        drawSelection(page, layout)
         if let id = dropTargetFrame, let frame = page.frames.first(where: { $0.id == id }) {
             let r = layout.viewRect(geometry.bleedExtended(frame.rect, area: area))
             NSColor.controlAccentColor.withAlphaComponent(0.25).setFill()
@@ -288,7 +321,89 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
             NSColor.controlAccentColor.setStroke()
             path.stroke()
         }
+        drawGuides(layout, geometry: geometry)
         for badge in badges { drawBadge(badge.rect, severity: badge.severity) }
+    }
+
+    /// Lines every `snapSettings.gridMM` (5 mm) inside the trim of each page, the same lines the
+    /// grid snaps to. The pages are paper, so the colour resolves in the light appearance.
+    private func drawGrid(_ layout: CanvasLayout, geometry: PageGeometry) {
+        let step = snapSettings.gridMM
+        guard step > 0, step * layout.scale >= 3 else { return }
+        let path = NSBezierPath()
+        for side in [PageSide.left, .right] {
+            let r = geometry.pageRect(side: side)
+            var k = 1
+            while r.minX + Double(k) * step < r.maxX - 1e-6 {
+                let x = r.minX + Double(k) * step
+                path.move(to: layout.viewPoint(Point(x: x, y: r.minY)))
+                path.line(to: layout.viewPoint(Point(x: x, y: r.maxY)))
+                k += 1
+            }
+            k = 1
+            while r.minY + Double(k) * step < r.maxY - 1e-6 {
+                let y = r.minY + Double(k) * step
+                path.move(to: layout.viewPoint(Point(x: r.minX, y: y)))
+                path.line(to: layout.viewPoint(Point(x: r.maxX, y: y)))
+                k += 1
+            }
+        }
+        path.lineWidth = 0.5
+        (NSAppearance(named: .aqua) ?? effectiveAppearance).performAsCurrentDrawingAppearance {
+            NSColor.separatorColor.withAlphaComponent(0.4).setStroke()
+            path.stroke()
+        }
+    }
+
+    /// The selected frame (ring) or text (outline) with its 8 handles; in crop mode the frame gets
+    /// a dashed accent border instead, without handles.
+    private func drawSelection(_ page: Spread, _ layout: CanvasLayout) {
+        guard isEditable else { return }
+        if let id = cropFrameID, let frame = page.frames.first(where: { $0.id == id }) {
+            let path = NSBezierPath(rect: layout.viewRect(printedRect(frame)).insetBy(dx: -1, dy: -1))
+            path.lineWidth = 2
+            path.setLineDash([6, 4], count: 2, phase: 0)
+            NSColor.controlAccentColor.setStroke()
+            path.stroke()
+            return
+        }
+        guard let item = selectedItem, let rect = itemRect(item) else { return }
+        if case .text(let id) = item, id == overlayTextID { return }
+        let r = layout.viewRect(rect)
+        let path = NSBezierPath(rect: r.insetBy(dx: -1, dy: -1))
+        if case .frame = item { path.lineWidth = 3 } else { path.lineWidth = 1.5 }
+        NSColor.controlAccentColor.setStroke()
+        path.stroke()
+        let s = Self.handleSize
+        for p in [CGPoint(x: r.minX, y: r.minY), CGPoint(x: r.midX, y: r.minY), CGPoint(x: r.maxX, y: r.minY),
+                  CGPoint(x: r.minX, y: r.midY), CGPoint(x: r.maxX, y: r.midY),
+                  CGPoint(x: r.minX, y: r.maxY), CGPoint(x: r.midX, y: r.maxY), CGPoint(x: r.maxX, y: r.maxY)] {
+            let handle = CGRect(x: p.x - s / 2, y: p.y - s / 2, width: s, height: s)
+            NSColor.white.setFill()
+            handle.insetBy(dx: -1, dy: -1).fill()
+            NSColor.controlAccentColor.setFill()
+            handle.fill()
+        }
+    }
+
+    /// The snap guides of the running drag, 1 point, across the whole spread.
+    private func drawGuides(_ layout: CanvasLayout, geometry: PageGeometry) {
+        guard !snapGuides.isEmpty else { return }
+        let size = geometry.spreadSize
+        let path = NSBezierPath()
+        for guide in snapGuides {
+            switch guide.axis {
+            case .x:
+                path.move(to: layout.viewPoint(Point(x: guide.position, y: 0)))
+                path.line(to: layout.viewPoint(Point(x: guide.position, y: size.height)))
+            case .y:
+                path.move(to: layout.viewPoint(Point(x: 0, y: guide.position)))
+                path.line(to: layout.viewPoint(Point(x: size.width, y: guide.position)))
+            }
+        }
+        path.lineWidth = 1
+        NSColor.controlAccentColor.setStroke()
+        path.stroke()
     }
 
     /// The bleed band (visible area minus trim) lightly tinted, so the cut is obvious.
@@ -396,46 +511,151 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
         return frame
     }
 
-    private func select(_ frameID: String?) {
-        guard let model else { return }
-        if model.selectedFrameID != frameID {
-            model.commitSessions()
-            model.selectedFrameID = frameID
+    /// The rectangle (spread mm, as stored, without bleed) of a frame or text of the page shown.
+    private func itemRect(_ item: LayoutItem) -> Rect? {
+        switch item {
+        case .frame(let id): frame(id)?.rect
+        case .text(let id): page?.texts.first { $0.id == id }?.rect
         }
+    }
+
+    /// Selects a frame or text (nil: nothing), committing running sessions when it changes; crop
+    /// mode ends unless its frame stays selected.
+    private func select(_ item: LayoutItem?) {
+        guard let model else { return }
+        if model.selectedItem != item {
+            model.commitSessions()
+            model.selectedItem = item
+        }
+        selectedItem = model.selectedItem
+        if let crop = cropFrameID, item != .frame(crop) { endCropMode() }
+        needsDisplay = true
+    }
+
+    // MARK: Crop mode
+
+    /// Double-click on a photo (or "Upravit výřez"): a drag in the frame now moves the crop.
+    private func beginCropMode(_ frameID: String) {
+        guard isEditable, frame(frameID)?.photoID != nil else { return }
+        endGestures()
+        select(.frame(frameID))
+        cropFrameID = frameID
+        needsDisplay = true
+    }
+
+    private func endCropMode() {
+        guard cropFrameID != nil else { return }
+        if drag?.began == true { model?.endTransform() }
+        drag = nil
+        if arrowSession { model?.endTransform() }
+        arrowSession = false
+        cropFrameID = nil
+        needsDisplay = true
     }
 
     // MARK: Mouse
 
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
-        guard isEditable, let model, let p = mmPoint(event) else { return }
+        guard isEditable, model != nil, let p = mmPoint(event) else { return }
         let target = hit(p)
         if event.clickCount == 2 {
             switch target {
             case .text(let id): beginTextOverlay(id)
-            case .frame(let id): model.resetCrop(frame: id, in: page?.id)
+            case .frame(let id): beginCropMode(id)
             case nil: break
             }
             return
         }
+        if let crop = cropFrameID {
+            if target == .frame(crop) {
+                beginCropDrag(crop, event: event)
+                return
+            }
+            endCropMode()  // a click elsewhere leaves crop mode and acts as usual
+        }
+        if let item = selectedItem, let rect = itemRect(item), let edges = handleEdges(at: p, rect: rect) {
+            beginLayoutDrag(item, edges: edges, rect: rect, event: event)
+            return
+        }
         switch target {
         case .frame(let id):
-            select(id)
-            guard let frame = frame(id), let photoID = frame.photoID, let size = photoSize(frame) else { return }
-            if event.modifierFlags.contains(.option) {
+            select(.frame(id))
+            guard let frame = frame(id) else { return }
+            if event.modifierFlags.contains(.option), let photoID = frame.photoID {
                 beginSwapDrag(photoID, frame: frame, event: event)
                 return
             }
-            drag = DragState(frameID: id, start: convert(event.locationInWindow, from: nil), startOffset: frame.offset,
-                             zoom: frame.zoom, frameRect: printedRect(frame), photoSize: size)
-        case .text:
-            select(nil)
+            beginLayoutDrag(.frame(id), edges: .all, rect: frame.rect, event: event)
+        case .text(let id):
+            select(.text(id))
+            if let rect = itemRect(.text(id)) { beginLayoutDrag(.text(id), edges: .all, rect: rect, event: event) }
         case nil:
             select(nil)
         }
     }
 
+    /// The handle of the selected item's `rect` under `p`: within half a handle plus 2 points.
+    private func handleEdges(at p: Point, rect: Rect) -> RectEdges? {
+        guard let layout = layoutForBounds else { return nil }
+        return LayoutHandles.hit(p, rect: rect, tolerance: Double((Self.handleSize / 2 + 2) / layout.scale))
+    }
+
+    private func beginLayoutDrag(_ item: LayoutItem, edges: RectEdges, rect: Rect, event: NSEvent) {
+        layoutDrag = LayoutDragState(item: item, edges: edges, start: convert(event.locationInWindow, from: nil),
+                                     startRect: rect)
+    }
+
+    private func beginCropDrag(_ frameID: String, event: NSEvent) {
+        guard let frame = frame(frameID), let photoID = frame.photoID, let size = photoSize(frame) else { return }
+        if event.modifierFlags.contains(.option) {
+            beginSwapDrag(photoID, frame: frame, event: event)
+            return
+        }
+        drag = DragState(frameID: frameID, start: convert(event.locationInWindow, from: nil), startOffset: frame.offset,
+                         zoom: frame.zoom, frameRect: printedRect(frame), photoSize: size)
+    }
+
+    /// `rect` snapped by `SnapEngine` (targets: the page edges, margins and centres, the other
+    /// frames and texts of the spread, the grid; per `snapSettings`), threshold 8 points. Sets the
+    /// guides to draw. No snapping while ⌘ is held, nor for a ⇧ corner resize (the snapped edges
+    /// would break the kept ratio).
+    private func snapped(_ rect: Rect, edges: RectEdges, item: LayoutItem, keepAspect: Bool,
+                         flags: NSEvent.ModifierFlags, scale: CGFloat) -> Rect {
+        snapGuides = []
+        guard !flags.contains(.command), !keepAspect, snapSettings.grid || snapSettings.objects,
+              let geometry, let model, let page, scale > 0 else { return rect }
+        let others = page.frames.filter { item != .frame($0.id) }.map(\.rect)
+            + page.texts.filter { item != .text($0.id) }.map(\.rect)
+        let targets = SnapEngine.targets(geometry: geometry, marginMM: model.marginMM, area: .spread, others: others,
+                                         settings: snapSettings)
+        let result = SnapEngine.snap(rect, moving: edges, to: targets, threshold: Double(Self.snapThreshold / scale))
+        snapGuides = result.guides
+        return result.rect
+    }
+
     override func mouseDragged(with event: NSEvent) {
+        if var state = layoutDrag, let model, let layout = layoutForBounds {
+            let current = convert(event.locationInWindow, from: nil)
+            let delta = CGSize(width: current.x - state.start.x, height: current.y - state.start.y)
+            if !state.began {
+                guard hypot(delta.width, delta.height) >= 3 else { return }
+                state.began = true
+                layoutDrag = state
+                model.beginLayoutChange(state.item, in: page?.id)
+            }
+            let isCorner = state.edges != .all
+                && !state.edges.isDisjoint(with: [.minX, .maxX]) && !state.edges.isDisjoint(with: [.minY, .maxY])
+            let keepAspect = isCorner && event.modifierFlags.contains(.shift)
+            let raw = LayoutDrag.rect(from: state.startRect, edges: state.edges, delta: layout.mmDelta(delta),
+                                      keepAspect: keepAspect, minSize: MarginRule.minItemMM)
+            let rect = snapped(raw, edges: state.edges, item: state.item, keepAspect: keepAspect,
+                               flags: event.modifierFlags, scale: layout.scale)
+            // After an outside commit mid-gesture (e.g. ⌘Z) `updateLayout` starts a new session itself.
+            model.updateLayout(state.item, rect: rect, mode: state.edges == .all ? .move : .resize)
+            needsDisplay = true
+            return
+        }
         guard var state = drag, let model, let layout = layoutForBounds else { return }
         let current = convert(event.locationInWindow, from: nil)
         let delta = CGSize(width: current.x - state.start.x, height: current.y - state.start.y)
@@ -453,6 +673,12 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
     }
 
     override func mouseUp(with event: NSEvent) {
+        if layoutDrag?.began == true { model?.endLayoutChange() }
+        layoutDrag = nil
+        if !snapGuides.isEmpty {
+            snapGuides = []
+            needsDisplay = true
+        }
         if drag?.began == true { model?.endTransform() }
         drag = nil
     }
@@ -472,7 +698,7 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
         let step = ScrollZoom.step(phase: event.phase, momentumPhase: event.momentumPhase,
                                    inSession: scrollFrame != nil && model.isTransforming)
         if step.begin {
-            select(frameID)
+            select(.frame(frameID))
             model.beginTransform(frame: frameID, in: page?.id)
             scrollFrame = frameID
         }
@@ -513,7 +739,7 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
         let ending = event.phase.contains(.ended) || event.phase.contains(.cancelled)
         if event.phase.contains(.began) || (magnifyFrame == nil && !ending) {
             guard let p = mmPoint(event), let frame = photoFrame(at: p) else { return }
-            select(frame.id)
+            select(.frame(frame.id))
             model.beginTransform(frame: frame.id, in: page?.id)
             magnifyFrame = frame.id
         }
@@ -544,27 +770,46 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
 
     override func keyDown(with event: NSEvent) {
         guard let model else { return super.keyDown(with: event) }
-        let selected = isEditable ? model.selectedFrameID : nil
+        let selected = isEditable ? model.selectedItem : nil
         switch event.keyCode {
         case 51, 117:  // delete, forward delete
-            if let selected { model.clearFrame(selected, in: page?.id); return }
-        case 53:  // escape
+            if let selected { deleteOrClear(selected); return }
+        case 53:  // escape: leaves crop mode, else deselects
             endGestures()
-            select(nil)
+            if cropFrameID != nil { endCropMode() } else { select(nil) }
             return
+        case 36, 76:  // return, enter: leave crop mode
+            if cropFrameID != nil {
+                endGestures()
+                endCropMode()
+                return
+            }
         default:
             break
         }
         if let (dx, dy) = Self.arrow(event.keyCode) {
-            if let selected, let frame = frame(selected), let size = photoSize(frame) {
+            let stepMM = event.modifierFlags.contains(.shift) ? 5.0 : 1.0
+            if isEditable, let crop = cropFrameID, let frame = frame(crop), let size = photoSize(frame) {
                 if !model.isTransforming || !arrowSession {
-                    model.beginTransform(frame: selected, in: page?.id)
+                    model.beginTransform(frame: crop, in: page?.id)
                     arrowSession = true
                 }
-                let stepMM = event.modifierFlags.contains(.shift) ? 5.0 : 1.0
                 let offset = CropMath.arrowOffset(frame.offset, dx: dx, dy: dy, stepMM: stepMM,
                                                   frame: printedRect(frame), photo: size, zoom: frame.zoom)
-                model.nudge(frame: selected, offset: offset, zoom: frame.zoom, in: page?.id)
+                model.nudge(frame: crop, offset: offset, zoom: frame.zoom, in: page?.id)
+                needsDisplay = true
+                return
+            }
+            if let selected, let rect = itemRect(selected) {
+                // One layout session per key press-and-hold (repeats included), stored on keyUp. A
+                // run that was committed from outside (⌘Z) restarts inside `updateLayout`.
+                if !layoutArrowSession {
+                    model.beginLayoutChange(selected, in: page?.id)
+                    layoutArrowSession = true
+                }
+                let moved = Rect(x: rect.minX + Double(dx) * stepMM, y: rect.minY + Double(dy) * stepMM,
+                                 width: rect.size.width, height: rect.size.height)
+                model.updateLayout(selected, rect: moved, mode: .move)
                 needsDisplay = true
                 return
             }
@@ -582,7 +827,72 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
             model?.endTransform()
             return
         }
+        if layoutArrowSession, Self.arrow(event.keyCode) != nil {
+            layoutArrowSession = false
+            model?.endLayoutChange()
+            return
+        }
         super.keyUp(with: event)
+    }
+
+    /// Delete: a frame with a photo is emptied ("Odebrat fotku"), an empty frame or a text is
+    /// removed ("Smazat").
+    private func deleteOrClear(_ item: LayoutItem) {
+        guard let model else { return }
+        endGestures()
+        if case .frame(let id) = item, frame(id)?.photoID != nil {
+            endCropMode()
+            model.clearFrame(id, in: page?.id)
+        } else {
+            model.deleteItem(item, in: page?.id)
+        }
+        needsDisplay = true
+    }
+
+    // MARK: Context menu
+
+    /// "Přidat rámeček", "Přidat text" (on the page under the pointer) and, for the item under the
+    /// pointer (which becomes the selection), "Upravit výřez", "Obnovit výřez" (a moved or zoomed
+    /// crop), "Odebrat fotku" and "Smazat". None on the cover.
+    override func menu(for event: NSEvent) -> NSMenu? {
+        guard isEditable, let model, let page, let geometry, let p = mmPoint(event) else { return nil }
+        window?.makeFirstResponder(self)
+        endGestures()
+        let spreadID = page.id
+        let side: PageSide = p.x < geometry.format.pageWidthMM ? .left : .right
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        menu.addItem(ActionMenuItem(EditorText.addFrame) { model.addFrame(on: side, in: spreadID) })
+        menu.addItem(ActionMenuItem(EditorText.addText) { model.addText(on: side, in: spreadID) })
+        switch hit(p) {
+        case .frame(let id):
+            select(.frame(id))
+            guard let frame = frame(id) else { break }
+            menu.addItem(.separator())
+            if frame.photoID != nil {
+                if cropFrameID != id {
+                    menu.addItem(ActionMenuItem(EditorText.editCrop) { [weak self] in self?.beginCropMode(id) })
+                }
+                if frame.offset != Point(x: 0, y: 0) || frame.zoom != 1 {
+                    menu.addItem(ActionMenuItem(EditorText.resetCrop) { model.resetCrop(frame: id, in: spreadID) })
+                }
+                menu.addItem(ActionMenuItem(EditorText.removePhoto) { [weak self] in
+                    self?.endCropMode()
+                    model.clearFrame(id, in: spreadID)
+                })
+            }
+            menu.addItem(ActionMenuItem(EditorText.deleteItem) { [weak self] in
+                self?.endCropMode()
+                model.deleteItem(.frame(id), in: spreadID)
+            })
+        case .text(let id):
+            select(.text(id))
+            menu.addItem(.separator())
+            menu.addItem(ActionMenuItem(EditorText.deleteItem) { model.deleteItem(.text(id), in: spreadID) })
+        case nil:
+            break
+        }
+        return menu
     }
 
     override func resignFirstResponder() -> Bool {
@@ -590,8 +900,16 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
         return super.resignFirstResponder()
     }
 
-    /// Ends crop gestures (drag, scroll, pinch, arrows): each stores its one step.
+    /// Ends crop and layout gestures (drag, scroll, pinch, arrows): each stores its one step.
     private func endGestures() {
+        if layoutDrag?.began == true { model?.endLayoutChange() }
+        layoutDrag = nil
+        if layoutArrowSession { model?.endLayoutChange() }
+        layoutArrowSession = false
+        if !snapGuides.isEmpty {
+            snapGuides = []
+            needsDisplay = true
+        }
         if drag?.began == true { model?.endTransform() }
         drag = nil
         endScrollSession()
@@ -816,7 +1134,7 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
         guard let model, let frameID = dropFrame(sender),
               let photoID = PhotoPasteboard.photoID(from: sender.draggingPasteboard) else { return false }
         endGestures()
-        select(frameID)
+        select(.frame(frameID))
         let spreadID = page?.id
         switch model.dropPhoto(photoID, onFrame: frameID, in: spreadID) {
         case .placed:
@@ -858,6 +1176,22 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
         dropTargetFrame = nil
         needsDisplay = true
     }
+}
+
+/// A context-menu item that runs a closure.
+private final class ActionMenuItem: NSMenuItem {
+    private let handler: () -> Void
+
+    init(_ title: String, handler: @escaping () -> Void) {
+        self.handler = handler
+        super.init(title: title, action: #selector(run), keyEquivalent: "")
+        target = self
+    }
+
+    @available(*, unavailable)
+    required init(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    @objc private func run() { handler() }
 }
 
 /// The overlay text editor: Escape ends editing (the model has no cancel: the session is

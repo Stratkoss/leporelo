@@ -228,6 +228,84 @@ struct CropMathTests {
     }
 }
 
+// MARK: - Layout handles and drags
+
+struct LayoutHandleTests {
+    private let rect = Rect(x: 10, y: 20, width: 100, height: 60)
+
+    @Test func handleHitCornersBeforeSides() {
+        // Exactly on corners: two edges each.
+        #expect(LayoutHandles.hit(Point(x: 10, y: 20), rect: rect, tolerance: 3) == [.minX, .minY])
+        #expect(LayoutHandles.hit(Point(x: 111, y: 19), rect: rect, tolerance: 3) == [.maxX, .minY])
+        #expect(LayoutHandles.hit(Point(x: 12, y: 79), rect: rect, tolerance: 3) == [.minX, .maxY])
+        #expect(LayoutHandles.hit(Point(x: 110, y: 80), rect: rect, tolerance: 3) == [.maxX, .maxY])
+        // Side midpoints: one edge.
+        #expect(LayoutHandles.hit(Point(x: 60, y: 21), rect: rect, tolerance: 3) == .minY)
+        #expect(LayoutHandles.hit(Point(x: 60, y: 80), rect: rect, tolerance: 3) == .maxY)
+        #expect(LayoutHandles.hit(Point(x: 9, y: 50), rect: rect, tolerance: 3) == .minX)
+        #expect(LayoutHandles.hit(Point(x: 110, y: 50), rect: rect, tolerance: 3) == .maxX)
+        // A tiny rect: the corner and side handles overlap, the corner wins.
+        let tiny = Rect(x: 0, y: 0, width: 4, height: 4)
+        #expect(LayoutHandles.hit(Point(x: 1, y: 0), rect: tiny, tolerance: 3) == [.minX, .minY])
+        #expect(LayoutHandles.hit(Point(x: 3, y: 4), rect: tiny, tolerance: 3) == [.maxX, .maxY])
+    }
+
+    @Test func handleMissInsideReturnsNil() {
+        #expect(LayoutHandles.hit(Point(x: 60, y: 50), rect: rect, tolerance: 3) == nil)
+        // On an edge but away from its handles: no handle (the drag moves the item).
+        #expect(LayoutHandles.hit(Point(x: 30, y: 20), rect: rect, tolerance: 3) == nil)
+        #expect(LayoutHandles.hit(Point(x: 110, y: 30), rect: rect, tolerance: 3) == nil)
+        // Far outside.
+        #expect(LayoutHandles.hit(Point(x: 200, y: 200), rect: rect, tolerance: 3) == nil)
+        #expect(LayoutHandles.hit(Point(x: 10, y: 20), rect: rect, tolerance: .nan) == nil)
+    }
+
+    @Test func moveTranslatesWholeRect() {
+        let moved = LayoutDrag.rect(from: rect, edges: .all, delta: Point(x: 5, y: -7), keepAspect: true, minSize: 10)
+        #expect(moved == Rect(x: 15, y: 13, width: 100, height: 60))
+    }
+
+    @Test func resizeMovesOnlyGivenEdges() {
+        let right = LayoutDrag.rect(from: rect, edges: .maxX, delta: Point(x: 15, y: 30), keepAspect: false, minSize: 10)
+        #expect(right == Rect(x: 10, y: 20, width: 115, height: 60))
+        let left = LayoutDrag.rect(from: rect, edges: .minX, delta: Point(x: 15, y: 30), keepAspect: false, minSize: 10)
+        #expect(left == Rect(x: 25, y: 20, width: 85, height: 60))
+        let topLeft = LayoutDrag.rect(from: rect, edges: [.minX, .minY], delta: Point(x: -5, y: 10),
+                                      keepAspect: false, minSize: 10)
+        #expect(topLeft == Rect(x: 5, y: 30, width: 105, height: 50))
+        // keepAspect has no effect on a side handle.
+        let bottom = LayoutDrag.rect(from: rect, edges: .maxY, delta: Point(x: 3, y: 20), keepAspect: true, minSize: 10)
+        #expect(bottom == Rect(x: 10, y: 20, width: 100, height: 80))
+    }
+
+    @Test func cornerResizeKeepsAspectWithShift() {
+        // Bottom-right corner, the x move is the larger relative change: width drives.
+        let grown = LayoutDrag.rect(from: rect, edges: [.maxX, .maxY], delta: Point(x: 50, y: 3), keepAspect: true,
+                                    minSize: 10)
+        #expect(near(grown.minX, 10) && near(grown.minY, 20))
+        #expect(near(grown.size.width, 150) && near(grown.size.height, 90))
+        // Top-left corner, the y move drives; the bottom-right corner stays.
+        let shrunk = LayoutDrag.rect(from: rect, edges: [.minX, .minY], delta: Point(x: 1, y: 30), keepAspect: true,
+                                     minSize: 10)
+        #expect(near(shrunk.size.height, 30) && near(shrunk.size.width, 50))
+        #expect(near(shrunk.maxX, 110) && near(shrunk.maxY, 80))
+    }
+
+    @Test func resizeNeverBelowMinimum() {
+        // Dragging the left edge past the right one: the right edge stays, the width is the minimum.
+        let left = LayoutDrag.rect(from: rect, edges: .minX, delta: Point(x: 500, y: 0), keepAspect: false, minSize: 10)
+        #expect(left == Rect(x: 100, y: 20, width: 10, height: 60))
+        let bottom = LayoutDrag.rect(from: rect, edges: .maxY, delta: Point(x: 0, y: -500), keepAspect: false,
+                                     minSize: 10)
+        #expect(bottom == Rect(x: 10, y: 20, width: 100, height: 10))
+        // With the aspect kept, the shorter side stops at the minimum and the ratio holds.
+        let corner = LayoutDrag.rect(from: rect, edges: [.maxX, .maxY], delta: Point(x: -500, y: -500),
+                                     keepAspect: true, minSize: 10)
+        #expect(near(corner.size.height, 10) && near(corner.size.width, 100.0 / 6))
+        #expect(near(corner.minX, 10) && near(corner.minY, 20))
+    }
+}
+
 // MARK: - Scroll gestures
 
 struct ScrollZoomTests {

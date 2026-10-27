@@ -47,6 +47,10 @@ Návratové kódy: `0` hotovo, `1` kontrola před tiskem našla chyby (PDF se ne
 - `docs/superpowers/plans/`: implementační plán ([2026-10-26-leporelo-v1.md](docs/superpowers/plans/2026-10-26-leporelo-v1.md)).
 - `docs/manual-verification.md`: kontrolní seznam toho, co nešlo ověřit bez spuštěné aplikace, knihovny Photos a účtu Canva.
 
+## Editor dvoustran
+
+Šablona dvoustrany je jen doporučené rozložení. Rámečky a texty jde na plátně přímo posouvat a za rohy či strany měnit jejich velikost (Shift drží poměr stran, Cmd vypne přichytávání). Přichytávají se k okrajům a středům stránek, k okrajové čáře, k hranám a středům ostatních rámečků i k mezeře 4 mm; zapnutá „Mřížka“ v liště přidá čáry po 5 mm. Okraj knihy („Okraj“ v liště, výchozí 10 mm, od bezpečné zóny profilu do 30 mm) platí pro všechny úpravy: hrana rámečku leží buď na hraně stránky (fotka jde do spadávky), nebo aspoň na okrajové čáře, nikdy mezi nimi, a text zůstává uvnitř okraje. Dvojklik na fotku zapne režim výřezu, ve kterém tažení posouvá fotku v rámečku (Escape ho ukončí). „Přidat rámeček“ a „Přidat text“ jsou v liště i v kontextové nabídce plátna; v té je u položky pod ukazatelem také „Smazat“, „Odebrat fotku“, „Upravit výřez“ a „Obnovit výřez“. Každá úprava je jeden krok zpět. Obálka se zatím jen zobrazuje.
+
 ## Jak aplikace ukládá projekt
 
 Projekt je balík `<název>.leporelo` (standardní dokument macOS s automatickým ukládáním a Verzemi):

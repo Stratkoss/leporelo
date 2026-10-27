@@ -18,8 +18,10 @@ extension FocusedValues {
 
 /// Ladění (spec 6.4): the big spread in the middle (`SpreadCanvasView`) with a banner for the
 /// spread's problems that belong to no frame, the tray on the right (`PhotoTrayView`), the strip
-/// at the bottom (`SpreadStripView`); toolbar: "Navrhnout znovu", "Formát", "Exportovat…" (the
-/// window adds "Třídění | Dvoustrany" and "Zpět do třídění").
+/// at the bottom (`SpreadStripView`); toolbar: "Přidat rámeček", "Přidat text" (on the right page),
+/// "Mřížka", "Přichytávat", "Okraj", "Navrhnout znovu", "Formát", "Exportovat…" (the window adds
+/// "Třídění | Dvoustrany" and "Zpět do třídění"). The grid and snapping switches are remembered
+/// for the app (`@AppStorage`); the margin belongs to the book (`EditorModel.setMargin`).
 struct EditorView: View {
     let model: EditorModel
     let onBackToTriage: () -> Void
@@ -38,6 +40,11 @@ struct EditorView: View {
     @State private var redraftKept = 0
     @State private var formatCandidate: BookFormat?
 
+    /// "Mřížka": draws the 5 mm grid and snaps to it.
+    @AppStorage("editor.showGrid") private var showGrid = false
+    /// "Přichytávat": snaps to page edges, margins, centres and the other items.
+    @AppStorage("editor.snapObjects") private var snapObjects = true
+
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 0) {
@@ -47,7 +54,7 @@ struct EditorView: View {
                     Text(model.coverSide == nil ? EditorText.canvasHint : EditorText.coverReadOnly)
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                        .lineLimit(2)
+                        .lineLimit(3)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 6)
                 }
@@ -125,7 +132,9 @@ struct EditorView: View {
             SpreadCanvasView(content: content, album: store.album, revision: store.revision,
                              geometry: model.geometry, package: store.package,
                              issues: model.issues(for: content.page.id),
-                             selectedFrameID: content.isCover ? nil : model.selectedFrameID,
+                             selectedItem: content.isCover ? nil : model.selectedItem,
+                             snapSettings: SnapSettings(grid: showGrid, objects: snapObjects),
+                             showGrid: showGrid,
                              isEditingText: model.isEditingText, model: model)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
@@ -168,7 +177,34 @@ struct EditorView: View {
 
     // MARK: Toolbar
 
+    /// Layout edits need a spread on the canvas (the cover is read-only).
+    private var canEditLayout: Bool { model.coverSide == nil && model.currentSpreadID != nil }
+
     @ToolbarContentBuilder private var toolbar: some ToolbarContent {
+        ToolbarItemGroup {
+            Button(EditorText.addFrame, systemImage: "rectangle.badge.plus") { model.addFrame(on: .right) }
+                .disabled(!canEditLayout)
+                .help(EditorText.addFrame)
+
+            Button(EditorText.addText, systemImage: "character.textbox") { model.addText(on: .right) }
+                .disabled(!canEditLayout)
+                .help(EditorText.addText)
+
+            Toggle(EditorText.grid, systemImage: "grid", isOn: $showGrid)
+                .help(EditorText.grid)
+
+            Toggle(EditorText.snap, systemImage: "square.and.line.vertical.and.square", isOn: $snapObjects)
+                .help(EditorText.snap)
+
+            let profile = model.geometry.profile
+            Stepper(value: Binding(get: { model.marginMM }, set: { model.setMargin($0) }),
+                    in: profile.safeMM...max(profile.safeMM, MarginRule.maxMarginMM), step: 1) {
+                Text(EditorText.margin(model.marginMM))
+                    .monospacedDigit()
+            }
+            .help(EditorText.margin(model.marginMM))
+        }
+
         ToolbarItemGroup(placement: .primaryAction) {
             Button(EditorText.backToTriage, systemImage: "square.grid.3x3") {
                 model.commitSessions()

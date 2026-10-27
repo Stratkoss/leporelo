@@ -140,6 +140,70 @@ enum CropMath {
     }
 }
 
+// MARK: - Layout handles and drags (mm)
+
+/// The 8 resize handles of a selected frame or text: its 4 corners and the midpoints of its 4
+/// sides. A handle is hit within `tolerance` mm on both axes (a square, as drawn).
+enum LayoutHandles {
+    /// The edges a drag from `p` resizes: two for a corner (corners win over sides, the nearest
+    /// corner first), one for a side; nil inside or outside away from every handle.
+    static func hit(_ p: Point, rect: Rect, tolerance: Double) -> RectEdges? {
+        let midX = rect.minX + rect.size.width / 2, midY = rect.minY + rect.size.height / 2
+        let corners: [(Point, RectEdges)] = [
+            (Point(x: rect.minX, y: rect.minY), [.minX, .minY]),
+            (Point(x: rect.maxX, y: rect.minY), [.maxX, .minY]),
+            (Point(x: rect.minX, y: rect.maxY), [.minX, .maxY]),
+            (Point(x: rect.maxX, y: rect.maxY), [.maxX, .maxY]),
+        ]
+        let sides: [(Point, RectEdges)] = [
+            (Point(x: midX, y: rect.minY), .minY),
+            (Point(x: midX, y: rect.maxY), .maxY),
+            (Point(x: rect.minX, y: midY), .minX),
+            (Point(x: rect.maxX, y: midY), .maxX),
+        ]
+        func nearest(_ handles: [(Point, RectEdges)]) -> RectEdges? {
+            handles
+                .filter { abs($0.0.x - p.x) <= tolerance && abs($0.0.y - p.y) <= tolerance }
+                .min { hypot($0.0.x - p.x, $0.0.y - p.y) < hypot($1.0.x - p.x, $1.0.y - p.y) }?.1
+        }
+        return nearest(corners) ?? nearest(sides)
+    }
+}
+
+/// The rectangle of a frame or text during a mouse drag, from its rectangle at the start.
+enum LayoutDrag {
+    /// `.all` moves `start` by `delta`; otherwise only the given edges follow the pointer and the
+    /// opposite ones stay. `keepAspect` on a corner keeps `start`'s width/height ratio: the larger
+    /// relative change of the two drives. No side ever gets below `minSize` (a shrink past it
+    /// stops there, the opposite edge stays).
+    static func rect(from start: Rect, edges: RectEdges, delta: Point, keepAspect: Bool, minSize: Double) -> Rect {
+        if edges == .all {
+            return Rect(x: start.minX + delta.x, y: start.minY + delta.y, width: start.size.width,
+                        height: start.size.height)
+        }
+        var minX = start.minX, maxX = start.maxX, minY = start.minY, maxY = start.maxY
+        if edges.contains(.minX) { minX = min(start.minX + delta.x, start.maxX - minSize) }
+        if edges.contains(.maxX) { maxX = max(start.maxX + delta.x, start.minX + minSize) }
+        if edges.contains(.minY) { minY = min(start.minY + delta.y, start.maxY - minSize) }
+        if edges.contains(.maxY) { maxY = max(start.maxY + delta.y, start.minY + minSize) }
+
+        let isCorner = (edges.contains(.minX) || edges.contains(.maxX)) && (edges.contains(.minY) || edges.contains(.maxY))
+        let w = start.size.width, h = start.size.height
+        guard keepAspect, isCorner, w > 0, h > 0 else {
+            return Rect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+        }
+        // Scale factors from the raw (unclamped) pointer position, the larger change drives.
+        let fx = (edges.contains(.minX) ? w - delta.x : w + delta.x) / w
+        let fy = (edges.contains(.minY) ? h - delta.y : h + delta.y) / h
+        var f = abs(fx - 1) >= abs(fy - 1) ? fx : fy
+        f = max(f, minSize / w, minSize / h)
+        let newW = w * f, newH = h * f
+        let x = edges.contains(.minX) ? start.maxX - newW : start.minX
+        let y = edges.contains(.minY) ? start.maxY - newH : start.minY
+        return Rect(x: x, y: y, width: newW, height: newH)
+    }
+}
+
 /// How a scroll-wheel event drives a crop session (zoom over a frame). Trackpads deliver phases
 /// (began, changed, ended); their momentum events are ignored. A classic mouse wheel has no
 /// phase: every event updates, and the session ends after a short idle time.
@@ -490,7 +554,18 @@ enum EditorText {
     static let formatMenu = "Formát"
     static let formatChange = "Změnit formát?"
     static let formatMessage = "Rozložení se přepočítá, obsah zůstane."
-    static let canvasHint = "Tažením posunete výřez, kolečkem nebo sevřením přiblížíte, s klávesou ⌥ fotku přetáhnete do jiného rámečku. Dvojklik na text ho upraví, dvojklik na fotku vrátí výřez."
+    static let canvasHint = "Tažením rámeček posunete, za rohy změníte velikost (⇧ drží poměr, ⌘ vypne přichytávání). Dvojklikem upravíte výřez fotky, s klávesou ⌥ fotku přetáhnete do jiného rámečku. Dvojklik na text ho upraví."
+    static let addFrame = "Přidat rámeček"
+    static let addText = "Přidat text"
+    static let deleteItem = "Smazat"
+    static let removePhoto = "Odebrat fotku"
+    static let editCrop = "Upravit výřez"
+    static let resetCrop = "Obnovit výřez"
+    static let grid = "Mřížka"
+    static let snap = "Přichytávat"
+
+    /// "Okraj: 10 mm" (the toolbar's margin stepper).
+    static func margin(_ mm: Double) -> String { "Okraj: \(Int(mm)) mm" }
 
     static func kindName(_ kind: SpreadKind) -> String {
         switch kind {
