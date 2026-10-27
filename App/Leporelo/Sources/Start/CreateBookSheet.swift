@@ -17,15 +17,22 @@ struct CreateBookSheet: View {
 
     var body: some View {
         if choosingLayouts {
+            // "Přeskočit" here means no favourites: the same as "Hotovo" with nothing marked.
             FavoriteLayoutsView(initial: []) { liked in
-                var preferences = LayoutPreferences()
-                preferences.finish(liked: liked)
-                choosingLayouts = false
+                finishLayouts(liked)
+            } onSkip: {
+                finishLayouts([])
             }
             .frame(width: 640)
         } else {
             form
         }
+    }
+
+    private func finishLayouts(_ liked: Set<String>) {
+        var preferences = LayoutPreferences()
+        preferences.finish(liked: liked)
+        choosingLayouts = false
     }
 
     private var form: some View {

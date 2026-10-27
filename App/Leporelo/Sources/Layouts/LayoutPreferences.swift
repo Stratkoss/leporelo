@@ -30,9 +30,16 @@ struct LayoutPreferences {
         LayoutWeights(liked: liked)
     }
 
-    /// "Hotovo" and "Přeskočit" (an empty set): stores the choice and that nobody needs to ask.
+    /// "Hotovo", and "Přeskočit" of the first-time choice (an empty set): stores the choice and
+    /// that nobody needs to ask.
     mutating func finish(liked: Set<String>) {
         defaults.set(liked.sorted(), forKey: Self.likedKey)
         defaults.set(true, forKey: Self.askedKey)
+    }
+
+    /// "Přeskočit" in the menu window: the favourites stay as they are; only records that the
+    /// choice was offered, so the first "Udělat z toho knihu" does not ask again.
+    mutating func skip() {
+        if !asked { defaults.set(true, forKey: Self.askedKey) }
     }
 }

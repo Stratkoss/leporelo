@@ -2,15 +2,18 @@ import LeporeloCore
 import SwiftUI
 
 /// "Která rozložení se ti líbí?" (spec 6): the nine layouts the draft chooses from, as page
-/// previews to mark with a heart. "Hotovo" hands over the marked ones, "Přeskočit" none. The
-/// first-time sheet and the menu window show the same view.
+/// previews to mark with a heart. "Hotovo" hands over the marked ones (`onFinish`), "Přeskočit"
+/// calls `onSkip`: the caller decides what skipping means. The first-time sheet and the menu
+/// window show the same view.
 struct FavoriteLayoutsView: View {
     let onFinish: (Set<String>) -> Void
+    let onSkip: () -> Void
 
     @State private var liked: Set<String>
 
-    init(initial: Set<String>, onFinish: @escaping (Set<String>) -> Void) {
+    init(initial: Set<String>, onFinish: @escaping (Set<String>) -> Void, onSkip: @escaping () -> Void) {
         self.onFinish = onFinish
+        self.onSkip = onSkip
         _liked = State(initialValue: initial)
     }
 
@@ -33,7 +36,7 @@ struct FavoriteLayoutsView: View {
             }
             HStack {
                 Spacer()
-                Button("Přeskočit") { onFinish([]) }
+                Button("Přeskočit") { onSkip() }
                 Button("Hotovo") { onFinish(liked) }
                     .keyboardShortcut(.defaultAction)
             }
@@ -72,18 +75,32 @@ struct FavoriteLayoutsView: View {
 }
 
 /// Leporelo > "Oblíbená rozložení…": the same choice in a window of its own, filled with what is
-/// stored; both buttons store the choice and close the window.
+/// stored each time the window appears. "Hotovo" stores the choice, "Přeskočit" keeps the stored
+/// favourites (it only records that the choice was offered); both close the window.
 struct FavoriteLayoutsWindow: View {
     static let windowID = "favorite-layouts"
 
     @Environment(\.dismissWindow) private var dismissWindow
+    /// Bumped each time the window appears: the choice is made afresh from the stored favourites,
+    /// never with hearts left over from an earlier opening of the window.
+    @State private var appearance = 0
 
     var body: some View {
-        FavoriteLayoutsView(initial: LayoutPreferences().liked) { liked in
-            var preferences = LayoutPreferences()
-            preferences.finish(liked: liked)
-            dismissWindow(id: Self.windowID)
+        // The container's `onAppear` fires when the window appears, not when the choice inside
+        // gets its new identity.
+        VStack(spacing: 0) {
+            FavoriteLayoutsView(initial: LayoutPreferences().liked) { liked in
+                var preferences = LayoutPreferences()
+                preferences.finish(liked: liked)
+                dismissWindow(id: Self.windowID)
+            } onSkip: {
+                var preferences = LayoutPreferences()
+                preferences.skip()
+                dismissWindow(id: Self.windowID)
+            }
+            .id(appearance)
         }
+        .onAppear { appearance += 1 }
         .frame(width: 640)
         .fixedSize()
     }

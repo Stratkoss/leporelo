@@ -49,6 +49,20 @@ struct LayoutPreferencesTests {
         #expect(!again.needsOnboarding)
     }
 
+    /// "Přeskočit" in the menu window keeps the stored favourites; it only records the question.
+    @Test func skipKeepsStoredLikesAndMarksAsked() {
+        let defaults = freshDefaults()
+        var preferences = LayoutPreferences(defaults: defaults)
+        preferences.skip()
+        #expect(preferences.asked)
+        #expect(preferences.liked.isEmpty)
+        preferences.finish(liked: ["grid-4", "mosaic-5"])
+        preferences.skip()
+        #expect(preferences.liked == ["grid-4", "mosaic-5"])
+        #expect(preferences.weights().weight("grid-4") == 3)
+        #expect(LayoutPreferences(defaults: defaults).asked)
+    }
+
     /// Opened again from the menu, "Hotovo" with fewer marks replaces the old choice.
     @Test func finishReplacesEarlierLikes() {
         var preferences = LayoutPreferences(defaults: freshDefaults())
