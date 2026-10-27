@@ -34,8 +34,14 @@ struct TriageView: View {
                 footer
             }
         }
-        .onAppear { model.undoManager = undoManager }
-        .onChange(of: undoManager) { _, manager in model.undoManager = manager }
+        .onAppear {
+            AlbumStore.configure(undoManager)
+            model.undoManager = undoManager
+        }
+        .onChange(of: undoManager) { _, manager in
+            AlbumStore.configure(manager)
+            model.undoManager = manager
+        }
     }
 
     // MARK: Days
@@ -112,7 +118,7 @@ struct TriageView: View {
 
     private var footer: some View {
         HStack {
-            Text(TriageText.footer(selected: model.selectedTotal, pages: model.estimatedPages))
+            Text(model.footerText)
                 .monospacedDigit()
             Spacer()
             Button(TriageText.propose) { proposeAlbum?.run() }

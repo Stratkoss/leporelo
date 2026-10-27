@@ -405,4 +405,59 @@ struct TriageModelTests {
         #expect(toggle < .seconds(5))
         #expect(model.estimatedPages > 0)
     }
+
+    // MARK: Task 21a: moves of placed photos, actual page count
+
+    @Test func movingAPlacedPhotoMovesItIntoTheNewDaysLayout() throws {
+        let photos = (0..<8).map { photo("a\($0)", minute: $0 * 10, selected: true) }
+            + (0..<4).map { photo("b\($0)", minute: $0 * 10, day: june19, selected: true) }
+        let (model, store, undo) = try makeModel(photos, drafted: true)
+        let gallery = try #require(store.album.spreads.first { $0.kind == .gallery && $0.dayKey == june18 && !$0.manuallyEdited })
+        let id = try #require(gallery.frames.compactMap(\.photoID).first)
+        let before = store.album
+
+        grouped(undo) { model.move(id, to: june19) }
+        #expect(store.album.photos[id]?.dayKey == june19)
+        let holders = store.album.spreads.filter { ($0.kind == .gallery || $0.kind == .journal) && $0.frames.contains { $0.photoID == id } }
+        #expect(holders.map(\.dayKey) == [june19])
+        #expect(undo.undoActionName == "Přesunout fotku do dne")
+
+        undo.undo()
+        #expect(store.album == before)
+    }
+
+    @Test func movingAPhotoOfAManualSpreadLeavesTheLayout() throws {
+        let photos = (0..<8).map { photo("a\($0)", minute: $0 * 10, selected: true) }
+            + (0..<4).map { photo("b\($0)", minute: $0 * 10, day: june19, selected: true) }
+        var a = try draft(album(photos))
+        let index = try #require(a.spreads.firstIndex { $0.kind == .gallery && $0.dayKey == june18 })
+        a.spreads[index].manuallyEdited = true
+        let id = try #require(a.spreads[index].frames.compactMap(\.photoID).first)
+        let url = makeTempDir().appendingPathComponent("Manual.leporelo")
+        let store = AlbumStore(album: a, package: try ProjectPackage.create(at: url, album: a))
+        let model = TriageModel(store: store)
+        let undo = UndoManager()
+        undo.groupsByEvent = false
+        model.undoManager = undo
+
+        grouped(undo) { model.move(id, to: june19) }
+        var expected = a
+        expected.photos[id]?.dayKey = june19
+        #expect(store.album == expected)  // only the day changed; the editor shows it where it is
+        #expect(undo.undoActionName == "Přesunout fotku do dne")
+    }
+
+    @Test func footerShowsActualPagesOnceThereAreSpreads() throws {
+        let photos = (0..<10).map { photo("p\($0)", minute: $0 * 10, selected: true) }
+        let (estimate, _, _) = try makeModel(photos)
+        #expect(estimate.pageCount == estimate.estimatedPages)
+        #expect(estimate.pagesAreEstimated)
+        #expect(estimate.footerText == TriageText.footer(selected: 10, pages: estimate.estimatedPages))
+
+        let (model, store, _) = try makeModel(photos, drafted: true)
+        #expect(!model.pagesAreEstimated)
+        #expect(model.pageCount == store.album.spreads.count * 2)
+        #expect(model.footerText == "Vybráno 10 fotek · \(store.album.spreads.count * 2) stran")
+        #expect(TriageText.footer(selected: 1, pages: 36, estimated: false) == "Vybrána 1 fotka · 36 stran")
+    }
 }

@@ -51,6 +51,46 @@ final class AlbumStore {
         try apply(edit, actionName: Self.actionName(for: edit), undoManager: undoManager)
     }
 
+    /// Applies `edits` in order as ONE undoable step named `actionName` (e.g. a drop that selects
+    /// the photo and changes two spreads). Atomic: when any edit does not apply, nothing changes
+    /// and nothing is registered. Undo applies the inverses in reverse order. An empty list does
+    /// nothing. With a `nil` undo manager this is the no-undo path (`markChanged`).
+    func apply(_ edits: [AlbumEdit], actionName: String, undoManager: UndoManager?) throws {
+        guard !edits.isEmpty else { return }
+        var updated = album
+        var inverses: [AlbumEdit] = []
+        for edit in edits {
+            let result = try updated.applying(edit)
+            updated = result.album
+            inverses.append(result.inverse)
+        }
+        album = updated
+        publish()
+        guard let undoManager else {
+            markChanged?()
+            return
+        }
+        let undoEdits = Array(inverses.reversed())
+        undoManager.registerUndo(withTarget: self) { [weak undoManager] store in
+            do {
+                try store.apply(undoEdits, actionName: actionName, undoManager: undoManager)
+            } catch {
+                Logger.store.fault("Undo of \(actionName, privacy: .public) failed: \(String(describing: error), privacy: .public)")
+            }
+        }
+        undoManager.setActionName(actionName)
+    }
+
+    /// How many steps the window's undo manager keeps. Every `replace` step holds a whole album,
+    /// so unlimited undo would grow without bound during a long editing session.
+    static let undoLevels = 200
+
+    /// Caps `undoManager` at `undoLevels` (views call it when they get the window's manager).
+    static func configure(_ undoManager: UndoManager?) {
+        guard let undoManager, undoManager.levelsOfUndo != undoLevels else { return }
+        undoManager.levelsOfUndo = undoLevels
+    }
+
     /// Replaces the whole album (selection recommendations, redraft, format change, a selection
     /// change once spreads exist) as one undoable step named `actionName`. With a `nil` undo
     /// manager this is `replaceWithoutUndo`.
@@ -157,7 +197,7 @@ final class AlbumStore {
         case .setFramePhoto(_, _, .some): "Vložit fotku"
         case .setFramePhoto(_, _, .none): "Odebrat fotku"
         case .swapFramePhotos: "Prohodit fotky"
-        case .setFrameTransform: "Upravit ořez"
+        case .setFrameTransform: "Posunout fotku"
         case .setText: "Upravit text"
         case .moveSpread: "Přesunout dvoustranu"
         case .insertSpread: "Přidat dvoustranu"

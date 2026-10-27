@@ -127,10 +127,11 @@ enum TriageText {
         "\(AlbumDrafter.czechDate(key)), \(places(placeNames)), vybráno \(selected) z \(total)"
     }
 
-    /// "Vybráno 148 fotek · odhad 36 stran" (verb agrees: vybrána 1 fotka, vybrány 3 fotky).
-    static func footer(selected: Int, pages: Int) -> String {
+    /// "Vybráno 148 fotek · odhad 36 stran" (verb agrees: vybrána 1 fotka, vybrány 3 fotky);
+    /// "Vybráno 148 fotek · 36 stran" when `estimated` is false (the album has spreads).
+    static func footer(selected: Int, pages: Int, estimated: Bool = true) -> String {
         let verb = CzechPlural.choose(selected, one: "Vybrána", few: "Vybrány", many: "Vybráno")
-        return "\(verb) \(CzechPlural.photos(selected)) · odhad \(CzechPlural.pages(pages))"
+        return "\(verb) \(CzechPlural.photos(selected)) · \(estimated ? "odhad " : "")\(CzechPlural.pages(pages))"
     }
 
     static func originalDescription(_ state: OriginalState) -> String {
@@ -172,7 +173,8 @@ enum PhotoDrag {
 /// - selection: `AlbumEdit.setSelected` while the album has no spreads; once it has (back from
 ///   the editor) `AlbumUpdater.photoSelected/photoDeselected` through `AlbumStore.replace`, so the
 ///   photo is also placed in / removed from the layout (Task 20 ruling);
-/// - day moves: `AlbumEdit.setPhotoDay`, undoable.
+/// - day moves: `AlbumEdit.setPhotoDay`, undoable; a placed photo of non-manual spreads follows
+///   into the new day's layout (`AlbumUpdater.photoMoved` via `replace`, see `move`).
 @MainActor
 @Observable
 final class TriageModel {
@@ -429,6 +431,21 @@ final class TriageModel {
         return pages
     }
 
+    /// The page count the footer shows: the album's actual pages (`spreads.count * 2`) once it has
+    /// spreads, else the draft estimate.
+    var pageCount: Int {
+        let spreads = store.album.spreads.count
+        return spreads > 0 ? spreads * 2 : estimatedPages
+    }
+
+    /// Whether `pageCount` is the estimate (no spreads yet).
+    var pagesAreEstimated: Bool { store.album.spreads.isEmpty }
+
+    /// "Vybráno 148 fotek · odhad 36 stran", or "… · 36 stran" once the album has spreads.
+    var footerText: String {
+        TriageText.footer(selected: selectedTotal, pages: pageCount, estimated: pagesAreEstimated)
+    }
+
     /// The album's profile and format, read from the catalog once per format.
     private func format(of album: Album) -> (SupplierProfile, BookFormat)? {
         let key = album.supplierProfileID + "/" + album.formatID
@@ -470,8 +487,27 @@ final class TriageModel {
     }
 
     /// Moves a photo to another day (undoable); the grids regroup. Its own day: nothing.
+    ///
+    /// Once the album has spreads, a selected photo placed in journal/gallery spreads that are all
+    /// NOT manually edited follows into the new day's layout: one `store.replace` of
+    /// `AlbumUpdater.photoMoved` (it leaves its day spread and goes into the new day like a newly
+    /// selected photo; intro, closing and cover keep it). If any such spread is manually edited,
+    /// the layout is the user's: only the day changes (`setPhotoDay`) and the editor shows the
+    /// photo where it is.
     func move(_ id: PhotoID, to day: DayKey) {
-        guard let photo = store.album.photos[id], photo.dayKey != day else { return }
+        let album = store.album
+        guard let photo = album.photos[id], photo.dayKey != day else { return }
+        let holders = album.spreads.filter { spread in
+            (spread.kind == .journal || spread.kind == .gallery) && spread.frames.contains { $0.photoID == id }
+        }
+        if photo.isSelected, !holders.isEmpty, !holders.contains(where: \.manuallyEdited),
+           let (profile, format) = format(of: album) {
+            let updated = AlbumUpdater.photoMoved(id, to: day, in: album,
+                                                  geometry: PageGeometry(format: format, profile: profile))
+            store.replace(album: updated, actionName: AlbumStore.actionName(for: .setPhotoDay(id, day)),
+                          undoManager: undoManager)
+            return
+        }
         do {
             try store.apply(.setPhotoDay(id, day), undoManager: undoManager)
         } catch {

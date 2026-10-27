@@ -206,4 +206,52 @@ struct AlbumStoreTests {
         #expect(throws: AlbumEditError.unknownPhoto) { try store.applyWithoutUndo(.setSelected("nope", true)) }
         #expect(marks == 4)
     }
+
+    // MARK: Task 21a
+
+    @Test func batchApplyIsOneAtomicUndoStep() throws {
+        let store = try makeStore(title: "A", photos: [makeTestPhoto("p1")])
+        let undo = makeUndoManager()
+        let before = store.album
+
+        undo.beginUndoGrouping()
+        try store.apply([.setTitle("B"), .setSelected("p1", true)], actionName: "Vložit fotku", undoManager: undo)
+        undo.endUndoGrouping()
+        #expect(store.album.title == "B")
+        #expect(store.album.photos["p1"]?.isSelected == true)
+        #expect(undo.undoActionName == "Vložit fotku")
+
+        undo.undo()
+        #expect(store.album == before)
+        #expect(!undo.canUndo)
+        undo.redo()
+        #expect(store.album.title == "B" && store.album.photos["p1"]?.isSelected == true)
+        #expect(undo.undoActionName == "Vložit fotku")
+
+        // A failing edit anywhere in the batch changes nothing and registers nothing.
+        let revision = store.revision
+        undo.beginUndoGrouping()
+        #expect(throws: AlbumEditError.unknownPhoto) {
+            try store.apply([.setTitle("C"), .setSelected("nope", true)], actionName: "X", undoManager: undo)
+        }
+        undo.endUndoGrouping()
+        #expect(store.album.title == "B")
+        #expect(store.revision == revision)
+    }
+
+    @Test func editorActionNamesAreCzech() {
+        let p = Point(x: 0, y: 0)
+        #expect(AlbumStore.actionName(for: .setFrameTransform(spreadID: "s", frameID: "f", offset: p, zoom: 1)) == "Posunout fotku")
+        #expect(AlbumStore.actionName(for: .swapFramePhotos(spreadID: "s", frameA: "a", frameB: "b")) == "Prohodit fotky")
+        #expect(AlbumStore.actionName(for: .setText(spreadID: "s", textID: "t", text: "")) == "Upravit text")
+        #expect(AlbumStore.actionName(for: .deleteSpread(id: "s")) == "Smazat dvoustranu")
+    }
+
+    @Test func undoManagerIsCappedAt200Levels() {
+        let undo = UndoManager()
+        #expect(undo.levelsOfUndo == 0)  // unlimited by default
+        AlbumStore.configure(undo)
+        #expect(undo.levelsOfUndo == 200)
+        AlbumStore.configure(nil)  // no window undo manager yet: nothing to do
+    }
 }
