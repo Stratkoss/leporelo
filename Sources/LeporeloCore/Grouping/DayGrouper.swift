@@ -59,7 +59,7 @@ public enum GroupingService {
     /// `dayKey` and `placeName` where they are still `nil`.
     public static func assignDays(to album: inout Album, resolver: PlaceResolver) async {
         let photos = chronological(album)
-        let places = await resolvePlaces(of: photos, resolver: resolver, stopOnCancel: false).places
+        let places = await lookUpPlaces(of: photos, resolver: resolver, stopOnCancel: false).places
 
         let zones = TimeZoneInference.resolveTimeZones(photos, places: places)
         for photo in photos {
@@ -75,47 +75,71 @@ public enum GroupingService {
     }
 
     /// The background pass after a fast `assignDays` with an empty resolver (spec: geocoding never
-    /// blocks the UI). Resolves places for the photos with GPS through `resolver` and:
+    /// blocks the UI), as two steps: `resolvePlaces` (slow, async, does not touch the album) and
+    /// `applyRefinement` (fast, synchronous). This function is their composition on one album; it
+    /// suits callers that own the album for the whole await (CLI, tests).
     ///
-    /// 1. sets `placeName` where it is still `nil` (a name set earlier is never overwritten);
-    /// 2. corrects auto-assigned days: for every photo with a `dayKey`, if it still equals the day
-    ///    computed WITHOUT places (zones from EXIF, neighbours, longitude: what the fast pass
-    ///    assigned), it becomes the day computed WITH the resolved places (place time zones, e.g.
-    ///    Europe/Rome +2 h in summer where the longitude said +1 h). A `dayKey` that differs from
-    ///    that auto day was set by the user or another route and is left alone; photos without a
-    ///    `dayKey` are left to `assignDays`. Days are always local to the place (Review Focus 1),
-    ///    never UTC or the Mac's zone (except as the last fallback of `TimeZoneInference`).
-    ///
-    /// Lookups as in `assignDays`: each `PlaceKey` is requested at most once per call and failed
-    /// lookups are not retried within the call.
-    ///
-    /// Cancellation: checked before every resolver call. When the task is cancelled the lookups stop,
-    /// the names found so far are applied, and days are NOT re-derived (a partial set of zones could
-    /// move photos half-way); `completed` is then `false`. The album stays consistent, and running
-    /// this again later still corrects the days, as they are untouched.
-    ///
-    /// Pure album in / album out: the caller applies the result to its store through the no-undo
-    /// APIs (Task 17 contract), since this is not a user edit.
+    /// Intended app flow (the user can edit the album while geocoding runs for minutes):
+    /// 1. take a snapshot of the store's album;
+    /// 2. `await resolvePlaces(of: snapshot, resolver:)` off the main actor;
+    /// 3. in ONE synchronous main-actor step, `applyRefinement(places, completed:, to: &liveAlbum)`
+    ///    on the store's CURRENT album and write it back through the no-undo API (Task 17
+    ///    contract; this is not a user edit).
+    /// Never write the snapshot (or a refined copy of it) back: the guarantee that days the user
+    /// moved are kept relies on `applyRefinement` seeing the live album, including moves made
+    /// during step 2.
     @discardableResult
     public static func refinePlaces(in album: inout Album, resolver: PlaceResolver) async -> PlaceRefinement {
-        let photos = chronological(album)
-        let (places, completed) = await resolvePlaces(of: photos, resolver: resolver, stopOnCancel: true)
+        let (places, completed) = await resolvePlaces(of: album, resolver: resolver)
+        return applyRefinement(places, completed: completed, to: &album)
+    }
 
+    /// Places of the album's photos with GPS, keyed by photo. Does not change `album`.
+    ///
+    /// Lookups as in `assignDays`: each `PlaceKey` is requested at most once per call and failed
+    /// lookups are not retried within the call. Cancellation is checked before every resolver call:
+    /// once the task is cancelled the lookups stop and the places found so far are returned with
+    /// `completed == false`.
+    public static func resolvePlaces(of album: Album, resolver: PlaceResolver) async
+        -> (places: [PhotoID: Place], completed: Bool) {
+        let result = await lookUpPlaces(of: chronological(album), resolver: resolver, stopOnCancel: true)
+        return (result.places, result.complete)
+    }
+
+    /// Applies places from `resolvePlaces` to `album`, which should be the LIVE album (see
+    /// `refinePlaces` for the app flow). Synchronous, so a caller can run it atomically.
+    ///
+    /// 1. Sets `placeName` where it is still `nil` (a name set earlier is never overwritten).
+    ///    Places of photos no longer in `album` are ignored.
+    /// 2. Only when `completed`: corrects auto-assigned days. For every photo with a `dayKey`, if it
+    ///    still equals the day computed from `album` WITHOUT places (zones from EXIF, neighbours,
+    ///    longitude: what the fast pass assigned), it becomes the day computed WITH the places
+    ///    (place time zones, e.g. Europe/Rome +2 h in summer where the longitude said +1 h). A
+    ///    `dayKey` that differs from that auto day was set by the user or another route and is left
+    ///    alone; photos without a `dayKey` are left to `assignDays`. Days are local to the place
+    ///    (Review Focus 1), never UTC or the Mac's zone (except as the last fallback of
+    ///    `TimeZoneInference`).
+    ///    With `completed == false` days are not touched (a partial set of zones could move photos
+    ///    half-way); a later complete run still corrects them.
+    @discardableResult
+    public static func applyRefinement(_ places: [PhotoID: Place], completed: Bool,
+                                       to album: inout Album) -> PlaceRefinement {
+        let places = places.filter { album.photos[$0.key] != nil }
         var named = 0
-        for (id, place) in places where album.photos[id]?.placeName == nil {
-            album.photos[id]?.placeName = place.name
+        for id in places.keys.sorted() where album.photos[id]?.placeName == nil {
+            album.photos[id]?.placeName = places[id]?.name
             named += 1
         }
         guard completed else {
             return PlaceRefinement(changedDays: 0, namedPhotos: named, completed: false)
         }
 
+        let photos = chronological(album)
         let oldZones = TimeZoneInference.resolveTimeZones(photos, places: [:])
         let newZones = TimeZoneInference.resolveTimeZones(photos, places: places)
         var changed = 0
         for photo in photos {
-            guard let current = album.photos[photo.id]?.dayKey,
-                  current == autoDay(of: photo, zones: oldZones) else { continue }
+            guard let current = photo.dayKey, current == autoDay(of: photo, zones: oldZones) else { continue }
             let refined = autoDay(of: photo, zones: newZones)
             if refined != current {
                 album.photos[photo.id]?.dayKey = refined
@@ -138,8 +162,8 @@ public enum GroupingService {
     /// Places of the photos with GPS, one resolver call per `PlaceKey` (failed lookups are not
     /// retried within one call). With `stopOnCancel`, stops before the next resolver call once the
     /// task is cancelled and reports `complete == false`.
-    private static func resolvePlaces(of photos: [Photo], resolver: PlaceResolver,
-                                      stopOnCancel: Bool) async -> (places: [PhotoID: Place], complete: Bool) {
+    private static func lookUpPlaces(of photos: [Photo], resolver: PlaceResolver,
+                                     stopOnCancel: Bool) async -> (places: [PhotoID: Place], complete: Bool) {
         var resolved: [PlaceKey: Place] = [:]
         var attempted: Set<PlaceKey> = []
         var places: [PhotoID: Place] = [:]

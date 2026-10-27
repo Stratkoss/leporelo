@@ -183,4 +183,69 @@ import Foundation
         #expect(album == quick)
         #expect(result == PlaceRefinement(changedDays: 0, namedPhotos: 0, completed: true))
     }
+
+    // MARK: - resolve + apply (the app's flow: resolve on a snapshot, apply on the live album)
+
+    @Test func userMoveBetweenResolveAndApplyIsPreserved() async throws {
+        let moved = DayKey(year: 2026, month: 6, day: 25)
+        let snapshot = await Self.quickAssigned([
+            T.photo("moved", "2026-06-18T22:30:00Z", gps: T.positano),
+            T.photo("kept", "2026-06-18T22:35:00Z", gps: T.positano),
+        ])
+        let (places, completed) = await GroupingService.resolvePlaces(
+            of: snapshot, resolver: InMemoryPlaceResolver([(T.positano, Self.rome)]))
+        #expect(completed)
+
+        // Meanwhile the user moves one photo in the live album.
+        var live = try snapshot.applying(.setPhotoDay("moved", moved)).album
+        let result = GroupingService.applyRefinement(places, completed: completed, to: &live)
+        #expect(live.photos["moved"]?.dayKey == moved)
+        #expect(live.photos["kept"]?.dayKey == Self.june19)
+        #expect(live.photos["moved"]?.placeName == "Positano")
+        #expect(result == PlaceRefinement(changedDays: 1, namedPhotos: 2, completed: true))
+    }
+
+    @Test func applyRefinementWhenIncompleteOnlyNames() async {
+        let snapshot = await Self.quickAssigned([T.photo("a", "2026-06-18T22:30:00Z", gps: T.positano)])
+        var album = snapshot
+        let result = GroupingService.applyRefinement(["a": Self.rome], completed: false, to: &album)
+        #expect(album.photos["a"]?.dayKey == Self.june18)
+        #expect(album.photos["a"]?.placeName == "Positano")
+        #expect(result == PlaceRefinement(changedDays: 0, namedPhotos: 1, completed: false))
+    }
+
+    @Test func applyRefinementIgnoresPhotosNoLongerInAlbum() async {
+        var album = await Self.quickAssigned([T.photo("a", "2026-06-18T22:30:00Z", gps: T.positano)])
+        let result = GroupingService.applyRefinement(["gone": Self.rome], completed: true, to: &album)
+        #expect(album.photos["gone"] == nil)
+        #expect(album.photos["a"]?.dayKey == Self.june18)
+        #expect(result == PlaceRefinement(changedDays: 0, namedPhotos: 0, completed: true))
+    }
+
+    @Test func resolvePlacesLeavesInputAloneAndReturnsPartialMapOnCancel() async {
+        let amalfi = GeoPoint(latitude: 40.63, longitude: 14.60)
+        let snapshot = await Self.quickAssigned([
+            T.photo("a", "2026-06-18T22:30:00Z", gps: T.positano),
+            T.photo("a2", "2026-06-18T22:31:00Z", gps: T.positano),
+            T.photo("b", "2026-06-18T23:30:00Z", gps: amalfi),
+        ])
+        let copy = snapshot
+        let resolver = CountingResolver([(T.positano, Self.rome),
+                                         (amalfi, Place(name: "Amalfi", timeZoneIdentifier: "Europe/Rome"))],
+                                        cancelAfter: 1)
+        let (places, completed) = await Task {
+            await GroupingService.resolvePlaces(of: snapshot, resolver: resolver)
+        }.value
+        #expect(snapshot == copy)
+        #expect(!completed)
+        // a2 shares a's already resolved key (no further request); b's lookup never starts.
+        #expect(places == ["a": Self.rome, "a2": Self.rome])
+        #expect(await resolver.requested.count == 1)
+
+        let full = await GroupingService.resolvePlaces(
+            of: snapshot, resolver: InMemoryPlaceResolver([(T.positano, Self.rome)]))
+        #expect(full.completed)
+        #expect(full.places == ["a": Self.rome, "a2": Self.rome])
+        #expect(snapshot == copy)
+    }
 }

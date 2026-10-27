@@ -60,6 +60,7 @@ public enum OriginalState: Sendable, Codable, Equatable {
 }
 
 public struct Photo: Sendable, Codable, Equatable {
+    // When adding a stored property, also add it to the hand-written `init(from:)` below.
     public var id: PhotoID
     public var sourceIdentifier: String
     public var capturedAt: Date
