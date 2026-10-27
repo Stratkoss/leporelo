@@ -93,7 +93,14 @@ struct DocumentPackageWrites: PackageWriteCoordinator {
         }
         coordinator.coordinate(writingItemAt: url, options: .forReplacing, error: &coordinationError,
                                byAccessor: accessor)
-        if !wrote, let coordinationError { throw coordinationError }
-        try outcome.result.get()
+        try finish(wrote: wrote, coordinationError: coordinationError, result: outcome.result)
+    }
+
+    /// Fails closed: a coordination that never ran the accessor is a failed write even when it
+    /// reported no error (else `storeOriginal` would return a path to a file never moved there and
+    /// `.stored` would be published).
+    static func finish(wrote: Bool, coordinationError: NSError?, result: Result<Void, any Error>) throws {
+        guard wrote else { throw coordinationError ?? CocoaError(.fileWriteUnknown) }
+        try result.get()
     }
 }

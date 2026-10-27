@@ -72,7 +72,8 @@ enum SourceRefresh {
 enum RefreshText {
     static let command = "Načíst nové fotky ze zdroje"
 
-    /// "Přidány 2 nové fotky, 1 fotka už v Photos není." / "Žádné změny."
+    /// "Přidány 2 nové fotky, 1 fotka už v Photos není." / "Přidána 1 nová fotka." /
+    /// "1 fotka už v Photos není." / "Žádné změny." (a clause only for a non-zero count).
     static func summary(_ report: RefreshReport) -> String {
         if report.added == 0 && report.deleted == 0 { return "Žádné změny." }
         let n = CzechPlural.grouped(report.added)
@@ -80,7 +81,12 @@ enum RefreshText {
                                            few: "Přidány \(n) nové fotky", many: "Přidáno \(n) nových fotek")
         let deletedText = CzechPlural.choose(report.deleted, one: "už v Photos není", few: "už v Photos nejsou",
                                              many: "už v Photos není")
-        return "\(addedText), \(CzechPlural.photos(report.deleted)) \(deletedText)."
+        let deletedClause = "\(CzechPlural.photos(report.deleted)) \(deletedText)"
+        switch (report.added > 0, report.deleted > 0) {
+        case (true, true): return "\(addedText), \(deletedClause)."
+        case (true, false): return "\(addedText)."
+        default: return "\(deletedClause)."
+        }
     }
 
     struct Alert: Equatable, Identifiable {

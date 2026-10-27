@@ -23,6 +23,7 @@ final class FakePhotoSource: PhotoSource, @unchecked Sendable {
         var originalCalls: [String: Int] = [:]
         var holdOriginals = false
         var holdPhotos = false
+        var heldOriginalIDs: Set<String> = []
     }
 
     private let lock = NSLock()
@@ -51,6 +52,8 @@ final class FakePhotoSource: PhotoSource, @unchecked Sendable {
     var totalOriginalCalls: Int { locked { $0.originalCalls.values.reduce(0, +) } }
     /// While on, `original` calls suspend like held thumbnails (until `releaseAll()` or cancel).
     func holdOriginals(_ on: Bool = true) { locked { $0.holdOriginals = on } }
+    /// Holds only the `original` calls for `identifier` (until `releaseAll()`).
+    func holdOriginal(_ identifier: String) { locked { _ = $0.heldOriginalIDs.insert(identifier) } }
     /// While on, `photos(matching:)` calls suspend like held thumbnails.
     func holdPhotos(_ on: Bool = true) { locked { $0.holdPhotos = on } }
     var queries: [SourceQuery] { locked { $0.queries } }
@@ -62,6 +65,7 @@ final class FakePhotoSource: PhotoSource, @unchecked Sendable {
             s.holdThumbnails = false
             s.holdOriginals = false
             s.holdPhotos = false
+            s.heldOriginalIDs.removeAll()
             let all = Array(s.waiters.values)
             s.waiters.removeAll()
             return all
@@ -134,7 +138,7 @@ final class FakePhotoSource: PhotoSource, @unchecked Sendable {
             try await withCheckedThrowingContinuation { (c: CheckedContinuation<Void, Error>) in
                 let outcome: Int = locked { s in
                     if Task.isCancelled { return 2 }
-                    if !s.holdOriginals { return 0 }
+                    if !s.holdOriginals && !s.heldOriginalIDs.contains(identifier) { return 0 }
                     s.waiters[token] = c
                     return 1
                 }

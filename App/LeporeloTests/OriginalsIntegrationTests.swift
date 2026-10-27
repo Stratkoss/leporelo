@@ -372,7 +372,7 @@ struct BackgroundAutosaveTests {
         let store = AlbumStore(album: makeTestAlbum(), package: try ProjectPackage.create(
             at: makeTempDir().appendingPathComponent("Debounce.leporelo"), album: makeTestAlbum()))
         var saves = 0
-        store.autosaveHandler = { saves += 1 }
+        store.autosaveHandler = { saves += 1; return true }
         store.autosaveDelay = .milliseconds(50)
         for title in ["A", "B", "C"] { try store.applyWithoutUndo(.setTitle(title)) }
         await store.waitForPendingAutosave()
@@ -480,9 +480,10 @@ struct SourceRefreshTests {
 
     @Test func summaryPlurals() {
         #expect(RefreshText.summary(.init(added: 0, deleted: 0)) == "Žádné změny.")
-        #expect(RefreshText.summary(.init(added: 1, deleted: 0)) == "Přidána 1 nová fotka, 0 fotek už v Photos není.")
+        #expect(RefreshText.summary(.init(added: 1, deleted: 0)) == "Přidána 1 nová fotka.")
         #expect(RefreshText.summary(.init(added: 5, deleted: 3)) == "Přidáno 5 nových fotek, 3 fotky už v Photos nejsou.")
-        #expect(RefreshText.summary(.init(added: 0, deleted: 1)) == "Přidáno 0 nových fotek, 1 fotka už v Photos není.")
+        #expect(RefreshText.summary(.init(added: 0, deleted: 1)) == "1 fotka už v Photos není.")
+        #expect(RefreshText.summary(.init(added: 0, deleted: 4)) == "4 fotky už v Photos nejsou.")
         #expect(RefreshText.summary(.init(added: 3000, deleted: 5)) == "Přidáno 3\u{00A0}000 nových fotek, 5 fotek už v Photos není.")
     }
 }
@@ -539,5 +540,172 @@ struct AlbumScreenTests {
         #expect(PhotoCell.tooltip(.deletedInSource, state: .missing) == "Už v Photos není")
         photo.deletedInSource = false
         #expect(!TriageModel.badges(photo, duplicate: false).contains(.deletedInSource))
+    }
+}
+
+// MARK: Fix round 1: orphaned originals, fail-closed writes, autosave state
+
+private func isStored(_ photo: Photo?) -> Bool {
+    if case .stored = photo?.originalState { return true }
+    return false
+}
+
+@MainActor
+struct OrphanedOriginalTests {
+    /// A download that finished but whose state was never published (work cancelled before its
+    /// flush, as after a reload) must not orphan the only copy: on reopen the file is adopted,
+    /// also when the photo has left Photos meanwhile (`notFound`), and it is exportable.
+    @Test func orphanedOriginalIsAdoptedAfterReopen() async throws {
+        let store = try await makeOriginalsStore(2, name: "Sirotek")
+        let id = store.sortedIDs()[0]
+        let other = store.sortedIDs()[1]
+        let identifier = try #require(store.album.photos[id]?.sourceIdentifier)
+        var album = store.album
+        album.photos[id]?.isSelected = true
+        album.photos[other]?.isSelected = true
+        store.replaceWithoutUndo(album: album)
+        try store.package.save(store.album)
+        let source = FakePhotoSource()
+        // The other download hangs, so the run (and its final flush) is still going when the
+        // first original is on disk.
+        source.holdOriginal(try #require(store.album.photos[other]?.sourceIdentifier))
+        let work = makeOriginalsWork(store, source: source, flushInterval: .seconds(3600))
+        work.start()
+        try await waitFor("original written") { (store.package.originalFileSizes()["\(id).jpg"] ?? 0) > 0 }
+        try await Task.sleep(for: .milliseconds(50))
+        work.cancel()  // a dead-store cancel: the unpublished state is dropped
+        source.releaseAll()
+        #expect(!isStored(store.album.photos[id]))
+        try store.package.save(store.album)  // album.json without the state
+
+        let reopened = try AlbumDocument(file: FileWrapper(url: store.package.url, options: [])).currentAlbum
+        #expect(reopened.photos[id]?.originalState == .stored(relativePath: "originals/\(id).jpg"))
+
+        // The work adopts it too (a store whose album still says `.missing`), without downloading.
+        let gone = FakePhotoSource()
+        gone.failOriginal(identifier, with: .notFound(identifier))
+        let again = AlbumStore(album: store.album, package: store.package)
+        let second = makeOriginalsWork(again, source: gone)
+        second.start()
+        try await waitFor("adopted") { isStored(again.album.photos[id]) }
+        await second.waitUntilIdle()
+        #expect(gone.originalCalls(identifier) == 0)
+        let url = try #require(again.package.originalURL(for: id, album: again.album))
+        #expect(try Data(contentsOf: url) == Data("original:\(identifier)".utf8))
+        #expect(OriginalsWork.wanted(in: again.album).isEmpty)
+        second.cancel()
+    }
+
+    /// A cancel of the SAME live store (window close, restart) publishes what was downloaded,
+    /// including results that arrive after the cancel.
+    @Test func cancelKeepingResultsPublishesDownloadedStates() async throws {
+        let store = try await makeOriginalsStore(3)
+        var album = store.album
+        for id in album.photos.keys { album.photos[id]?.isSelected = true }
+        store.replaceWithoutUndo(album: album)
+        let source = FakePhotoSource()
+        let work = makeOriginalsWork(store, source: source, flushInterval: .seconds(3600))
+        work.start()
+        try await waitFor("first original") { !store.package.originalFileSizes().isEmpty }
+        work.cancel(keepingResults: true)
+        await work.waitUntilFinished()
+        let files = store.package.originalFileSizes()
+        for (id, photo) in store.album.photos where files["\(id).jpg"] != nil {
+            #expect(isStored(photo), "downloaded \(id) not published")
+        }
+        #expect(store.album.photos.values.allSatisfy { $0.originalState != .downloading })
+    }
+
+    /// While downloads run the store autosaves less often.
+    @Test func downloadsMarkTheStoreBusy() async throws {
+        let store = try await makeOriginalsStore(1)
+        let source = FakePhotoSource()
+        source.holdOriginals()
+        let work = makeOriginalsWork(store, source: source)
+        work.start()
+        try select(store.sortedIDs()[0], in: store)
+        try await waitFor("held original") { source.heldCalls > 0 }
+        #expect(store.backgroundDownloadsRunning)
+        #expect(store.effectiveAutosaveDelay == store.autosaveBusyDelay)
+        source.releaseAll()
+        await work.waitUntilIdle()
+        #expect(!store.backgroundDownloadsRunning)
+        #expect(store.effectiveAutosaveDelay == store.autosaveDelay)
+        work.cancel()
+    }
+}
+
+@MainActor
+struct WriterSafetyTests {
+    /// A coordination that ran no accessor and reported no error is a failure, never a write.
+    @Test func coordinationWithoutAccessorFailsClosed() {
+        #expect(throws: (any Error).self) {
+            try DocumentPackageWrites.finish(wrote: false, coordinationError: nil, result: .success(()))
+        }
+        let refused = NSError(domain: NSCocoaErrorDomain, code: NSFileWriteNoPermissionError)
+        #expect(throws: NSError.self) {
+            try DocumentPackageWrites.finish(wrote: false, coordinationError: refused, result: .success(()))
+        }
+        #expect(throws: CocoaError.self) {
+            try DocumentPackageWrites.finish(wrote: true, coordinationError: nil, result: .failure(CocoaError(.fileWriteOutOfSpace)))
+        }
+        #expect(throws: Never.self) {
+            try DocumentPackageWrites.finish(wrote: true, coordinationError: nil, result: .success(()))
+        }
+    }
+
+    /// After the document closed (no document in the box) the writer still writes, coordinated
+    /// without a presenter, and asks for a lookup once per write.
+    @Test func writerWithoutADocumentFallsBackWithoutPresenter() async throws {
+        final class Counter: @unchecked Sendable {
+            private let lock = NSLock()
+            private var value = 0
+            func bump() { lock.withLock { value += 1 } }
+            var count: Int { lock.withLock { value } }
+        }
+        let counter = Counter()
+        let url = makeTempDir().appendingPathComponent("Zavřeno.leporelo")
+        let package = try ProjectPackage.create(at: url, album: makeTestAlbum())
+            .coordinated(by: DocumentPackageWrites(documents: DocumentBox(), onMissingDocument: { counter.bump() }))
+        let relative = try await Task.detached { try package.storeOriginal(data: Data([5, 6]), ext: "jpg", for: "p1") }.value
+        #expect(try Data(contentsOf: url.appendingPathComponent(relative)) == Data([5, 6]))
+        #expect(counter.count == 1)
+    }
+}
+
+@MainActor
+struct AutosaveFailureTests {
+    @Test func repeatedFailuresSurfaceInTheBanner() async throws {
+        let store = AlbumStore(album: makeTestAlbum(), package: try ProjectPackage.create(
+            at: makeTempDir().appendingPathComponent("Selhání.leporelo"), album: makeTestAlbum()))
+        var succeed = false
+        store.autosaveHandler = { succeed }
+        store.autosaveDelay = .zero
+        for title in ["A", "B", "C"] {
+            try store.applyWithoutUndo(.setTitle(title))
+            await store.waitForPendingAutosave()
+        }
+        #expect(store.autosaveFailing)
+        var state = BannerState()
+        state.autosaveFailing = true
+        state.analysis = PipelineProgress(done: 1, total: 4)
+        #expect(BannerText.line(for: state) == .autosaveFailed)
+        #expect(BannerText.text(for: .autosaveFailed) == "Ukládání se nezdařilo")
+        succeed = true
+        try store.applyWithoutUndo(.setTitle("D"))
+        await store.waitForPendingAutosave()
+        #expect(!store.autosaveFailing)
+    }
+
+    @Test func twoFailuresAreNotYetShown() async throws {
+        let store = AlbumStore(album: makeTestAlbum(), package: try ProjectPackage.create(
+            at: makeTempDir().appendingPathComponent("Dvakrát.leporelo"), album: makeTestAlbum()))
+        store.autosaveHandler = { false }
+        store.autosaveDelay = .zero
+        for title in ["A", "B"] {
+            try store.applyWithoutUndo(.setTitle(title))
+            await store.waitForPendingAutosave()
+        }
+        #expect(!store.autosaveFailing)
     }
 }

@@ -11,9 +11,11 @@ struct BannerState: Equatable {
     var resolvingPlaces = false
     var sourceUnavailable = false
     var failedOriginals = 0
+    var autosaveFailing = false
 
     @MainActor
-    init(work: BackgroundWork?, originals: OriginalsWork?) {
+    init(work: BackgroundWork?, originals: OriginalsWork?, store: AlbumStore?) {
+        autosaveFailing = store?.autosaveFailing ?? false
         analysis = work?.analysisProgress
         resolvingPlaces = work?.isResolvingPlaces ?? false
         sourceUnavailable = (work?.sourceUnavailable ?? false) || (originals?.sourceUnavailable ?? false)
@@ -30,6 +32,7 @@ enum BannerText {
     static let sourceUnavailable = "Fotky nelze načíst: chybí přístup k Fotkám"
     static let retry = "Stáhnout znovu"
     static let openSettings = "Otevřít Nastavení systému"
+    static let autosaveFailed = "Ukládání se nezdařilo"
 
     static func analyzing(done: Int, total: Int) -> String {
         "Analyzuji fotky \(czech(done)) / \(czech(total))"
@@ -44,10 +47,11 @@ enum BannerText {
         "\(CzechPlural.count(count, one: "originál", few: "originály", many: "originálů")) se nepodařilo stáhnout"
     }
 
-    /// ONE line (no stacked banners, so nothing flickers between them), by priority: analysis,
-    /// originals, places, missing Photos access, originals that failed; nil when there is nothing
-    /// to say. An analysis of 0 photos counts as none.
+    /// ONE line (no stacked banners, so nothing flickers between them), by priority: failing
+    /// saves (work could be lost), analysis, originals, places, missing Photos access, originals
+    /// that failed; nil when there is nothing to say. An analysis of 0 photos counts as none.
     static func line(for state: BannerState) -> BackgroundActivity? {
+        if state.autosaveFailing { return .autosaveFailed }
         if let a = state.analysis, a.total > 0 { return .analyzing(done: a.done, total: a.total) }
         if let o = state.originals, o.total > 0 { return .downloading(done: o.done, total: o.total) }
         if state.resolvingPlaces { return .resolvingPlaces }
@@ -69,6 +73,7 @@ enum BannerText {
         case .resolvingPlaces: resolvingPlaces
         case .sourceUnavailable: sourceUnavailable
         case .failedOriginals(let count): failedOriginals(count)
+        case .autosaveFailed: autosaveFailed
         }
     }
 
@@ -85,9 +90,10 @@ enum BannerText {
 struct ProgressBanner: View {
     let work: BackgroundWork?
     let originals: OriginalsWork?
+    let store: AlbumStore?
 
     var body: some View {
-        let state = BannerState(work: work, originals: originals)
+        let state = BannerState(work: work, originals: originals, store: store)
         if let activity = BannerText.line(for: state), let text = BannerText.text(for: activity) {
             HStack(spacing: 10) {
                 switch activity {
@@ -97,7 +103,7 @@ struct ProgressBanner: View {
                         .frame(width: 120)
                 case .resolvingPlaces:
                     ProgressView().controlSize(.small)
-                case .sourceUnavailable, .failedOriginals:
+                case .sourceUnavailable, .failedOriginals, .autosaveFailed:
                     Image(systemName: "exclamationmark.triangle").foregroundStyle(.orange)
                 case .idle:
                     EmptyView()

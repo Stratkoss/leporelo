@@ -97,6 +97,12 @@ final class AlbumDocument: ReferenceFileDocument {
     /// Fixes original states a crash or an outside change left wrong, in memory only (the next
     /// save persists them): a download that was running is not running any more, and a `.stored`
     /// original whose file is not a regular file inside the package is `.missing`.
+    ///
+    /// Then `ProjectPackage.adoptOriginals` with the sizes of the files in `originals/` (from the
+    /// wrapper's attributes, nothing is read): a complete file whose state was never recorded (a
+    /// download cancelled before its state was written) is adopted as `.stored`, and a zero-length
+    /// stored file is `.missing`. Files whose size the wrapper does not know are left out here; the
+    /// originals work adopts them from the package directory.
     nonisolated static func reconcilingOriginals(_ album: Album, in package: FileWrapper) -> Album {
         var album = album
         for (id, photo) in album.photos {
@@ -109,7 +115,19 @@ final class AlbumDocument: ReferenceFileDocument {
                 break
             }
         }
+        ProjectPackage.adoptOriginals(in: &album, fileSizes: originalSizes(in: package))
         return album
+    }
+
+    /// name -> size of the regular files in the wrapper's `originals/` whose size it knows.
+    private nonisolated static func originalSizes(in package: FileWrapper) -> [String: Int] {
+        var result: [String: Int] = [:]
+        for (name, child) in package.fileWrappers?["originals"]?.fileWrappers ?? [:] where child.isRegularFile {
+            if let size = (child.fileAttributes[FileAttributeKey.size.rawValue] as? NSNumber)?.intValue {
+                result[name] = size
+            }
+        }
+        return result
     }
 
     /// Walks the (lazy) wrapper tree; `..`, `.` and absolute paths never match.
@@ -160,13 +178,13 @@ final class AlbumDocument: ReferenceFileDocument {
         // AppKit's autosave uses); `AlbumStore.requestAutosave` debounces it.
         store.autosaveHandler = { [weak store] in
             guard let url = store?.package.url, let document = Self.platformDocument(for: url),
-                  let fileURL = document.fileURL, let fileType = document.fileType else { return }
-            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                  let fileURL = document.fileURL, let fileType = document.fileType else { return true }
+            return await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
                 document.save(to: fileURL, ofType: fileType, for: .autosaveInPlaceOperation) { error in
                     if let error {
                         Logger.document.error("Background autosave failed: \(error.localizedDescription, privacy: .public)")
                     }
-                    continuation.resume()
+                    continuation.resume(returning: error == nil)
                 }
             }
         }

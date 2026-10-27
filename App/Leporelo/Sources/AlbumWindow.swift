@@ -41,7 +41,7 @@ struct AlbumWindow: View {
         VStack(spacing: 0) {
             // The banner observes the work's counters itself; this body only reads `session.work`.
             if session.work != nil || session.originals != nil {
-                ProgressBanner(work: session.work, originals: session.originals)
+                ProgressBanner(work: session.work, originals: session.originals, store: session.store)
             }
             content.frame(maxWidth: .infinity, maxHeight: .infinity)
         }

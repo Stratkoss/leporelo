@@ -175,6 +175,58 @@ public struct ProjectPackage: Sendable {
         return candidate
     }
 
+    /// The regular files in `originals/` with their sizes in bytes (name -> size); empty when the
+    /// directory cannot be read. One directory listing, no file is opened.
+    public func originalFileSizes() -> [String: Int] {
+        let directory = url.appendingPathComponent(Self.originalsDirectory, isDirectory: true)
+        let keys: [URLResourceKey] = [.isRegularFileKey, .fileSizeKey]
+        guard let entries = try? FileManager.default.contentsOfDirectory(
+            at: directory, includingPropertiesForKeys: keys, options: []) else { return [:] }
+        var result: [String: Int] = [:]
+        for entry in entries {
+            guard let values = try? entry.resourceValues(forKeys: Set(keys)), values.isRegularFile == true else { continue }
+            result[entry.lastPathComponent] = values.fileSize ?? 0
+        }
+        return result
+    }
+
+    /// Reconciles the album's original states with the files in `originals/` (`fileSizes`, as
+    /// `originalFileSizes()` lists them) and returns the ids it changed:
+    ///
+    /// - ADOPTION: a photo whose original is not `.stored` but that has a NON-EMPTY file named
+    ///   exactly `<id>.<ext>` (a valid extension, so "abc" never takes "abcd.jpg" or "abc.e.jpg")
+    ///   becomes `.stored` with that file (several candidates: the first by name). A file only
+    ///   appears there through `storeOriginal`'s atomic rename of a complete, synced file, so it
+    ///   is a whole original whose state was never recorded (a download finished but its state
+    ///   was lost with a cancelled work or a crash). Without adoption the photo would download
+    ///   again and, once gone from Photos, end `.unavailable` with its only copy orphaned.
+    /// - A `.stored` original whose file in `originals/` is zero-length is `.missing` (then adopted
+    ///   from another complete file if there is one). Files not listed are left to the caller.
+    @discardableResult
+    public static func adoptOriginals(in album: inout Album, fileSizes: [String: Int]) -> Set<PhotoID> {
+        var changed = Set<PhotoID>()
+        for (id, photo) in album.photos {
+            var state = photo.originalState
+            if case .stored(let relative) = state, relative.hasPrefix("\(originalsDirectory)/"),
+               fileSizes[String(relative.dropFirst(originalsDirectory.count + 1))] == 0 {
+                state = .missing
+            }
+            if case .stored = state {} else {
+                let prefix = "\(id)."
+                let candidate = fileSizes.keys.sorted().first { name in
+                    guard name.hasPrefix(prefix), let size = fileSizes[name], size > 0 else { return false }
+                    return (try? validate(ext: String(name.dropFirst(prefix.count)))) != nil
+                }
+                if let candidate { state = .stored(relativePath: "\(originalsDirectory)/\(candidate)") }
+            }
+            if state != photo.originalState {
+                album.photos[id]?.originalState = state
+                changed.insert(id)
+            }
+        }
+        return changed
+    }
+
     // MARK: Thumbnails
 
     /// Stores an upright image as JPEG (quality 0.85), downscaled to at most 1024 px on the long
@@ -296,6 +348,11 @@ public struct ProjectPackage: Sendable {
             if let staging { try? fm.removeItem(at: staging) }
         }
         try data.write(to: temp, options: [])
+        // On disk before the rename, so a file in the package is never a torn one after a crash
+        // (`adoptOriginals` relies on that). fsync, not F_FULLFSYNC: enough against a crash.
+        let handle = try FileHandle(forWritingTo: temp)
+        defer { try? handle.close() }
+        try handle.synchronize()
         try writeCoordinator.coordinateWriting(at: destination) { [temp] target in
             try Self.moveIntoPlace(temp, target)
         }

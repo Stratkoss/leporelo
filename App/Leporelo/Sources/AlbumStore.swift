@@ -31,10 +31,21 @@ final class AlbumStore {
     @ObservationIgnored private let snapshotBox: AlbumSnapshotBox
     /// Marks the document changed for edits that register no undo (set by `AlbumDocument.bind`).
     @ObservationIgnored var markChanged: (@MainActor () -> Void)?
-    /// Saves the document now (set by `AlbumDocument.bind`; see `requestAutosave`).
-    @ObservationIgnored var autosaveHandler: (@MainActor () async -> Void)?
+    /// Saves the document now and returns whether that worked (set by `AlbumDocument.bind`; see
+    /// `requestAutosave`).
+    @ObservationIgnored var autosaveHandler: (@MainActor () async -> Bool)?
     /// How long `requestAutosave` waits so a burst of background flushes makes one save.
     @ObservationIgnored var autosaveDelay: Duration = .seconds(3)
+    /// The wait while originals download (every flush would otherwise save every few seconds).
+    @ObservationIgnored var autosaveBusyDelay: Duration = .seconds(10)
+    /// Set by `OriginalsWork` while downloads run.
+    @ObservationIgnored var backgroundDownloadsRunning = false
+    /// The delay `requestAutosave` uses now.
+    var effectiveAutosaveDelay: Duration { backgroundDownloadsRunning ? autosaveBusyDelay : autosaveDelay }
+    /// Explicit autosaves that failed in a row (reset by a success).
+    @ObservationIgnored private var autosaveFailures = 0
+    /// Three explicit autosaves in a row failed: the banner says "Ukládání se nezdařilo".
+    private(set) var autosaveFailing = false
     /// Saves made through `autosaveHandler` (tests).
     @ObservationIgnored private(set) var autosaveCount = 0
     /// The scheduled autosave (nil once it started: later requests schedule the next one).
@@ -166,17 +177,23 @@ final class AlbumStore {
     /// it). Does nothing without an `autosaveHandler` (a store no document is bound to).
     func requestAutosave() {
         guard autosaveHandler != nil, autosaveTask == nil else { return }
-        let delay = autosaveDelay
+        let delay = effectiveAutosaveDelay
         autosaveTask = Task { [weak self] in
             try? await Task.sleep(for: delay)
             guard let self, !Task.isCancelled else { return }
             self.autosaveTask = nil
             guard let handler = self.autosaveHandler else { return }
             self.autosaveCount += 1
-            await handler()
+            let saved = await handler()
+            self.autosaveFailures = saved ? 0 : self.autosaveFailures + 1
+            let failing = self.autosaveFailures >= Self.autosaveFailuresShown
+            if failing != self.autosaveFailing { self.autosaveFailing = failing }
         }
         lastAutosave = autosaveTask
     }
+
+    /// Failed explicit autosaves in a row before the banner shows it.
+    static let autosaveFailuresShown = 3
 
     /// Returns when the requested autosaves have run (tests).
     func waitForPendingAutosave() async {

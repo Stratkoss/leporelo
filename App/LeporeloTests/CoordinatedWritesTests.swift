@@ -97,6 +97,10 @@ struct CoordinatedWritesTests {
         #expect(FileManager.default.fileExists(atPath: fixture.url.appendingPathComponent("originals/w1.jpg").path))
     }
 
+    /// SAFETY NET for `DocumentPackageWrites` (the Objective-C `performSynchronousFileAccess` call
+    /// and the presenter choice rest on measured AppKit behaviour): it MUST stay in the default
+    /// `make test-app` run, so an AppKit change that breaks the serialization fails here.
+    ///
     /// The Task 17 race: originals written while the document autosaves repeatedly all survive,
     /// and the document does not see its package as changed by another application (its
     /// recorded modification date matches the package on disk).

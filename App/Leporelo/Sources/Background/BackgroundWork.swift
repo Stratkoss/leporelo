@@ -16,6 +16,8 @@ enum BackgroundActivity: Equatable, Sendable {
     case sourceUnavailable
     /// Originals that could not be downloaded ("Stáhnout znovu" retries them).
     case failedOriginals(Int)
+    /// Explicit autosaves failed several times in a row.
+    case autosaveFailed
 }
 
 /// The background work of ONE bound `AlbumStore` (Task 17 contract): image analysis, then the

@@ -44,8 +44,14 @@ final class OriginalsWork {
         var total: Int
     }
 
-    /// The current wave of downloads (nil when nothing runs).
-    private(set) var progress: Progress?
+    /// The current wave of downloads (nil when nothing runs). Also tells the store, which then
+    /// autosaves less often (`AlbumStore.autosaveBusyDelay`).
+    private(set) var progress: Progress? {
+        didSet {
+            let running = progress != nil && !isCancelled
+            if store?.backgroundDownloadsRunning != running { store?.backgroundDownloadsRunning = running }
+        }
+    }
     /// Something is wanted but there is no source to read it from.
     private(set) var sourceUnavailable = false
     /// Wanted photos whose original could not be downloaded (`.unavailable`, or `.missing` after
@@ -64,6 +70,9 @@ final class OriginalsWork {
     @ObservationIgnored private var attempts: [PhotoID: Int] = [:]
     @ObservationIgnored private var started = false
     @ObservationIgnored private(set) var isCancelled = false
+    /// Cancelled with `keepingResults`: states that were downloaded (also ones arriving after the
+    /// cancel) are still written to the store.
+    @ObservationIgnored private var keepsResults = false
     /// Store mutations written by this work (tests).
     @ObservationIgnored private(set) var flushCount = 0
 
@@ -85,14 +94,33 @@ final class OriginalsWork {
         storeChanged()
     }
 
-    func cancel() {
+    /// Stops downloading.
+    ///
+    /// - `keepingResults: true` (the SAME live store goes on: window closed, work restarted): the
+    ///   collected states are written now and results that arrive after the cancel (downloads in
+    ///   flight that still finish) are written too, so a downloaded original is never left without
+    ///   its `.stored` state.
+    /// - `false` (the store is a dead end after a reload): nothing more is written to it. A file
+    ///   that was stored meanwhile is adopted by the next work (`adoptStoredFiles`) or on open
+    ///   (`AlbumDocument.reconcilingOriginals`), never downloaded again.
+    func cancel(keepingResults: Bool = false) {
         guard !isCancelled else { return }
+        keepsResults = keepingResults
+        if keepingResults { flush() }
         isCancelled = true
-        pending.removeAll()
+        if !keepingResults { pending.removeAll() }
         runTask?.cancel()
         flushTask?.cancel()
+        flushTask = nil
         enqueueTasks.values.forEach { $0.cancel() }
         progress = nil
+        store?.backgroundDownloadsRunning = false
+    }
+
+    /// Returns when the download run has ended (also after a cancel; tests).
+    func waitUntilFinished() async {
+        while let task = runTask ?? enqueueTasks.values.first { await task.value }
+        flush()
     }
 
     /// "Stáhnout znovu": every wanted photo that failed gets another chance (and a fresh automatic
@@ -175,11 +203,27 @@ final class OriginalsWork {
             return
         }
         let ids = Self.toEnqueue(in: album, inFlight: inFlight, attempts: attempts, autoAttempts: options.autoAttempts)
-        if !ids.isEmpty { enqueue(ids) }
+        if !ids.isEmpty { enqueue(adoptStoredFiles(ids)) }
+    }
+
+    /// Before anything is downloaded: photos whose complete original is already in `originals/`
+    /// (a download whose state was lost) are marked `.stored` in ONE store write instead of being
+    /// downloaded again (which fails once the photo has left Photos). Returns the rest.
+    private func adoptStoredFiles(_ ids: [PhotoID]) -> [PhotoID] {
+        guard let store else { return ids }
+        var album = store.album
+        let changed = ProjectPackage.adoptOriginals(in: &album, fileSizes: store.package.originalFileSizes())
+        let adopted = changed.filter { if case .stored = album.photos[$0]?.originalState { true } else { false } }
+        guard !changed.isEmpty else { return ids }
+        let states = Dictionary(uniqueKeysWithValues: changed.compactMap { id in
+            album.photos[id].map { (id, $0.originalState) }
+        })
+        store.setOriginalStates(states)
+        return ids.filter { !adopted.contains($0) }
     }
 
     private func enqueue(_ ids: [PhotoID]) {
-        guard let downloader, !ids.isEmpty else { return }
+        guard let downloader, !ids.isEmpty, !isCancelled else { return }
         for id in ids {
             inFlight.insert(id)
             attempts[id, default: 0] += 1
@@ -200,8 +244,8 @@ final class OriginalsWork {
                 album: { await self.currentAlbum() },
                 onStateChange: { id, state in await self.received(state, for: id) })
             self.runTask = nil
-            guard !self.isCancelled else { return }
             self.flush()
+            guard !self.isCancelled else { return }
             if await downloader.queuedCount > 0 {
                 self.ensureRunning()
             } else if self.runTask == nil, self.enqueueTasks.isEmpty {
@@ -221,7 +265,13 @@ final class OriginalsWork {
     }
 
     private func received(_ state: OriginalState, for id: PhotoID) {
-        guard !isCancelled else { return }
+        if isCancelled {
+            // Late results for the same live store are written right away, never dropped.
+            guard keepsResults else { return }
+            pending[id] = state
+            flush()
+            return
+        }
         pending[id] = state
         if state != .downloading {
             inFlight.remove(id)
@@ -244,7 +294,7 @@ final class OriginalsWork {
     private func flush() {
         flushTask?.cancel()
         flushTask = nil
-        guard !isCancelled, !pending.isEmpty, let store else { return }
+        guard !isCancelled || keepsResults, !pending.isEmpty, let store else { return }
         let batch = pending
         pending.removeAll()
         if store.setOriginalStates(batch) { flushCount += 1 }

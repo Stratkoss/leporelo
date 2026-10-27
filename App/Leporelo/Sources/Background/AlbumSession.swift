@@ -31,19 +31,32 @@ final class AlbumSession {
 
     /// Binds to `document`'s store for `fileURL` and starts that store's background work. Also
     /// called again after a move (same store, new package URL: the work restarts on the new URL).
+    ///
+    /// The previous originals download keeps its results (writes what it downloaded, also late)
+    /// only when the binding keeps the SAME store (a move); for a new store (revert, reload) the old
+    /// store is a dead end and gets nothing, and the new work adopts the stored files instead.
     func bind(document: AlbumDocument, fileURL: URL?, sourceProvider: @escaping PhotoSourceProvider) {
-        close()
+        let previous = store
+        previous?.flushPendingEdits()
+        let oldWork = work, oldOriginals = originals
+        work = nil
+        originals = nil
         store = nil
         self.sourceProvider = sourceProvider
-        guard let fileURL else { return }
-        do {
-            let store = try document.bind(to: fileURL)
-            self.store = store
-            bindError = nil
-            startWork(for: store, options: options)
-        } catch {
-            bindError = error.localizedDescription
+        var bound: AlbumStore?
+        if let fileURL {
+            do {
+                bound = try document.bind(to: fileURL)
+                bindError = nil
+            } catch {
+                bindError = error.localizedDescription
+            }
         }
+        oldWork?.cancel()
+        oldOriginals?.cancel(keepingResults: bound != nil && bound === previous)
+        guard let bound else { return }
+        store = bound
+        startWork(for: bound, options: options)
     }
 
     private func startWork(for store: AlbumStore, options: BackgroundWork.Options) {
@@ -62,7 +75,7 @@ final class AlbumSession {
     func restartWork(recommends: Bool = true) {
         guard let store else { return }
         work?.cancel()
-        originals?.cancel()
+        originals?.cancel(keepingResults: true)
         var options = self.options
         options.recommends = options.recommends && recommends
         startWork(for: store, options: options)
@@ -101,11 +114,13 @@ final class AlbumSession {
 
     /// Commits the editor's pending sessions into the store, then cancels the background work
     /// (window closed, or before a rebind after revert/reload/move).
+    /// The store stays alive with its document, so the originals download writes what it has
+    /// downloaded (`keepingResults`).
     func close() {
         store?.flushPendingEdits()
         work?.cancel()
         work = nil
-        originals?.cancel()
+        originals?.cancel(keepingResults: true)
         originals = nil
     }
 }
