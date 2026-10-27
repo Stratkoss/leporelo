@@ -12,6 +12,8 @@ final class PhotoCell: NSCollectionViewItem {
 
     /// Called with the series id when the chip is clicked.
     var onSeriesChip: ((String) -> Void)?
+    /// Toggles the photo (VoiceOver "press").
+    var onPress: (() -> Void)?
 
     private let imageLayer = CALayer()
     private let checkmark = NSImageView()
@@ -22,7 +24,12 @@ final class PhotoCell: NSCollectionViewItem {
     private(set) var item: TriageItem?
 
     override func loadView() {
-        let root = NSView(frame: NSRect(x: 0, y: 0, width: Self.side, height: Self.side))
+        let root = PhotoCellView(frame: NSRect(x: 0, y: 0, width: Self.side, height: Self.side))
+        root.onPress = { [weak self] in
+            guard let self, let item = self.item, item.isSelectable, let onPress = self.onPress else { return false }
+            onPress()
+            return true
+        }
         root.wantsLayer = true
         root.layer?.cornerRadius = 6
         root.layer?.masksToBounds = true
@@ -71,7 +78,7 @@ final class PhotoCell: NSCollectionViewItem {
         ])
 
         root.setAccessibilityElement(true)
-        root.setAccessibilityRole(.image)
+        root.setAccessibilityRole(.checkBox)
         view = root
     }
 
@@ -110,7 +117,11 @@ final class PhotoCell: NSCollectionViewItem {
             chip.isHidden = true
         }
 
+        // A checkbox (value 1 = vybraná) that VoiceOver can press; videos are plain images.
         view.setAccessibilityLabel(item.accessibilityLabel)
+        view.setAccessibilityRole(item.isSelectable ? .checkBox : .image)
+        view.setAccessibilityValue(item.isSelectable ? NSNumber(value: selected ? 1 : 0) : nil)
+        view.setAccessibilityHelp(item.isSelectable ? (selected ? "Stiskem fotku vyřadíte" : "Stiskem fotku vyberete") : nil)
         updateFocusRing()
 
         if samePhoto, imageLayer.contents != nil { return }
@@ -121,8 +132,9 @@ final class PhotoCell: NSCollectionViewItem {
         if !samePhoto { imageLayer.contents = nil }
         loadTask?.cancel()
         let id = item.id
+        let maxPixel = ThumbnailLoader.maxPixel(for: photo)
         loadTask = Task { [weak self] in
-            let image = await loader.load(id, from: package)
+            let image = await loader.load(id, maxPixel: maxPixel, from: package)
             guard !Task.isCancelled, let self, self.item?.id == id, let image else { return }
             self.imageLayer.contents = image
         }
@@ -176,6 +188,15 @@ final class PhotoCell: NSCollectionViewItem {
         let image = NSImage(systemSymbolName: name, accessibilityDescription: nil)
             ?? NSImage(systemSymbolName: "exclamationmark.circle", accessibilityDescription: nil)
         return image?.withSymbolConfiguration(config)
+    }
+}
+
+/// The cell's root view: exposes VoiceOver's press action (toggles the photo).
+final class PhotoCellView: NSView {
+    var onPress: (() -> Bool)?
+
+    override func accessibilityPerformPress() -> Bool {
+        onPress?() ?? false
     }
 }
 

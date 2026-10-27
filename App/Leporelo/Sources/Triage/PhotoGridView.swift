@@ -8,13 +8,14 @@ import SwiftUI
 /// grid may not scroll 3 000 cells smoothly and fps cannot be measured without a real library.
 ///
 /// Updates are incremental: the item ids go through a diffable data source (only inserted or
-/// removed cells change), and cells whose `TriageItem` changed (selection, badges, series chip)
-/// are reconfigured in place; a selection toggle never reloads the grid. Thumbnails load
-/// asynchronously in the cell (`ThumbnailLoader`), cancelled when the cell is reused.
+/// removed cells change), and every instantiated cell whose `TriageItem` changed (selection,
+/// badges, series chip) is reconfigured in place; a selection toggle never reloads the grid.
+/// Thumbnails load asynchronously in the cell (`ThumbnailLoader`), cancelled when it is reused.
 ///
-/// Interaction: a click (mouse up without a drag) toggles the photo; space toggles the
-/// keyboard-focused cell; the series chip expands or collapses; dragging a cell carries
-/// `PhotoDrag.payload` as plain text, which the day list accepts.
+/// Interaction: a click (mouse down and up on the same cell, no drag) toggles the photo
+/// (`GridClick`, decided in `TriageCollectionView`); space toggles the keyboard-focused cell; the
+/// series chip (a button) expands or collapses; VoiceOver "press" toggles; dragging a cell
+/// carries `PhotoDrag.payload` as plain text, which the day list accepts.
 struct PhotoGridView: NSViewRepresentable {
     let items: [TriageItem]
     /// The shown entry: switching entries scrolls to the top without animation.
@@ -38,7 +39,9 @@ struct PhotoGridView: NSViewRepresentable {
         collectionView.allowsMultipleSelection = false
         collectionView.backgroundColors = [.clear]
         collectionView.register(PhotoCell.self, forItemWithIdentifier: PhotoCell.identifier)
-        collectionView.setDraggingSourceOperationMask(.move, forLocal: true)
+        // SwiftUI's dropDestination proposes a copy, so local drags offer move, copy and generic;
+        // nothing is offered outside the app.
+        collectionView.setDraggingSourceOperationMask([.move, .copy, .generic], forLocal: true)
         collectionView.setDraggingSourceOperationMask([], forLocal: false)
         collectionView.setAccessibilityLabel("Fotky dne")
 
@@ -63,14 +66,13 @@ struct PhotoGridView: NSViewRepresentable {
     }
 
     @MainActor
-    final class Coordinator: NSObject, NSCollectionViewDelegate, NSCollectionViewPrefetching,
-                             NSGestureRecognizerDelegate {
+    final class Coordinator: NSObject, NSCollectionViewDelegate, NSCollectionViewPrefetching {
         let loader = ThumbnailLoader()
         var onToggle: (PhotoID) -> Void = { _ in }
         var onSeriesChip: (String) -> Void = { _ in }
         var package: ProjectPackage?
 
-        private weak var collectionView: NSCollectionView?
+        private weak var collectionView: TriageCollectionView?
         private var dataSource: NSCollectionViewDiffableDataSource<Int, PhotoID>?
         private var itemsByID: [PhotoID: TriageItem] = [:]
         private var ids: [PhotoID] = []
@@ -82,16 +84,17 @@ struct PhotoGridView: NSViewRepresentable {
             collectionView.delegate = self
             collectionView.prefetchDataSource = self
             collectionView.onSpace = { [weak self] in self?.toggleFocused() }
+            collectionView.onClick = { [weak self] indexPath in self?.toggle(at: indexPath) }
+            collectionView.isVideoAt = { [weak self] indexPath in
+                guard let self, let id = self.dataSource?.itemIdentifier(for: indexPath) else { return false }
+                return self.itemsByID[id]?.isSelectable == false
+            }
             dataSource = NSCollectionViewDiffableDataSource<Int, PhotoID>(collectionView: collectionView) {
                 [weak self] collectionView, indexPath, id in
                 let cell = collectionView.makeItem(withIdentifier: PhotoCell.identifier, for: indexPath)
                 if let self, let cell = cell as? PhotoCell { self.configure(cell, id: id) }
                 return cell
             }
-            let click = NSClickGestureRecognizer(target: self, action: #selector(clicked(_:)))
-            click.delaysPrimaryMouseButtonEvents = false // the collection view still sees mouse down (drag)
-            click.delegate = self
-            collectionView.addGestureRecognizer(click)
         }
 
         func apply(_ items: [TriageItem], entry: DayEntryID?) {
@@ -113,45 +116,34 @@ struct PhotoGridView: NSViewRepresentable {
             if entryChanged {
                 collectionView.deselectAll(nil)
                 collectionView.scroll(.zero)
-                return
             }
-            // Reconfigure only the visible cells whose item changed (others are configured when
-            // they scroll in).
-            for indexPath in collectionView.indexPathsForVisibleItems() {
-                guard let id = dataSource.itemIdentifier(for: indexPath),
-                      previous[id] != itemsByID[id],
+            // Reconfigure every instantiated cell (visible or prepared off screen) whose item
+            // changed; ids new to the snapshot were configured by the cell provider.
+            for item in items {
+                guard let old = previous[item.id], old != item,
+                      let indexPath = dataSource.indexPath(for: item.id),
                       let cell = collectionView.item(at: indexPath) as? PhotoCell else { continue }
-                configure(cell, id: id)
+                configure(cell, id: item.id)
             }
         }
 
         private func configure(_ cell: PhotoCell, id: PhotoID) {
             guard let item = itemsByID[id], let package else { return }
             cell.onSeriesChip = { [weak self] seriesID in self?.onSeriesChip(seriesID) }
+            cell.onPress = { [weak self] in self?.onToggle(id) }
             cell.configure(item, loader: loader, package: package)
         }
 
         // MARK: Click and keyboard
 
-        @objc private func clicked(_ recognizer: NSClickGestureRecognizer) {
-            guard recognizer.state == .ended, let collectionView,
-                  let indexPath = collectionView.indexPathForItem(at: recognizer.location(in: collectionView)),
-                  let id = dataSource?.itemIdentifier(for: indexPath) else { return }
+        private func toggle(at indexPath: IndexPath) {
+            guard let id = dataSource?.itemIdentifier(for: indexPath) else { return }
             onToggle(id)
-        }
-
-        /// Clicks on the series chip (a button) belong to the button, not to the toggle.
-        func gestureRecognizer(_ recognizer: NSGestureRecognizer,
-                               shouldAttemptToRecognizeWith event: NSEvent) -> Bool {
-            guard let collectionView else { return false }
-            let point = collectionView.convert(event.locationInWindow, from: nil)
-            return !(collectionView.hitTest(point) is NSButton)
         }
 
         private func toggleFocused() {
-            guard let indexPath = collectionView?.selectionIndexPaths.first,
-                  let id = dataSource?.itemIdentifier(for: indexPath) else { return }
-            onToggle(id)
+            guard let indexPath = collectionView?.selectionIndexPaths.first else { return }
+            toggle(at: indexPath)
         }
 
         // MARK: Drag source
@@ -165,11 +157,21 @@ struct PhotoGridView: NSViewRepresentable {
             return PhotoDrag.payload(for: id) as NSString
         }
 
+        /// A drag began during this mouse down: the mouse up must not toggle.
+        func collectionView(_ collectionView: NSCollectionView, draggingSession session: NSDraggingSession,
+                            willBeginAt screenPoint: NSPoint, forItemsAt indexPaths: Set<IndexPath>) {
+            (collectionView as? TriageCollectionView)?.didStartDrag = true
+        }
+
         // MARK: Prefetching
 
         func collectionView(_ collectionView: NSCollectionView, prefetchItemsAt indexPaths: [IndexPath]) {
             guard let package else { return }
-            loader.prefetch(indexPaths.compactMap { dataSource?.itemIdentifier(for: $0) }, from: package)
+            let requests = indexPaths.compactMap { indexPath -> (id: PhotoID, maxPixel: Int)? in
+                guard let id = dataSource?.itemIdentifier(for: indexPath), let item = itemsByID[id] else { return nil }
+                return (id, ThumbnailLoader.maxPixel(for: item.photo))
+            }
+            loader.prefetch(requests, from: package)
         }
 
         func collectionView(_ collectionView: NSCollectionView, cancelPrefetchingForItemsAt indexPaths: [IndexPath]) {
@@ -178,9 +180,47 @@ struct PhotoGridView: NSViewRepresentable {
     }
 }
 
-/// Space toggles the keyboard-focused cell (arrow keys move the focus).
+/// When a mouse down / mouse up pair on the grid toggles a photo: both on the same cell, no drag
+/// session began in between, and the photo can be selected (videos cannot; the model rejects
+/// them too).
+enum GridClick {
+    static func shouldToggle(down: IndexPath?, up: IndexPath?, didStartDrag: Bool, isVideo: Bool) -> Bool {
+        guard let down, down == up else { return false }
+        return !didStartDrag && !isVideo
+    }
+}
+
+/// The grid's collection view: decides clicks itself (see `GridClick`) so that a drag never also
+/// toggles; space toggles the keyboard-focused cell (arrow keys move the focus).
+///
+/// `super.mouseDown` keeps selection and drag tracking. AppKit may either return from it before
+/// the mouse goes up (then `mouseUp` finishes the click) or track until mouse up itself (then the
+/// current event is the mouse up and the click is finished right after `super`); either way it is
+/// finished at most once per mouse down.
 final class TriageCollectionView: NSCollectionView {
     var onSpace: (() -> Void)?
+    var onClick: ((IndexPath) -> Void)?
+    var isVideoAt: ((IndexPath) -> Bool)?
+    /// Set by the delegate when a dragging session begins; reset on every mouse down.
+    var didStartDrag = false
+
+    private var downIndexPath: IndexPath?
+    private var isTrackingClick = false
+
+    override func mouseDown(with event: NSEvent) {
+        didStartDrag = false
+        downIndexPath = indexPath(at: event)
+        isTrackingClick = true
+        super.mouseDown(with: event)
+        if isTrackingClick, let current = NSApp.currentEvent, current.type == .leftMouseUp {
+            finishClick(current)
+        }
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        super.mouseUp(with: event)
+        if isTrackingClick { finishClick(event) }
+    }
 
     override func keyDown(with event: NSEvent) {
         if event.charactersIgnoringModifiers == " ", let onSpace {
@@ -188,5 +228,20 @@ final class TriageCollectionView: NSCollectionView {
         } else {
             super.keyDown(with: event)
         }
+    }
+
+    private func finishClick(_ upEvent: NSEvent) {
+        isTrackingClick = false
+        let down = downIndexPath
+        downIndexPath = nil
+        let up = indexPath(at: upEvent)
+        let isVideo = down.map { isVideoAt?($0) ?? false } ?? false
+        guard GridClick.shouldToggle(down: down, up: up, didStartDrag: didStartDrag, isVideo: isVideo),
+              let down else { return }
+        onClick?(down)
+    }
+
+    private func indexPath(at event: NSEvent) -> IndexPath? {
+        indexPathForItem(at: convert(event.locationInWindow, from: nil))
     }
 }

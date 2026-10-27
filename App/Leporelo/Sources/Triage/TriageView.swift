@@ -125,15 +125,26 @@ struct TriageView: View {
     }
 }
 
-/// Owns the `TriageModel` of one store; the window recreates it (`.id`) when the store changes.
+/// Owns the `TriageModel` of one store. The model is created once per store identity (on appear
+/// and when the store changes), never in `init`: `State(initialValue:)` would evaluate a throwaway
+/// model on every body evaluation of the window.
 struct TriageContainer: View {
-    @State private var model: TriageModel
-
-    init(store: AlbumStore) {
-        _model = State(initialValue: TriageModel(store: store))
-    }
+    let store: AlbumStore
+    @State private var model: TriageModel?
 
     var body: some View {
-        TriageView(model: model)
+        Group {
+            if let model, model.store === store {
+                TriageView(model: model)
+            } else {
+                Color.clear
+            }
+        }
+        .onAppear(perform: makeModel)
+        .onChange(of: ObjectIdentifier(store)) { makeModel() }
+    }
+
+    private func makeModel() {
+        if model?.store !== store { model = TriageModel(store: store) }
     }
 }

@@ -179,23 +179,28 @@ final class TriageModel {
     let store: AlbumStore
     /// The window's undo manager (set by the view); nil means edits without undo.
     @ObservationIgnored var undoManager: UndoManager?
-    /// The entry the grid shows. May point at an entry that no longer exists (its last photo was
-    /// moved away); `visibleEntry` falls back to the first entry then.
+    /// The entry the user chose; nil until they choose one. May point at an entry that no longer
+    /// exists (its last photo was moved away); `visibleEntry` falls back to the first entry then.
     var currentEntry: DayEntryID? = nil
     /// Shows only photos that are selected or recommended for their day.
     var showOnlyRecommended = false
     /// Series (by `seriesID`) shown with all their members.
     var expandedSeries: Set<String> = []
 
+    /// The shown day (`visibleEntry`); nil when "Bez data" or nothing is shown.
     var currentDay: DayKey? {
-        get { if case .day(let key) = currentEntry { key } else { nil } }
+        get { if case .day(let key) = visibleEntry { key } else { nil } }
         set { currentEntry = newValue.map { .day($0) } }
     }
 
+    /// Cheap: nothing is grouped until the first query (`visibleEntry` falls back to the first
+    /// entry while `currentEntry` is nil).
     init(store: AlbumStore) {
         self.store = store
-        currentEntry = dayEntries.first?.id
     }
+
+    /// Whether the album has been grouped yet (tests: `init` must not do it).
+    var hasDerivedData: Bool { derivedRevision >= 0 }
 
     // MARK: Derived data
 

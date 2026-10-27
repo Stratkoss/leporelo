@@ -280,8 +280,13 @@ struct TriageModelTests {
         ])
         #expect(model.dayEntries.map(\.id) == [.day(june18), .day(june19), .undated])
         #expect(model.items(for: .undated).map(\.photo.id) == ["x"])
-        #expect(model.currentEntry == .day(june18))
+        // init does no grouping: no entry is chosen yet, the first one is shown.
+        #expect(model.currentEntry == nil)
+        #expect(model.visibleEntry == .day(june18))
         #expect(model.currentDay == june18)
+        model.currentDay = june19
+        #expect(model.currentEntry == .day(june19))
+        #expect(model.currentDay == june19)
     }
 
     @Test func undatedPhotoCanBeMovedIntoADay() throws {
@@ -331,11 +336,42 @@ struct TriageModelTests {
     @Test func thumbnailLoaderDecodesAtCellSizeAndCaches() async throws {
         let (_, store, _) = try makeModel([photo("p", minute: 0)])
         let loader = ThumbnailLoader()
-        #expect(await loader.load("p", from: store.package) == nil) // no thumbnail yet: not cached
+        // No thumbnail yet: nothing, and nothing cached.
+        #expect(await loader.load("p", maxPixel: 480, from: store.package) == nil)
         try store.package.storeThumbnail(FakePhotoSource.image(size: 1024, seed: 1), for: "p")
-        let image = try #require(await loader.load("p", from: store.package))
-        #expect(max(image.width, image.height) == ThumbnailLoader.pixelSize)
+        let image = try #require(await loader.load("p", maxPixel: 480, from: store.package))
+        #expect(max(image.width, image.height) == 480)
         #expect(loader.cached("p") != nil)
+    }
+
+    /// Aspect fill into the 160 pt square needs the SHORT side at 320 px on Retina.
+    @Test func thumbnailDecodeSizeKeepsTheShortSideSharp() {
+        #expect(ThumbnailLoader.maxPixel(width: 4000, height: 3000) == 427) // 4:3
+        #expect(ThumbnailLoader.maxPixel(width: 3000, height: 2000) == 480) // 3:2
+        #expect(ThumbnailLoader.maxPixel(width: 2000, height: 3000) == 480) // portrait
+        #expect(ThumbnailLoader.maxPixel(width: 1000, height: 1000) == 320)
+        #expect(ThumbnailLoader.maxPixel(width: 8000, height: 1000) == ProjectPackage.thumbnailMaxPixelSize)
+        #expect(ThumbnailLoader.maxPixel(width: 0, height: 0) == 320) // unknown size
+    }
+
+    // MARK: Grid click decision
+
+    @Test func clickTogglesOnlyAPlainClickOnOneSelectablePhoto() {
+        let a = IndexPath(item: 0, section: 0), b = IndexPath(item: 1, section: 0)
+        #expect(GridClick.shouldToggle(down: a, up: a, didStartDrag: false, isVideo: false))
+        #expect(!GridClick.shouldToggle(down: a, up: a, didStartDrag: true, isVideo: false))
+        #expect(!GridClick.shouldToggle(down: a, up: b, didStartDrag: false, isVideo: false))
+        #expect(!GridClick.shouldToggle(down: a, up: nil, didStartDrag: false, isVideo: false))
+        #expect(!GridClick.shouldToggle(down: nil, up: nil, didStartDrag: false, isVideo: false))
+        #expect(!GridClick.shouldToggle(down: a, up: a, didStartDrag: false, isVideo: true))
+    }
+
+    @Test func modelInitDoesNotGroup() throws {
+        let (_, store, _) = try makeModel([photo("a", minute: 0)])
+        let model = TriageModel(store: store)
+        #expect(!model.hasDerivedData)
+        _ = model.days
+        #expect(model.hasDerivedData)
     }
 
     // MARK: Performance sanity (generous bounds: catches accidental quadratic work only)
