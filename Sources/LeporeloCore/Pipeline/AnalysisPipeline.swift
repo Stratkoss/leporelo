@@ -157,6 +157,9 @@ public actor AnalysisPipeline {
         } catch {
             return Task.isCancelled ? .cancelled(id) : .failed(id)
         }
+        // Not coordinated with an open NSDocument's save: the app's save swap can drop a thumbnail
+        // written mid-save (the app's BackgroundWork re-creates missing ones). TODO(Task 23): write
+        // through an injectable, NSFileCoordinator-coordinated package writer.
         do { try package.storeThumbnail(image, for: id) } catch { return .failed(id) }
         if Task.isCancelled { return .cancelled(id) }
         do {

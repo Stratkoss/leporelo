@@ -203,6 +203,13 @@ final class NewAlbumModel {
         }
     }
 
+    /// Why the save panel must not accept `url`: something already exists there. `createAlbum`
+    /// refuses it too (`alreadyExists`); checking in the panel spares the user a "Replace"
+    /// confirmation that would only end in an error.
+    static func saveLocationProblem(_ url: URL) -> String? {
+        FileManager.default.fileExists(atPath: url.path) ? "Na tomto místě už album je. Zvolte jiný název." : nil
+    }
+
     /// `<title>.leporelo`, with characters Finder or the file system dislike replaced.
     static func packageFileName(for title: String) -> String {
         var name = title.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: "-")

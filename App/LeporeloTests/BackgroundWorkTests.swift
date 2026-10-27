@@ -158,6 +158,77 @@ struct BackgroundWorkTests {
         #expect(store.album == before)
     }
 
+    /// An analysed photo whose thumbnail is gone (dropped by a document save that raced the
+    /// pipeline's write) gets it back on the next bind. That repair is no "first analysis": no
+    /// recommendations, the user's selection stays. The banner counts the repaired photos.
+    @Test func missingThumbnailOfAnAnalysedPhotoIsRegenerated() async throws {
+        let store = try await makeStore(dayOfPhotos(6))
+        let first = makeWork(store, source: FakePhotoSource())
+        first.start()
+        await first.waitUntilFinished()
+        #expect(first.recommendationsApplied)
+        let lost = try #require(store.album.photos.keys.sorted().first)
+        try FileManager.default.removeItem(at: BackgroundWork.thumbnailURL(for: lost, in: store.package))
+        #expect(store.package.thumbnail(for: lost) == nil)
+        let undo = makeUndoManager()
+        undo.beginUndoGrouping()
+        try store.apply(.setSelected(lost, !(store.album.photos[lost]?.isSelected ?? false)), undoManager: undo)
+        undo.endUndoGrouping()
+        let selection = store.album.photos.mapValues(\.isSelected)
+
+        let source = FakePhotoSource()
+        source.holdThumbnails()
+        let repair = makeWork(store, source: source)
+        repair.start()
+        try await waitUntil("held repair") { source.heldCalls > 0 }
+        #expect(repair.activity == .analyzing(done: 0, total: 1))
+        source.releaseAll()
+        await repair.waitUntilFinished()
+
+        #expect(source.thumbnailCalls == 1)
+        #expect(store.package.thumbnail(for: lost) != nil)
+        #expect(store.album.photos[lost]?.analysis != nil)
+        #expect(!repair.recommendationsApplied)
+        #expect(store.album.photos.mapValues(\.isSelected) == selection)
+    }
+
+    /// A thumbnail lost DURING the session is repaired in the same session by one extra pass.
+    @Test func thumbnailLostDuringTheSessionIsRepairedOnce() async throws {
+        let store = try await makeStore(dayOfPhotos(3))
+        let ids = store.album.photos.values.sorted(by: Photo.chronological).map(\.id)
+        let lostURL = BackgroundWork.thumbnailURL(for: ids[0], in: store.package)
+        let lastSource = try #require(store.album.photos[ids[2]]?.sourceIdentifier)
+        let source = FakePhotoSource()
+        source.onThumbnail = { identifier in
+            // While the last photo is fetched, the first one's thumbnail (stored by then) vanishes.
+            if identifier == lastSource { try? FileManager.default.removeItem(at: lostURL) }
+        }
+        let work = BackgroundWork(store: store, sourceProvider: { _ in source }, placeResolver: noPlaces,
+                                  options: .init(batchSize: 50, flushInterval: .seconds(3600), concurrency: 1))
+        work.start()
+        await work.waitUntilFinished()
+        #expect(source.thumbnailCalls == 4)  // 3 + the one repair
+        #expect(store.package.thumbnail(for: ids[0]) != nil)
+        #expect(work.recommendationsApplied)
+    }
+
+    /// Nothing missing: no thumbnail is fetched and nothing is written.
+    @Test func completeAlbumNeedsNoWork() async throws {
+        let store = try await makeStore(dayOfPhotos(3))
+        let first = makeWork(store, source: FakePhotoSource())
+        first.start()
+        await first.waitUntilFinished()
+        var marks = 0
+        store.markChanged = { marks += 1 }
+        let source = FakePhotoSource()
+        let again = makeWork(store, source: source)
+        again.start()
+        await again.waitUntilFinished()
+        #expect(source.thumbnailCalls == 0)
+        #expect(again.flushCount == 0 && marks == 0)
+        #expect(again.activity == .idle)
+    }
+
     /// Re-binding (revert, reload) cancels the old store's work; only the new store gets results.
     @Test func reboundSessionCancelsTheOldWork() async throws {
         let store = try await makeStore(dayOfPhotos(6))
@@ -239,6 +310,8 @@ struct BackgroundWorkTests {
         let done = try #require(album.photos.keys.sorted().first)
         album.photos[done]?.analysis = PhotoAnalysis(aesthetic: 0.5, sharpness: 900, isUtility: false,
                                                      faceRects: [], closedEyes: false, featurePrint: nil)
+        // Analysed in an earlier session, so its thumbnail is there (else it would be repaired).
+        try store.package.storeThumbnail(FakePhotoSource.image(size: 64, seed: 1), for: done)
         store.replaceWithoutUndo(album: album)
         let source = FakePhotoSource()
         let work = makeWork(store, source: source)

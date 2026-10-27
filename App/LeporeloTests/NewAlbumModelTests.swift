@@ -159,6 +159,15 @@ struct NewAlbumModelTests {
         #expect(NewAlbumModel.packageFileName(for: ".skryté") == "skryté.leporelo")
     }
 
+    /// The save panel refuses an existing location up front (instead of "Replace" then an error).
+    @Test func saveLocationMustNotExist() throws {
+        let dir = makeTempDir()
+        let existing = dir.appendingPathComponent("Staré.leporelo")
+        _ = try ProjectPackage.create(at: existing, album: makeTestAlbum())
+        #expect(NewAlbumModel.saveLocationProblem(existing) == "Na tomto místě už album je. Zvolte jiný název.")
+        #expect(NewAlbumModel.saveLocationProblem(dir.appendingPathComponent("Nové.leporelo")) == nil)
+    }
+
     @Test func photoAccessExplainsEveryStatus() {
         #expect(PhotoAccess(.authorized) == .authorized)
         #expect(PhotoAccess(.authorized).allowsForm)
@@ -167,7 +176,11 @@ struct NewAlbumModelTests {
         }
         #expect(PhotoAccess(.notDetermined).actionTitle == "Povolit přístup k Fotkám")
         #expect(PhotoAccess(.denied).actionTitle == "Otevřít Nastavení systému")
-        #expect(PhotoAccess(.restricted) == .denied)
+        // Restricted (parental controls, MDM): the user cannot change it, so no Settings button.
+        #expect(PhotoAccess(.restricted) == .restricted)
+        #expect(PhotoAccess(.restricted).actionTitle == nil)
+        #expect(PhotoAccess(.restricted).explanation.contains("omezen"))
+        #expect(PhotoAccess(.limited).actionTitle == "Otevřít Nastavení systému")
         #expect(PhotoAccess(.limited).explanation.contains("úplný přístup"))
         #expect(PhotoAccess.settingsURL.absoluteString
                 == "x-apple.systempreferences:com.apple.preference.security?Privacy_Photos")

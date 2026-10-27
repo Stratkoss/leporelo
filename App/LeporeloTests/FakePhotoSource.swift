@@ -65,8 +65,13 @@ final class FakePhotoSource: PhotoSource, @unchecked Sendable {
         }.get()
     }
 
+    /// Called at the start of every `thumbnail` call with the identifier (tests use it to simulate
+    /// something happening to the package mid-analysis).
+    var onThumbnail: (@Sendable (String) -> Void)?
+
     func thumbnail(for identifier: String, maxPixel: Int) async throws -> CGImage {
         locked { $0.thumbnailCalls += 1 }
+        onThumbnail?(identifier)
         let token = UUID()
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (c: CheckedContinuation<Void, Error>) in

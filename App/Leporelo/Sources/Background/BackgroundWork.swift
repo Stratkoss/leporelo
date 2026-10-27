@@ -27,6 +27,17 @@ enum BackgroundActivity: Equatable, Sendable {
 ///   `batchSize` results or `flushInterval`, and at the end) as ONE no-undo mutation each, because
 ///   every store change publishes a snapshot of the whole album and marks the document edited.
 ///   Progress goes to the cheap `activity` counter only the banner observes.
+/// - Thumbnail self-heal: an analysed photo whose thumbnail file is missing is processed again.
+///   `AnalysisPipeline` writes thumbnails straight into the package, not coordinated with
+///   NSDocument's save, so a thumbnail renamed into `thumbs/` between the save's directory listing
+///   and its package swap is dropped; its photo already has `analysis`, so nothing else would ever
+///   regenerate it. The pipeline gets a COPY of the album in which those photos have no analysis
+///   (the copy is only its input, never written back); their new results go through the normal
+///   batched flush. A repair is not an analysis: it does not count toward the recommendations
+///   trigger, but it does count in the banner's total. After the pass, ONE extra repair pass runs
+///   if a thumbnail went missing during it (bounded: at most one per work, no loops).
+///   TODO(Task 23): the proper fix is NSFileCoordinator-coordinated thumbnail writes through an
+///   injectable package writer; then this repair only covers older packages.
 /// - Recommendations: after an analysis pass that analyzed at least one photo in this session and
 ///   was not cancelled, `AlbumStore.applyRecommendations()` once (it only changes photos the user
 ///   has not decided). Reopening an analyzed album therefore never reruns them.
@@ -54,8 +65,11 @@ final class BackgroundWork {
     @ObservationIgnored private var pending: [PhotoID: PhotoAnalysis] = [:]
     @ObservationIgnored private var lastFlush = ContinuousClock.now
     @ObservationIgnored private var started = false
-    /// Photos analyzed by this work (failures excluded).
+    /// Photos analyzed by this work that had no analysis before (failures and thumbnail repairs
+    /// excluded): what triggers the recommendations.
     @ObservationIgnored private var analyzedCount = 0
+    /// The photos of the current pass that count toward `analyzedCount`.
+    @ObservationIgnored private var countable: Set<PhotoID> = []
     @ObservationIgnored private(set) var isCancelled = false
     /// Number of analysis batches written to the store (tests).
     @ObservationIgnored private(set) var flushCount = 0
@@ -91,7 +105,7 @@ final class BackgroundWork {
             isResolvingPlaces = true
             tasks.append(Task { await self.refinePlaces() })
         }
-        if Self.needsAnalysis(album) {
+        if !Self.analysisWork(album, package: store.package).isEmpty {
             if album.source != nil, let source = sourceProvider(album) {
                 tasks.append(Task { await self.analyze(with: source, package: store.package) })
             } else {
@@ -116,8 +130,34 @@ final class BackgroundWork {
         for task in tasks { await task.value }
     }
 
-    static func needsAnalysis(_ album: Album) -> Bool {
-        album.photos.values.contains { $0.analysis == nil && $0.kind != .video }
+    /// What an analysis pass has to process.
+    struct AnalysisWork: Equatable {
+        /// Non-video photos without analysis.
+        var unanalyzed: Set<PhotoID> = []
+        /// Analysed photos whose thumbnail file is gone (see "Thumbnail self-heal").
+        var missingThumbnails: Set<PhotoID> = []
+
+        var isEmpty: Bool { unanalyzed.isEmpty && missingThumbnails.isEmpty }
+    }
+
+    /// A file-existence check per analysed photo (no decoding).
+    static func analysisWork(_ album: Album, package: ProjectPackage) -> AnalysisWork {
+        var work = AnalysisWork()
+        let files = FileManager.default
+        for (id, photo) in album.photos where photo.kind != .video {
+            if photo.analysis == nil {
+                work.unanalyzed.insert(id)
+            } else if !files.fileExists(atPath: thumbnailURL(for: id, in: package).path) {
+                work.missingThumbnails.insert(id)
+            }
+        }
+        return work
+    }
+
+    /// Where `ProjectPackage.storeThumbnail` puts a photo's thumbnail (`thumbs/<id>.jpg`; Core keeps
+    /// the URL private). Used only for a cheap existence check; a test pins it to Core's layout.
+    nonisolated static func thumbnailURL(for id: PhotoID, in package: ProjectPackage) -> URL {
+        package.url.appendingPathComponent("thumbs", isDirectory: true).appendingPathComponent("\(id).jpg")
     }
 
     static func needsPlaces(_ album: Album) -> Bool {
@@ -128,26 +168,51 @@ final class BackgroundWork {
 
     private func analyze(with source: any PhotoSource, package: ProjectPackage) async {
         guard let album = store?.album else { return }
+        let work = Self.analysisWork(album, package: package)
+        await runPass(over: album, work: work, source: source, package: package)
+        guard !isCancelled, !Task.isCancelled, let store else { return }
+        if analyzedCount > 0 {
+            store.applyRecommendations()
+            recommendationsApplied = true
+        }
+        // HOOK(Task 23): request an explicit autosave here (Task 17 contract addition (b): after
+        // background changes, do not rely on the change count alone). No such API exists yet.
+
+        // One bounded repair pass for thumbnails lost while the first pass ran (e.g. dropped by
+        // an autosave swap). Photos whose analysis failed are not retried here (next session).
+        let current = store.album
+        let lost = Self.analysisWork(current, package: package).missingThumbnails
+        guard !lost.isEmpty else { return }
+        await runPass(over: current, work: AnalysisWork(missingThumbnails: lost), source: source,
+                      package: package, only: lost)
+    }
+
+    /// Runs the pipeline over a copy of `album` where the photos to repair have no analysis
+    /// (with `only`, the copy holds just those photos), then flushes. Only photos in
+    /// `work.unanalyzed` count as analysed in this session.
+    private func runPass(over album: Album, work: AnalysisWork, source: any PhotoSource,
+                         package: ProjectPackage, only: Set<PhotoID>? = nil) async {
+        var input = album
+        if let only { input.photos = input.photos.filter { only.contains($0.key) } }
+        for id in work.missingThumbnails { input.photos[id]?.analysis = nil }
+        countable = work.unanalyzed
         let pipeline = AnalysisPipeline(source: source, package: package, analyzer: ImageAnalyzer(),
                                         concurrency: options.concurrency)
         lastFlush = .now
+        // The pipeline stores each thumbnail with `package.storeThumbnail`, uncoordinated with
+        // NSDocument saves; see "Thumbnail self-heal" and the TODO(Task 23) above.
         await pipeline.run(
-            album: album,
+            album: input,
             onPhotoAnalyzed: { id, analysis in await self.received(analysis, for: id) },
             onProgress: { progress in await self.report(progress) })
         flush()
         analysisProgress = nil
-        guard !isCancelled, !Task.isCancelled, analyzedCount > 0, let store else { return }
-        store.applyRecommendations()
-        recommendationsApplied = true
-        // HOOK(Task 23): request an explicit autosave here (Task 17 contract addition (b): after
-        // background changes, do not rely on the change count alone). No such API exists yet.
     }
 
     private func received(_ analysis: PhotoAnalysis, for id: PhotoID) {
         guard !isCancelled else { return }
         pending[id] = analysis
-        analyzedCount += 1
+        if countable.contains(id) { analyzedCount += 1 }
         if pending.count >= options.batchSize || ContinuousClock.now - lastFlush >= options.flushInterval {
             flush()
         }

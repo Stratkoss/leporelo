@@ -26,7 +26,10 @@ struct NewAlbumSheet: View {
             if let setupError {
                 Text(setupError).foregroundStyle(.red)
             } else if access.allowsForm, let model {
+                // Locked while creating: the flow runs to its end (success or alert), never
+                // half-cancelled with its error swallowed.
                 NewAlbumForm(model: model)
+                    .disabled(isCreating)
             } else if !access.allowsForm {
                 accessView
             }
@@ -38,6 +41,7 @@ struct NewAlbumSheet: View {
                 Spacer()
                 Button("Zrušit", role: .cancel) { close() }
                     .keyboardShortcut(.cancelAction)
+                    .disabled(isCreating)
                 if access.allowsForm, let model {
                     Button("Založit album") { Task { await create(model) } }
                         .keyboardShortcut(.defaultAction)
@@ -47,6 +51,7 @@ struct NewAlbumSheet: View {
         }
         .padding(24)
         .frame(width: 500)
+        .interactiveDismissDisabled(isCreating)
         .onAppear(perform: refreshAccess)
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             refreshAccess()  // the user may come back from System Settings
@@ -73,7 +78,7 @@ struct NewAlbumSheet: View {
                         }
                     case .denied, .limited:
                         NSWorkspace.shared.open(PhotoAccess.settingsURL)
-                    case .authorized:
+                    case .restricted, .authorized:
                         break
                     }
                 }
@@ -125,7 +130,10 @@ struct NewAlbumSheet: View {
         panel.allowedContentTypes = [.leporeloAlbum]
         panel.nameFieldStringValue = NewAlbumModel.packageFileName(for: title)
         panel.canCreateDirectories = true
-        guard panel.runModal() == .OK else { return nil }
+        let guardian = NewPackageLocationGuard()
+        panel.delegate = guardian
+        let response = withExtendedLifetime(guardian) { panel.runModal() }
+        guard response == .OK else { return nil }
         return panel.url
     }
 
@@ -136,6 +144,31 @@ struct NewAlbumSheet: View {
                 if document != nil { continuation.resume() }
                 else { continuation.resume(throwing: error ?? CocoaError(.fileReadUnknown)) }
             }
+        }
+    }
+}
+
+/// Keeps the save panel from accepting an existing location, before AppKit would ask "Replace?"
+/// (the flow never replaces or deletes an existing package, so "Replace" could only end in an
+/// error). `NewAlbumModel.createAlbum` still refuses one (`alreadyExists`) as the last line.
+@MainActor
+private final class NewPackageLocationGuard: NSObject, NSOpenSavePanelDelegate {
+    /// Called when the user confirms a name, before the replace confirmation; nil rejects it.
+    func panel(_ sender: Any, userEnteredFilename filename: String, confirmed okFlag: Bool) -> String? {
+        guard okFlag, let panel = sender as? NSSavePanel, let directory = panel.directoryURL else { return filename }
+        if let problem = NewAlbumModel.saveLocationProblem(directory.appendingPathComponent(filename)) {
+            panel.message = problem
+            NSSound.beep()
+            return nil
+        }
+        return filename
+    }
+
+    /// Second check on the final URL (e.g. a name AppKit completed with the extension).
+    func panel(_ sender: Any, validate url: URL) throws {
+        if let problem = NewAlbumModel.saveLocationProblem(url) {
+            (sender as? NSSavePanel)?.message = problem
+            throw CocoaError(.fileWriteFileExists, userInfo: [NSLocalizedDescriptionKey: problem])
         }
     }
 }
