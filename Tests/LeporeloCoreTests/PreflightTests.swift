@@ -201,6 +201,53 @@ import Foundation
         #expect(w[1].message.contains("spadáv"))
     }
 
+    // MARK: Margin (books made before the margin rule are not conformed on open)
+
+    @Test func frameEdgeInTheMarginBandWarns() throws {
+        let inBand = Self.frame("f1", Rect(x: 4, y: 20, width: 150, height: 100))
+        let nearSpine = Self.frame("f2", Rect(x: 140, y: 20, width: 152, height: 100), photo: "p2")  // maxX 292
+        let w = try Self.issuesOfS1(Self.spread(frames: [inBand, nearSpine]),
+                                    photos: [Self.photo("p1"), Self.photo("p2")])
+        #expect(w.map(\.id) == ["margin:s1:f1", "margin:s1:f2"])
+        #expect(w.allSatisfy { $0.severity == .warning && $0.message == "Rámeček zasahuje do okraje" })
+        #expect(w.map(\.frameID) == ["f1", "f2"])
+        // An empty frame in the band warns as well (after its own error).
+        let empty = try Self.check(Self.album(spreads: [Self.spread(frames: [Self.frame("f1", Rect(x: 4, y: 20, width: 150, height: 100), photo: nil)])],
+                                              cover: Self.cover()))
+        #expect(empty.filter { $0.spreadID == "s1" }.map(\.id) == ["emptyFrame:s1:f1", "margin:s1:f1"])
+    }
+
+    @Test func bleedFrameAndFrameOnTheMarginLineDoNotWarn() throws {
+        let bleed = Self.frame("f1", Rect(x: 0, y: 0, width: 297, height: 210))
+        let atLine = Self.frame("f2", Rect(x: 307, y: 10, width: 277, height: 190))
+        let w = try Self.issuesOfS1(Self.spread(frames: [bleed, atLine]), photos: [Self.photo("p1")])
+        #expect(!w.contains { $0.id.hasPrefix("margin:") })
+        // The book's margin counts: x 312 is fine at 10 mm and in the band at 20 mm.
+        var a = Self.album(spreads: [Self.spread(frames: [Self.frame("f1", Rect(x: 312, y: 20, width: 200, height: 150))])],
+                           cover: Self.cover())
+        #expect(!(try Self.check(a)).contains { $0.id == "margin:s1:f1" })
+        a.marginMM = 20
+        #expect((try Self.check(a)).contains { $0.id == "margin:s1:f1" })
+    }
+
+    @Test func textOutsideTheMarginBoxWarns() throws {
+        let inBand = TextBox(id: "t1", rect: Rect(x: 8, y: 20, width: 100, height: 20), role: .caption, text: "x")
+        let fine = TextBox(id: "t2", rect: Rect(x: 10, y: 20, width: 100, height: 20), role: .caption, text: "x")
+        let empty = TextBox(id: "t3", rect: Rect(x: 8, y: 50, width: 100, height: 20), role: .caption, text: " ")
+        let w = try Self.issuesOfS1(Self.spread(texts: [inBand, fine, empty]))
+        #expect(w.map(\.id) == ["margin:s1:t1"])
+        #expect(w[0].message == "Text zasahuje do okraje" && w[0].textID == "t1" && w[0].severity == .warning)
+    }
+
+    @Test func coverFrameInTheBandWarns() throws {
+        let a = Self.album(spreads: [Self.spread("s1")],
+                           cover: Self.cover(frameRect: Rect(x: 0, y: 0, width: 292, height: 210)))
+        let issues = try Self.check(a)
+        #expect(issues.contains { $0.id == "margin:cover-front:photo1" })
+        let ok = Self.album(spreads: [Self.spread("s1")], cover: Self.cover())
+        #expect(!(try Self.check(ok)).contains { $0.id.hasPrefix("margin:") })
+    }
+
     @Test func coverChecked() throws {
         let t = TextBox(id: "title", rect: Rect(x: 1, y: 1, width: 50, height: 10), role: .title, text: "Amalfi")
         let a = Self.album(spreads: [Self.spread("s1"), Self.spread("s2")],

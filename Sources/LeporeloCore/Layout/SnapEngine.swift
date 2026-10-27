@@ -165,6 +165,18 @@ public enum SnapEngine {
         return SnapResult(rect: snapped, guides: guides)
     }
 
+    /// The guides of `guides` that lie on an edge or the centre of `rect` (within `tolerance`
+    /// mm): after the margin rule has conformed the snapped rectangle, only the guides it still
+    /// touches are drawn, so a guide never shows a line the item does not sit on.
+    public static func guides(_ guides: [SnapGuide], touching rect: Rect, tolerance: Double = 1e-3) -> [SnapGuide] {
+        guides.filter { guide in
+            let lines = guide.axis == .x
+                ? [rect.minX, rect.minX + rect.size.width / 2, rect.maxX]
+                : [rect.minY, rect.minY + rect.size.height / 2, rect.maxY]
+            return lines.contains { abs($0 - guide.position) <= tolerance }
+        }
+    }
+
     /// The (point, target) pair with the smallest distance not above `threshold`;
     /// among equal distances the smaller target wins. `delta` moves the point onto the target.
     private static func best(of points: [Double], in targets: [Double], threshold: Double) -> (target: Double, delta: Double)? {

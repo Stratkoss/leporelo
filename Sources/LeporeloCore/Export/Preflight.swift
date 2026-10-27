@@ -29,7 +29,15 @@ public struct PreflightIssue: Sendable, Equatable, Identifiable {
 /// Order of the result (deterministic): the issues of each spread in `album.spreads` order (frames in
 /// order, then texts in order), then the cover front and back, then the album-level issues: missing
 /// cover, page count, selected photos not in the album (once spreads exist), unverified format.
-/// Within one frame: original, DPI, faces, photo used twice. Within one text: bleed or safe zone, then overflow.
+/// Within one frame: original, DPI, faces, photo used twice, then margin. Within one text: bleed,
+/// safe zone or margin (at most one of them), then overflow.
+///
+/// "Rámeček zasahuje do okraje" (`margin:<spreadID>:<frameID>`, warning) flags a frame (empty or
+/// not) with an edge strictly inside the band next to a page edge (`MarginRule.frameIntrudesMargin`
+/// with `album.marginMM`); "Text zasahuje do okraje" (`margin:<spreadID>:<textID>`, warning) a
+/// non-empty text inside the safe zone but not inside the margin box of its page. Books made
+/// before the margin rule are not conformed on open, so this is where they show. The cover pages
+/// use the cover area (one page).
 ///
 /// "Fotka je v knize víckrát" (`duplicatePhoto:<spreadID>:<frameID>`, warning) flags every occurrence
 /// of a photo except the first among the frames of the `.journal` and `.gallery` spreads, in album
@@ -79,17 +87,18 @@ public enum Preflight {
         let coverArea = Area(
             trim: Rect(x: 0, y: 0, width: w, height: h),
             safe: [geometry.safeRect(side: .left)], printArea: .cover, spineX: nil)
+        let margin = MarginRule(geometry: geometry, marginMM: album.marginMM)
 
         let firstUse = firstDayUse(in: album)
         for spread in album.spreads {
-            issues += check(spread, area: spreadArea, album: album, geometry: geometry, firstUse: firstUse,
-                            fontsAvailable: fonts)
+            issues += check(spread, area: spreadArea, album: album, geometry: geometry, margin: margin,
+                            firstUse: firstUse, fontsAvailable: fonts)
         }
         if let cover = album.cover {
-            issues += check(cover.front, area: coverArea, album: album, geometry: geometry, firstUse: [:],
-                            fontsAvailable: fonts)
-            issues += check(cover.back, area: coverArea, album: album, geometry: geometry, firstUse: [:],
-                            fontsAvailable: fonts)
+            issues += check(cover.front, area: coverArea, album: album, geometry: geometry, margin: margin,
+                            firstUse: [:], fontsAvailable: fonts)
+            issues += check(cover.back, area: coverArea, album: album, geometry: geometry, margin: margin,
+                            firstUse: [:], fontsAvailable: fonts)
         } else if profile.coverMode != .none {
             issues.append(PreflightIssue(id: "noCover", severity: .error, spreadID: nil, frameID: nil,
                                          message: "Album nemá obálku"))
@@ -165,7 +174,7 @@ public enum Preflight {
     /// The overflow rule measures with the bundled fonts; without them (a broken install) Core Text
     /// would measure a fallback font, so the rule is skipped. Asked at most once per spread.
     private static func check(_ spread: Spread, area: Area, album: Album,
-                              geometry: PageGeometry, firstUse: [PhotoID: FirstUse],
+                              geometry: PageGeometry, margin: MarginRule, firstUse: [PhotoID: FirstUse],
                               fontsAvailable: () -> Bool) -> [PreflightIssue] {
         let profile = geometry.profile
         var issues: [PreflightIssue] = []
@@ -176,21 +185,22 @@ public enum Preflight {
                                          textID: text, message: message))
         }
 
-        for frame in spread.frames {
+        /// The checks of the frame's photo: emptiness, original, DPI, faces, photo used twice.
+        func photoChecks(_ frame: Frame) {
             guard let photoID = frame.photoID else {
                 if spread.kind != .blank {
                     add("emptyFrame", .error, frame: frame.id,
                         "Rámeček je prázdný, vyberte fotku nebo dvoustranu smažte")
                 }
-                continue
+                return
             }
             guard let photo = album.photos[photoID] else {
                 add("missingPhoto", .error, frame: frame.id, "Fotka chybí v albu")
-                continue
+                return
             }
             if photo.kind == .video {
                 add("video", .error, frame: frame.id, "Video nelze vložit do alba")
-                continue
+                return
             }
             switch photo.originalState {
             case .stored: break
@@ -221,11 +231,20 @@ public enum Preflight {
             }
         }
 
+        for frame in spread.frames {
+            photoChecks(frame)
+            if margin.frameIntrudesMargin(frame.rect, area: area.printArea) {
+                add("margin", .warning, frame: frame.id, "Rámeček zasahuje do okraje")
+            }
+        }
+
         for text in spread.texts where !text.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             if !contains(area.trim, text.rect) {
                 add("textBleed", .warning, text: text.id, "Text zasahuje do zóny spadávky")
             } else if !area.safe.contains(where: { contains($0, text.rect) }) {
                 add("textSafe", .warning, text: text.id, "Text leží mimo bezpečnou zónu")
+            } else if margin.textOutsideMargin(text.rect, area: area.printArea) {
+                add("margin", .warning, text: text.id, "Text zasahuje do okraje")
             }
             if fontsAvailable(), SpreadRenderer.textOverflows(text) {
                 add("textOverflow", .warning, text: text.id,

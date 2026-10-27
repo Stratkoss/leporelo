@@ -283,21 +283,7 @@ public enum AlbumUpdater {
                 }
                 return rule.conform(scaled, area: .spread)
             }
-            guard let template = TemplateCatalog.template(id: old.templateID) else { return old }
-            var spread = TemplateLayout.instantiate(template, geometry: geometry, dayKey: old.dayKey, id: old.id,
-                                                    marginMM: album.marginMM)
-            spread.kind = old.kind
-            spread.manuallyEdited = old.manuallyEdited
-            for i in spread.frames.indices {
-                guard let o = old.frames.first(where: { $0.id == spread.frames[i].id }) else { continue }
-                spread.frames[i].photoID = o.photoID
-                spread.frames[i].offset = o.offset
-                spread.frames[i].zoom = o.zoom
-            }
-            for i in spread.texts.indices {
-                if let o = old.texts.first(where: { $0.id == spread.texts[i].id }) { spread.texts[i].text = o.text }
-            }
-            return spread
+            return reinstantiated(old, geometry: geometry, marginMM: album.marginMM) ?? old
         }
         if let old = album.cover {
             let oldFrame = old.front.frames.first
@@ -316,14 +302,24 @@ public enum AlbumUpdater {
     // MARK: - Margin
 
     /// `album` with the margin set to `mm` (limited to the profile's safe zone and the maximum, see
-    /// `MarginRule.clampedMargin`) and every spread and both cover pages conformed to it. Photos,
-    /// crops, texts, `manuallyEdited` and `customLayout` are untouched; only rects move. Pure.
+    /// `MarginRule.clampedMargin`). A spread with the recommended layout (`customLayout == false`)
+    /// is re-instantiated from its template at the new margin, carrying photos, crops and texts
+    /// by id as in `changeFormat`, so going back to an earlier margin restores its layout exactly.
+    /// A custom layout (and a spread whose template is not in the catalog) and both cover pages
+    /// are conformed to the new margin (`MarginRule.conform`). Photos, crops, texts,
+    /// `manuallyEdited` and `customLayout` are untouched; only rects change. Pure.
     public static func settingMargin(_ mm: Double, in album: Album, profile: SupplierProfile,
                                      format: BookFormat) -> Album {
         var result = album
         result.marginMM = MarginRule.clampedMargin(mm, profile: profile)
-        let rule = MarginRule(geometry: PageGeometry(format: format, profile: profile), marginMM: result.marginMM)
-        result.spreads = album.spreads.map { rule.conform($0, area: .spread) }
+        let geometry = PageGeometry(format: format, profile: profile)
+        let rule = MarginRule(geometry: geometry, marginMM: result.marginMM)
+        result.spreads = album.spreads.map { old in
+            if !old.customLayout, let spread = reinstantiated(old, geometry: geometry, marginMM: result.marginMM) {
+                return spread
+            }
+            return rule.conform(old, area: .spread)
+        }
         if let cover = album.cover {
             result.cover = Cover(front: rule.conform(cover.front, area: .cover),
                                  back: rule.conform(cover.back, area: .cover))
@@ -332,6 +328,27 @@ public enum AlbumUpdater {
     }
 
     // MARK: - Helpers
+
+    /// `old` instantiated afresh from its catalog template for `geometry` and `marginMM`, keeping
+    /// id, kind, dayKey, `manuallyEdited` (and `customLayout == false`); frames take over photoID,
+    /// offset and zoom by frame id, texts their text by text id. Nil when the template is unknown.
+    private static func reinstantiated(_ old: Spread, geometry: PageGeometry, marginMM: Double) -> Spread? {
+        guard let template = TemplateCatalog.template(id: old.templateID) else { return nil }
+        var spread = TemplateLayout.instantiate(template, geometry: geometry, dayKey: old.dayKey, id: old.id,
+                                                marginMM: marginMM)
+        spread.kind = old.kind
+        spread.manuallyEdited = old.manuallyEdited
+        for i in spread.frames.indices {
+            guard let o = old.frames.first(where: { $0.id == spread.frames[i].id }) else { continue }
+            spread.frames[i].photoID = o.photoID
+            spread.frames[i].offset = o.offset
+            spread.frames[i].zoom = o.zoom
+        }
+        for i in spread.texts.indices {
+            if let o = old.texts.first(where: { $0.id == spread.texts[i].id }) { spread.texts[i].text = o.text }
+        }
+        return spread
+    }
 
     /// The format `album` currently has: from `profile` when it is the album's supplier, else
     /// from the profile catalog; nil when it cannot be found.

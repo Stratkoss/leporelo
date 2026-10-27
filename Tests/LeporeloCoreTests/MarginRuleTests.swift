@@ -106,6 +106,105 @@ import Foundation
         #expect(result.minX == rule.conformFrame(mixed, area: .spread).minX)
     }
 
+    // MARK: Arrow keys: direction-aware moves
+
+    /// `rect` nudged by (dx, dy) and conformed as an arrow key does.
+    static func nudged(_ rect: Rect, dx: Double = 0, dy: Double = 0, rule: MarginRule) -> Rect {
+        rule.conformMovedFrame(Rect(x: rect.minX + dx, y: rect.minY + dy, width: rect.size.width,
+                                    height: rect.size.height),
+                               area: .spread, nudge: Point(x: dx, y: dy))
+    }
+
+    @Test func arrowFromTheBleedEdgeStepsToTheMarginLine() throws {
+        let rule = try Self.rule()
+        let bleed = Rect(x: 0, y: 50, width: 100, height: 100)
+        #expect(Self.nudged(bleed, dx: 1, rule: rule) == Rect(x: 10, y: 50, width: 100, height: 100))
+        #expect(Self.nudged(bleed, dx: 5, rule: rule) == Rect(x: 10, y: 50, width: 100, height: 100))
+        // Bleeding at the spread's right edge, moving inward.
+        let right = Rect(x: 494, y: 50, width: 100, height: 100)
+        #expect(Self.nudged(right, dx: -1, rule: rule).maxX == 584)
+        #expect(Self.nudged(right, dx: -5, rule: rule).maxX == 584)
+        // Outward there is nowhere to go: it stays.
+        #expect(Self.nudged(bleed, dx: -1, rule: rule) == bleed)
+        #expect(Self.nudged(right, dx: 5, rule: rule) == right)
+    }
+
+    @Test func arrowFromTheMarginLineStepsToTheBleedEdge() throws {
+        let rule = try Self.rule()
+        // ⇧→ from the right margin line before the spine: a tie (5 mm either way) used to fall back.
+        let atLine = Rect(x: 187, y: 50, width: 100, height: 100)
+        #expect(Self.nudged(atLine, dx: 5, rule: rule).maxX == 297)
+        #expect(Self.nudged(atLine, dx: 1, rule: rule).maxX == 297)
+        // 1 mm ← from the left margin line reaches the bleed (the old stuck case).
+        let left = Rect(x: 10, y: 50, width: 100, height: 100)
+        #expect(Self.nudged(left, dx: -1, rule: rule) == Rect(x: 0, y: 50, width: 100, height: 100))
+        // And back: → from the bleed to the margin line again.
+        #expect(Self.nudged(Rect(x: 0, y: 50, width: 100, height: 100), dx: 1, rule: rule) == left)
+    }
+
+    @Test func arrowStepsBetweenBleedAndMarginOnTheYAxis() throws {
+        let rule = try Self.rule()
+        let top = Rect(x: 50, y: 0, width: 100, height: 100)
+        #expect(Self.nudged(top, dy: 1, rule: rule).minY == 10)
+        #expect(Self.nudged(top, dy: 5, rule: rule).minY == 10)
+        let atTopLine = Rect(x: 50, y: 10, width: 100, height: 100)
+        #expect(Self.nudged(atTopLine, dy: -1, rule: rule).minY == 0)
+        let atBottomLine = Rect(x: 50, y: 100, width: 100, height: 100)  // maxY 200
+        #expect(Self.nudged(atBottomLine, dy: 5, rule: rule).maxY == 210)
+        #expect(Self.nudged(atBottomLine, dy: 1, rule: rule).maxY == 210)
+        let bottom = Rect(x: 50, y: 110, width: 100, height: 100)        // maxY 210
+        #expect(Self.nudged(bottom, dy: -1, rule: rule).maxY == 200)
+        // The other axis is untouched by a vertical nudge.
+        #expect(Self.nudged(top, dy: 1, rule: rule).minX == 50)
+    }
+
+    @Test func arrowAwayFromTheMarginMovesByTheStep() throws {
+        let rule = try Self.rule()
+        let free = Rect(x: 50, y: 50, width: 100, height: 100)
+        #expect(Self.nudged(free, dx: 1, rule: rule) == Rect(x: 51, y: 50, width: 100, height: 100))
+        #expect(Self.nudged(free, dy: -5, rule: rule) == Rect(x: 50, y: 45, width: 100, height: 100))
+        // A full-height frame has no allowed position below or above: it stays.
+        let tall = Rect(x: 50, y: 0, width: 100, height: 210)
+        #expect(Self.nudged(tall, dy: 1, rule: rule) == tall)
+    }
+
+    // MARK: Texts
+
+    @Test func textResizeIntoTheBandTrimsOnlyThatEdge() throws {
+        let rule = try Self.rule()
+        // Bottom edge dragged to 205: clamped to the margin line 200, the top stays.
+        let text = rule.conformText(Rect(x: 40, y: 150, width: 80, height: 55), area: .spread)
+        #expect(text == Rect(x: 40, y: 150, width: 80, height: 50))
+        // Left edge dragged past the trim: clamped to 10, the right edge stays.
+        let left = rule.conformText(Rect(x: -5, y: 50, width: 85, height: 20), area: .spread)
+        #expect(left == Rect(x: 10, y: 50, width: 70, height: 20))
+        // Trimming would leave less than 10 mm: the box keeps 10 mm and moves the rest.
+        let wide = try Self.rule(margin: 20)
+        #expect(wide.conformText(Rect(x: 40, y: 12.6, width: 80, height: 10.5), area: .spread)
+                == Rect(x: 40, y: 20, width: 80, height: 10))
+        // A box already under 10 mm keeps its own size and only moves.
+        #expect(rule.conformText(Rect(x: 40, y: 205, width: 80, height: 8), area: .spread)
+                == Rect(x: 40, y: 192, width: 80, height: 8))
+    }
+
+    @Test func movedTextKeepsItsSize() throws {
+        let rule = try Self.rule(margin: 20)
+        let moved = rule.conformMovedText(Rect(x: 40, y: 185, width: 80, height: 30), area: .spread)
+        #expect(moved == Rect(x: 40, y: 160, width: 80, height: 30))
+        #expect(rule.conformMovedText(Rect(x: 400, y: 0, width: 500, height: 300), area: .spread)
+                == Rect(x: 317, y: 20, width: 257, height: 170))
+    }
+
+    @Test func preflightHelpersSeeTheBand() throws {
+        let rule = try Self.rule()
+        #expect(rule.frameIntrudesMargin(Self.frame(x0: 4, x1: 100), area: .spread))
+        #expect(rule.frameIntrudesMargin(Self.frame(x0: 200, x1: 292), area: .spread))
+        #expect(!rule.frameIntrudesMargin(Self.frame(x0: 0, x1: 100), area: .spread))
+        #expect(!rule.frameIntrudesMargin(Self.frame(x0: 10, x1: 287), area: .spread))
+        #expect(rule.textOutsideMargin(Rect(x: 8, y: 50, width: 50, height: 20), area: .spread))
+        #expect(!rule.textOutsideMargin(Rect(x: 10, y: 10, width: 50, height: 190), area: .spread))
+    }
+
     @Test func textIsClampedInsideMargin() throws {
         let rule = try Self.rule()
         let text = rule.conformText(Rect(x: 2, y: 200, width: 58, height: 9), area: .spread)

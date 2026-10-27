@@ -112,6 +112,73 @@ import Foundation
         let result = SnapEngine.snap(rect, moving: .maxX, to: t, threshold: 10)
         #expect(result.rect == rect)
     }
+
+    // MARK: Snapping and the margin rule
+
+    @Test func targetsInsideTheMarginBandAreDropped() throws {
+        let rule = MarginRule(geometry: try Self.geometry(), marginMM: 10)
+        let raw = SnapTargets(x: [0, 4, 5, 10, 150, 287, 292, 297, 302, 307, 590, 594], y: [0, 5, 10, 105, 200, 205, 210])
+        let allowed = rule.allowedTargets(raw, area: .spread)
+        #expect(allowed.x == [0, 10, 150, 287, 297, 307, 594])
+        #expect(allowed.y == [0, 10, 105, 200, 210])
+        // The cover has no spine: 287 is its margin line, 292 lies in the band before its edge.
+        let cover = rule.allowedTargets(SnapTargets(x: [5, 287, 292, 297], y: []), area: .cover)
+        #expect(cover.x == [287, 297])
+        // The real grid at margin 10: no grid line at 5 mm from any page edge survives.
+        let grid = rule.allowedTargets(try Self.targets(grid: true, objects: false), area: .spread)
+        for v in [5.0, 292, 302, 589] { #expect(!grid.x.contains(v)) }
+        for v in [5.0, 205] { #expect(!grid.y.contains(v)) }
+        #expect(grid.x.contains(10) && grid.x.contains(15))
+    }
+
+    /// The canvas pipeline: snap to the allowed targets, conform, keep the guides the result
+    /// touches. Dragging the left edge to a raw minX of 7.4 with the grid on used to snap to 5
+    /// (guide at 5) and end elsewhere; now 5 is no target, it snaps to 10 and the guide is the
+    /// frame's edge.
+    @Test func guideIsTheFinalEdgeWhenSnappingNearTheMargin() throws {
+        let geometry = try Self.geometry()
+        let rule = MarginRule(geometry: geometry, marginMM: 10)
+        let targets = rule.allowedTargets(
+            SnapEngine.targets(geometry: geometry, marginMM: 10, area: .spread, others: [],
+                               settings: SnapSettings(grid: true, objects: true)), area: .spread)
+        let raw = Rect(x: 7.4, y: 50, width: 92.6, height: 60)
+        let snapped = SnapEngine.snap(raw, moving: .minX, to: targets, threshold: 3)
+        let final = rule.conformFrame(snapped.rect, area: .spread)
+        #expect(final.minX == 10)
+        #expect(SnapEngine.guides(snapped.guides, touching: final) == [SnapGuide(axis: .x, position: 10)])
+    }
+
+    /// A move near the margin: whatever wins the snap, the guides left are lines the conformed
+    /// frame sits on, and no edge of it lies in a band.
+    @Test func moveGuidesAlwaysLieOnTheConformedFrame() throws {
+        let geometry = try Self.geometry()
+        let rule = MarginRule(geometry: geometry, marginMM: 10)
+        let targets = rule.allowedTargets(
+            SnapEngine.targets(geometry: geometry, marginMM: 10, area: .spread,
+                               others: [Rect(x: 120, y: 30, width: 60, height: 40)],
+                               settings: SnapSettings(grid: true, objects: true)), area: .spread)
+        for x in stride(from: -3.0, through: 20, by: 0.7) {
+            for y in stride(from: 196.0, through: 212, by: 1.3) {
+                let raw = Rect(x: x, y: y - 60, width: 80, height: 60)
+                let snapped = SnapEngine.snap(raw, moving: .all, to: targets, threshold: 3)
+                let final = rule.conformMovedFrame(snapped.rect, area: .spread)
+                #expect(!rule.frameIntrudesMargin(final, area: .spread))
+                for guide in SnapEngine.guides(snapped.guides, touching: final) {
+                    let lines = guide.axis == .x ? [final.minX, final.minX + 40, final.maxX]
+                                                 : [final.minY, final.minY + 30, final.maxY]
+                    #expect(lines.contains { abs($0 - guide.position) < 1e-6 })
+                }
+            }
+        }
+    }
+
+    @Test func guidesNotTouchingTheResultAreDropped() {
+        let rect = Rect(x: 0, y: 20, width: 100, height: 60)
+        let guides = [SnapGuide(axis: .x, position: 5), SnapGuide(axis: .x, position: 50),
+                      SnapGuide(axis: .y, position: 80), SnapGuide(axis: .y, position: 25)]
+        #expect(SnapEngine.guides(guides, touching: rect)
+                == [SnapGuide(axis: .x, position: 50), SnapGuide(axis: .y, position: 80)])
+    }
 }
 
 private extension Rect {

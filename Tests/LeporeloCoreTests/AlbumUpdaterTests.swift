@@ -395,6 +395,76 @@ import Foundation
         #expect(AlbumUpdater.settingMargin(99, in: a, profile: p, format: f).marginMM == 30)
     }
 
+    /// The stepper does not ratchet: 10 -> 20 -> 10 gives every template spread its template
+    /// rects back, with photos, crops and texts intact.
+    @Test func settingMarginBackRestoresTemplateLayouts() throws {
+        let (p, f) = try D.canva()
+        let days = [D.day(Self.june18, D.dayPhotos("a", Self.june18, count: 8))]
+        var a = D.draft(days, profile: p, format: f)
+        let s = try #require(a.spreads.firstIndex { $0.kind == .journal })
+        a.spreads[s].frames[0].offset = Point(x: 0.3, y: -0.2)
+        a.spreads[s].frames[0].zoom = 1.7
+        a.spreads[s].texts[0].text = "Ahoj"
+        a.spreads[s].manuallyEdited = true
+
+        let wide = AlbumUpdater.settingMargin(20, in: a, profile: p, format: f)
+        #expect(wide.spreads[s].frames.map(\.rect) != a.spreads[s].frames.map(\.rect))
+        let back = AlbumUpdater.settingMargin(10, in: wide, profile: p, format: f)
+        #expect(back.marginMM == 10)
+        #expect(back.spreads == a.spreads)
+        #expect(back.spreads[s].frames[0].zoom == 1.7 && back.spreads[s].texts[0].text == "Ahoj")
+        let g = Self.geometry(p, f)
+        for spread in a.spreads {
+            let template = try #require(TemplateCatalog.template(id: spread.templateID))
+            let fresh = TemplateLayout.instantiate(template, geometry: g, dayKey: spread.dayKey, id: spread.id)
+            #expect(back.spreads.first { $0.id == spread.id }?.frames.map(\.rect) == fresh.frames.map(\.rect))
+            #expect(back.spreads.first { $0.id == spread.id }?.texts.map(\.rect) == fresh.texts.map(\.rect))
+        }
+    }
+
+    /// A custom layout is conformed, not re-instantiated, and keeps its flags.
+    @Test func settingMarginConformsOnlyCustomLayouts() throws {
+        let (p, f) = try D.canva()
+        let days = [D.day(Self.june18, D.dayPhotos("a", Self.june18, count: 8))]
+        var a = D.draft(days, profile: p, format: f)
+        let s = try #require(a.spreads.firstIndex { !$0.frames.isEmpty })
+        a.spreads[s].customLayout = true
+        a.spreads[s].frames[0].rect = Rect(x: 30, y: 30, width: 100, height: 100)
+        let b = AlbumUpdater.settingMargin(20, in: a, profile: p, format: f)
+        #expect(b.spreads[s].frames[0].rect == Rect(x: 30, y: 30, width: 100, height: 100))
+        #expect(b.spreads[s].customLayout)
+        let c = AlbumUpdater.settingMargin(30, in: a, profile: p, format: f)
+        #expect(c.spreads[s].frames[0].rect.minX == 30)
+    }
+
+    /// A wide margin pushes the journal's date down: it must not end up on the title, nor the
+    /// body on the title (journal-3, landscape A4, margin 20 and 30).
+    @Test func wideMarginKeepsJournalTextsApart() throws {
+        let (p, f) = try D.canva()
+        let g = Self.geometry(p, f)
+        for margin in [17.0, 20, 30] {
+            for template in TemplateCatalog.all {
+                let spread = TemplateLayout.instantiate(template, geometry: g, dayKey: nil, id: "s", marginMM: margin)
+                let rule = MarginRule(geometry: g, marginMM: margin)
+                for (i, a) in spread.texts.enumerated() {
+                    #expect(!rule.textOutsideMargin(a.rect, area: .spread), "\(template.id) \(margin) \(a.id)")
+                    #expect(a.rect.size.height >= MarginRule.minItemMM - 1e-9)
+                    for b in spread.texts[(i + 1)...] {
+                        let apart = a.rect.maxY <= b.rect.minY + 1e-9 || b.rect.maxY <= a.rect.minY + 1e-9
+                            || a.rect.maxX <= b.rect.minX + 1e-9 || b.rect.maxX <= a.rect.minX + 1e-9
+                        #expect(apart, "\(template.id) margin \(margin): \(a.id) \(a.rect) overlaps \(b.id) \(b.rect)")
+                    }
+                }
+            }
+        }
+        let journal = try #require(TemplateCatalog.template(id: "journal-3"))
+        let wide = TemplateLayout.instantiate(journal, geometry: g, dayKey: nil, id: "s", marginMM: 20)
+        let date = try #require(wide.texts.first { $0.id == "date" }).rect
+        let title = try #require(wide.texts.first { $0.id == "title" }).rect
+        let body = try #require(wide.texts.first { $0.id == "body" }).rect
+        #expect(date.minY == 20 && date.maxY <= title.minY && title.maxY <= body.minY && body.maxY <= 190)
+    }
+
     // MARK: - photoMoved (Task 21a)
 
     @Test func movedPhotoLeavesItsDaySpreadAndJoinsTheNewDay() throws {
