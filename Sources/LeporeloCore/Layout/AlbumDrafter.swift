@@ -18,8 +18,16 @@ public struct DraftOptions: Sendable, Equatable {
 /// `2026-06-18-gallery-2`, `blank-1`, `cover-front`, `cover-back`).
 ///
 /// Invariant: no spread other than `blank` has an empty frame (preflight blocks empty frames).
+/// Videos are never laid out (only `.photo`/`.livePhoto` kinds), even when selected.
+///
+/// Page maximum: when the planned spreads (intro, days, closing and `reservedSpreads`) exceed the
+/// profile's `pageCount.max`, the days are planned again with 3 photos per gallery spread instead
+/// of `DraftOptions.galleryPhotosPerSpread`; nothing is dropped, so a very long trip can still be
+/// above the maximum (the preflight reports it).
 public enum AlbumDrafter {
     public static let noPlaceTitle = "Bez místa"
+    /// The most photos a gallery template holds (`gallery-3`).
+    static let maxGalleryPhotosPerSpread = 3
 
     public static func pageCount(of album: Album) -> Int {
         album.spreads.count * 2
@@ -53,7 +61,7 @@ public enum AlbumDrafter {
         for group in days.sorted(by: { $0.dayKey < $1.dayKey }) {
             let photos = group.photos
                 .map { album.photos[$0.id] ?? $0 }
-                .filter { $0.isSelected && seen.insert($0.id).inserted }
+                .filter { $0.isSelected && $0.kind != .video && seen.insert($0.id).inserted }
                 .sorted(by: Photo.chronological)
             if !photos.isEmpty { selectedDays.append((group, photos)) }
         }
@@ -68,24 +76,34 @@ public enum AlbumDrafter {
         let ranked = allSelected.sorted(by: rank)
         let introPhoto = ranked.first(where: \.isLandscape) ?? ranked[0]
 
-        // 1. Plan the spreads.
-        var plan: [Planned] = []
+        // 1. Plan the spreads. When the plan has more pages than the supplier's maximum, plan
+        //    again with 3 photos per gallery spread (the most a gallery template holds; the spec's
+        //    1-2 photos per page). Still too many pages: leave it, the preflight reports it.
         let introBody = self.introBody(selectedDays.map(\.group))
-        if includeIntro {
-            plan.append(Planned(templateID: "intro-1", dayKey: nil, photos: [introPhoto],
-                                texts: [.title: album.title, .body: introBody]))
+        func makePlan(perGallery: Int) -> [Planned] {
+            var plan: [Planned] = []
+            if includeIntro {
+                plan.append(Planned(templateID: "intro-1", dayKey: nil, photos: [introPhoto],
+                                    texts: [.title: album.title, .body: introBody]))
+            }
+            for (group, photos) in selectedDays {
+                let dayPhotos = photos.filter { !excludedFromDays.contains($0.id) }
+                if dayPhotos.isEmpty { continue }
+                let galleryOnly = galleryOnlyDays.contains(group.dayKey)
+                plan += planDay(group, photos: dayPhotos, perGallery: perGallery, allowJournal: !galleryOnly,
+                                caption: !galleryOnly && !captionlessDays.contains(group.dayKey))
+            }
+            if options.includeClosing {
+                plan.append(Planned(templateID: "closing-1", dayKey: nil, photos: [lastPhoto],
+                                    texts: [.caption: ""]))
+            }
+            return plan
         }
-
-        let perGallery = min(max(options.galleryPhotosPerSpread, 1), 3)
-        for (group, photos) in selectedDays {
-            let dayPhotos = photos.filter { !excludedFromDays.contains($0.id) }
-            if dayPhotos.isEmpty { continue }
-            let galleryOnly = galleryOnlyDays.contains(group.dayKey)
-            plan += planDay(group, photos: dayPhotos, perGallery: perGallery, allowJournal: !galleryOnly,
-                            caption: !galleryOnly && !captionlessDays.contains(group.dayKey))
-        }
-        if options.includeClosing {
-            plan.append(Planned(templateID: "closing-1", dayKey: nil, photos: [lastPhoto], texts: [.caption: ""]))
+        let perGallery = min(max(options.galleryPhotosPerSpread, 1), maxGalleryPhotosPerSpread)
+        var plan = makePlan(perGallery: perGallery)
+        if let max = profile.pageCount.max, (plan.count + reservedSpreads) * 2 > max,
+           perGallery < maxGalleryPhotosPerSpread {
+            plan = makePlan(perGallery: maxGalleryPhotosPerSpread)
         }
 
         // 2. Pad to the supplier's page-count rule.

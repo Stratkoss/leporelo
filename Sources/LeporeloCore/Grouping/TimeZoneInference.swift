@@ -23,12 +23,12 @@ public enum TimeZoneInference {
                 result[photo.id] = zone.secondsFromGMT(for: photo.capturedAt)
             }
         }
-        let definite = photos.filter { result[$0.id] != nil }
+        let definite = TimeIndex(photos.filter { result[$0.id] != nil })
 
         // Pass 2: photos with GPS but no definite zone: nearest definite neighbour, else longitude.
         for photo in photos where result[photo.id] == nil {
             guard let location = photo.location else { continue }
-            if let neighbour = nearest(to: photo, in: definite) {
+            if let neighbour = definite.nearest(to: photo) {
                 result[photo.id] = result[neighbour.id]
             } else {
                 // Coarse by design: Italy (15°E zone is +1 h) comes out as +1 h even in summer (+2 h).
@@ -37,9 +37,9 @@ public enum TimeZoneInference {
         }
 
         // Pass 3: photos without GPS: nearest photo that has a zone by now, else the Mac's zone.
-        let known = photos.filter { result[$0.id] != nil }
+        let known = TimeIndex(photos.filter { result[$0.id] != nil })
         for photo in photos where result[photo.id] == nil {
-            if let neighbour = nearest(to: photo, in: known) {
+            if let neighbour = known.nearest(to: photo) {
                 result[photo.id] = result[neighbour.id]
             } else {
                 result[photo.id] = TimeZone.current.secondsFromGMT(for: photo.capturedAt)
@@ -48,11 +48,44 @@ public enum TimeZoneInference {
         return result
     }
 
-    private static func nearest(to photo: Photo, in candidates: [Photo]) -> Photo? {
-        candidates
-            .filter { $0.id != photo.id }
-            .map { ($0, abs($0.capturedAt.timeIntervalSince(photo.capturedAt))) }
-            .filter { $0.1 <= maxNeighbourDistance }
-            .min { ($0.1, $0.0.id) < ($1.1, $1.0.id) }?.0
+    /// Candidates sorted by capture time once, so each nearest-neighbour query is a binary search
+    /// plus a short walk outwards (was a scan of every candidate per photo: quadratic).
+    struct TimeIndex {
+        private let photos: [Photo]
+        private let times: [TimeInterval]
+
+        init(_ candidates: [Photo]) {
+            photos = candidates.sorted { ($0.capturedAt, $0.id) < ($1.capturedAt, $1.id) }
+            times = photos.map(\.capturedAt.timeIntervalSinceReferenceDate)
+        }
+
+        /// The candidate nearest in time to `photo` (not `photo` itself, by id) within
+        /// `maxNeighbourDistance`; ties: the smaller id.
+        func nearest(to photo: Photo) -> Photo? {
+            let t = photo.capturedAt.timeIntervalSinceReferenceDate
+            // First index with time >= t.
+            var low = 0, high = times.count
+            while low < high {
+                let mid = (low + high) / 2
+                if times[mid] < t { low = mid + 1 } else { high = mid }
+            }
+            var best: (distance: TimeInterval, photo: Photo)?
+            func consider(_ i: Int) -> Bool {
+                let distance = abs(times[i] - t)
+                if distance > maxNeighbourDistance { return false }
+                if let best, distance > best.distance { return false }
+                let candidate = photos[i]
+                if candidate.id != photo.id,
+                   best.map({ (distance, candidate.id) < ($0.distance, $0.photo.id) }) ?? true {
+                    best = (distance, candidate)
+                }
+                return true
+            }
+            var i = low
+            while i < times.count, consider(i) { i += 1 }
+            var j = low - 1
+            while j >= 0, consider(j) { j -= 1 }
+            return best?.photo
+        }
     }
 }

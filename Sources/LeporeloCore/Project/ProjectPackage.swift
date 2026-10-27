@@ -194,16 +194,22 @@ public struct ProjectPackage: Sendable {
     /// `originalFileSizes()` lists them) and returns the ids it changed:
     ///
     /// - ADOPTION: a photo whose original is not `.stored` but that has a NON-EMPTY file named
-    ///   exactly `<id>.<ext>` (a valid extension, so "abc" never takes "abcd.jpg" or "abc.e.jpg")
-    ///   becomes `.stored` with that file (several candidates: the first by name). A file only
-    ///   appears there through `storeOriginal`'s atomic rename of a complete, synced file, so it
-    ///   is a whole original whose state was never recorded (a download finished but its state
-    ///   was lost with a cancelled work or a crash). Without adoption the photo would download
-    ///   again and, once gone from Photos, end `.unavailable` with its only copy orphaned.
+    ///   exactly `<id>.<ext>` (a valid extension: 1-8 ASCII alphanumerics, so "abc" never takes
+    ///   "abcd.jpg" or "abc.e.jpg") becomes `.stored` with that file. Several candidates: the one
+    ///   whose name sorts first in Swift `String` order (so by extension, uppercase before
+    ///   lowercase: "HEIC" before "heic" before "jpg"). A file only appears there through
+    ///   `storeOriginal`'s atomic rename of a complete, synced file, so it is a whole original
+    ///   whose state was never recorded (a download finished but its state was lost with a
+    ///   cancelled work or a crash). Without adoption the photo would download again and, once
+    ///   gone from Photos, end `.unavailable` with its only copy orphaned.
     /// - A `.stored` original whose file in `originals/` is zero-length is `.missing` (then adopted
     ///   from another complete file if there is one). Files not listed are left to the caller.
+    ///
+    /// Cost: one pass over the files builds an index (id -> best file), then one lookup per photo,
+    /// so it stays cheap on the main actor with thousands of photos and files.
     @discardableResult
     public static func adoptOriginals(in album: inout Album, fileSizes: [String: Int]) -> Set<PhotoID> {
+        let candidates = adoptionIndex(fileSizes)
         var changed = Set<PhotoID>()
         for (id, photo) in album.photos {
             var state = photo.originalState
@@ -211,13 +217,8 @@ public struct ProjectPackage: Sendable {
                fileSizes[String(relative.dropFirst(originalsDirectory.count + 1))] == 0 {
                 state = .missing
             }
-            if case .stored = state {} else {
-                let prefix = "\(id)."
-                let candidate = fileSizes.keys.sorted().first { name in
-                    guard name.hasPrefix(prefix), let size = fileSizes[name], size > 0 else { return false }
-                    return (try? validate(ext: String(name.dropFirst(prefix.count)))) != nil
-                }
-                if let candidate { state = .stored(relativePath: "\(originalsDirectory)/\(candidate)") }
+            if case .stored = state {} else if let candidate = candidates[id] {
+                state = .stored(relativePath: "\(originalsDirectory)/\(candidate)")
             }
             if state != photo.originalState {
                 album.photos[id]?.originalState = state
@@ -225,6 +226,20 @@ public struct ProjectPackage: Sendable {
             }
         }
         return changed
+    }
+
+    /// id -> the file `adoptOriginals` would adopt for it. A valid extension contains no dot, so a
+    /// name `<id>.<ext>` splits at its LAST dot; only non-empty files with a valid extension count.
+    static func adoptionIndex(_ fileSizes: [String: Int]) -> [PhotoID: String] {
+        var index: [PhotoID: String] = [:]
+        for (name, size) in fileSizes where size > 0 {
+            guard let dot = name.lastIndex(of: ".") else { continue }
+            let id = String(name[..<dot])
+            guard !id.isEmpty, (try? validate(ext: String(name[name.index(after: dot)...]))) != nil else { continue }
+            if let current = index[id], current <= name { continue }
+            index[id] = name
+        }
+        return index
     }
 
     // MARK: Thumbnails

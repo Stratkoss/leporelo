@@ -1,6 +1,8 @@
 import CoreGraphics
 import Foundation
+import ImageIO
 import PDFKit
+import UniformTypeIdentifiers
 import Testing
 @testable import LeporeloCore
 
@@ -341,6 +343,91 @@ private func imageDictionaries(_ data: Data) -> [String] {
         #expect(!fm.fileExists(atPath: stale.path))
         #expect(fm.fileExists(atPath: fresh.path))
         #expect(fm.fileExists(atPath: other.path))
+    }
+}
+
+/// A JPEG of `width` x `height`, one colour.
+private func jpegData(width: Int, height: Int) -> Data {
+    let data = NSMutableData()
+    let dest = CGImageDestinationCreateWithData(data, UTType.jpeg.identifier as CFString, 1, nil)!
+    CGImageDestinationAddImage(dest, p3Image(width: width, height: height), nil)
+    precondition(CGImageDestinationFinalize(dest))
+    return data as Data
+}
+
+/// A real package with 2000 x 1500 originals and 1024 px thumbnails for p1 and p2, frames large
+/// enough (140 x 105 mm, ~1654 px at 300 DPI) that the thumbnail is not enough for print.
+private func packageAlbum(in dir: URL) throws -> (ProjectPackage, Album) {
+    var album = Fx.album(spreads: 10)
+    for id in ["p1", "p2"] {
+        album.photos[id]?.pixelWidth = 2000
+        album.photos[id]?.pixelHeight = 1500
+    }
+    for s in album.spreads.indices {
+        album.spreads[s].frames[0].rect = Rect(x: 20, y: 20, width: 140, height: 105)
+        album.spreads[s].frames[1].rect = Rect(x: 320, y: 20, width: 140, height: 105)
+    }
+    let package = try ProjectPackage.create(at: dir.appendingPathComponent("a.leporelo"), album: album)
+    for id in ["p1", "p2"] {
+        let rel = try package.storeOriginal(data: jpegData(width: 2000, height: 1500), ext: "jpg", for: id)
+        try package.storeThumbnail(p3Image(width: 1024, height: 768), for: id)
+        album.photos[id]?.originalState = .stored(relativePath: rel)
+    }
+    try package.save(album)
+    return (package, album)
+}
+
+@Suite struct ExportFailsClosedTests {
+    private func expectMissingOriginals(_ broken: (ProjectPackage, URL) throws -> Void) async throws {
+        let root = Fx.tempDir()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let (package, album) = try packageAlbum(in: root)
+        try broken(package, try #require(package.originalURL(for: "p1", album: album)))
+        let out = root.appendingPathComponent("export", isDirectory: true)
+        try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        try Data("old".utf8).write(to: out.appendingPathComponent("pages.pdf"))
+        let (p, f) = try Fx.setup()
+        let exporter = PDFExporter(album: album, profile: p, format: f,
+                                   images: PackageImageProvider(package: package, album: album))
+        #expect(!Preflight.hasErrors(Preflight.check(album: album, profile: p, format: f)))
+        await #expect(throws: ExportError.missingOriginals(["p1"])) { _ = try await exporter.export(to: out) }
+        // Nothing moved into place, the previous file is untouched, no temp folder is left.
+        #expect(try FileManager.default.contentsOfDirectory(atPath: out.path) == ["pages.pdf"])
+        #expect(try Data(contentsOf: out.appendingPathComponent("pages.pdf")) == Data("old".utf8))
+    }
+
+    @Test func deletedOriginalFailsTheExport() async throws {
+        try await expectMissingOriginals { _, url in try FileManager.default.removeItem(at: url) }
+    }
+
+    @Test func corruptOriginalFailsTheExport() async throws {
+        try await expectMissingOriginals { _, url in
+            try Data(repeating: 0x5A, count: 4096).write(to: url)
+        }
+    }
+
+    // A TRUNCATED JPEG with a valid header is not detected: ImageIO decodes it at full size (the
+    // missing part grey) and reports it complete. Originals are written atomically and synced
+    // (`ProjectPackage.storeOriginal`), so only an outside edit can truncate one.
+
+    @Test func intactPackageExports() async throws {
+        let root = Fx.tempDir()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let (package, album) = try packageAlbum(in: root)
+        let (p, f) = try Fx.setup()
+        let result = try await PDFExporter(album: album, profile: p, format: f,
+                                           images: PackageImageProvider(package: package, album: album))
+            .export(to: root.appendingPathComponent("export"))
+        #expect(result.pageCount == 20)
+    }
+
+    @Test func missingOriginalsMessageIsCzech() {
+        #expect(ExportError.missingOriginals(["a"]).localizedDescription
+                == "Originál 1 fotky v projektu chybí nebo nejde přečíst, export se nezapsal")
+        #expect(ExportError.missingOriginals(["a", "b", "c"]).localizedDescription
+                == "Originály 3 fotek v projektu chybí nebo nejdou přečíst, export se nezapsal")
     }
 }
 

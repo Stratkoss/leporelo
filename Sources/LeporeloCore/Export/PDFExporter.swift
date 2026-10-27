@@ -8,6 +8,29 @@ public enum ExportError: Error, Equatable {
     case unsupportedCoverMode
     /// The PDF context or a file could not be created.
     case cannotWrite(String)
+    /// The original of these photos (sorted ids) could not be read, or only a smaller image (the
+    /// thumbnail) was there: the export would print grey boxes or low-resolution images, so nothing
+    /// was written.
+    case missingOriginals([PhotoID])
+}
+
+extension ExportError: LocalizedError {
+    public var errorDescription: String? {
+        switch self {
+        case .preflightFailed: "Kontrola před exportem našla chyby."
+        case .unsupportedCoverMode: "Obálku se hřbetem Leporelo zatím neumí vytvořit."
+        case .cannotWrite(let name): "Soubor \(name) nejde zapsat."
+        case .missingOriginals(let ids): Self.missingOriginalsMessage(ids.count)
+        }
+    }
+
+    /// "Originál 1 fotky chybí nebo nejde přečíst…", "Originály 3 fotek chybí…".
+    public static func missingOriginalsMessage(_ n: Int) -> String {
+        let noun = n == 1 ? "Originál" : "Originály"
+        let verb = n == 1 ? "chybí nebo nejde přečíst" : "chybí nebo nejdou přečíst"
+        let photos = CzechPlural.choose(n, one: "fotky", few: "fotek", many: "fotek")
+        return "\(noun) \(CzechPlural.grouped(n)) \(photos) v projektu \(verb), export se nezapsal"
+    }
 }
 
 public struct ExportResult: Sendable, Equatable {
@@ -42,6 +65,8 @@ public struct ExportResult: Sendable, Equatable {
 ///   Everything is written into a hidden temp folder in `directory` first and moved into place
 ///   only when complete, so a failed or cancelled export never replaces good files with partial
 ///   ones; the temp folder is always removed.
+/// - Fails closed with `ExportError.missingOriginals` when an image could not be read at the size
+///   the page needs (missing or unreadable original, thumbnail fallback); nothing is moved into place.
 ///
 /// Whether Canva keeps the JPEG quality when it imports the PDF is not verified (spec 10). The
 /// image pipeline is independent of the container, so a "JPG pages" alternative can reuse
@@ -123,6 +148,7 @@ public struct PDFExporter: Sendable {
             await provider.clearCache()
         }
         pages.close()
+        try await Self.failIfImagesMissing(provider)
 
         // Cover.
         var tempCover: URL?
@@ -134,6 +160,7 @@ public struct PDFExporter: Sendable {
             await renderer.renderCover(cover, into: writer.context, options: options)
             writer.endPage()
             writer.close()
+            try await Self.failIfImagesMissing(provider)
             await provider.clearCache()
             tempCover = url
             step()
@@ -150,6 +177,12 @@ public struct PDFExporter: Sendable {
         let coverURL = try tempCover.map { try Self.moveIntoPlace($0, directory: directory) }
         let readmeURL = try Self.moveIntoPlace(tempReadme, directory: directory)
         return ExportResult(pagesURL: pagesURL, coverURL: coverURL, readmeURL: readmeURL, pageCount: pageCount)
+    }
+
+    /// Fail closed: an original that could not be read must not print as a grey box or a thumbnail.
+    private static func failIfImagesMissing(_ provider: ExportImageProvider) async throws {
+        let failed = await provider.failedPhotos
+        if !failed.isEmpty { throw ExportError.missingOriginals(failed) }
     }
 
     /// Removes `.leporelo-export-*` folders older than `staleTempAge` (a crash or kill can skip the

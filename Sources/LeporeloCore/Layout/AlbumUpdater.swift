@@ -28,8 +28,9 @@ public enum AlbumUpdater {
     ///   (i.e. before blank and closing spreads), and its caption gets the date and places like a
     ///   drafted day with 1-2 photos. No empty frame is ever created.
     /// - Filling an empty frame of a manually edited gallery does not change its `manuallyEdited`.
+    /// - A video is never placed: the album is returned unchanged.
     public static func photoSelected(_ id: PhotoID, in album: Album, geometry: PageGeometry) -> Album {
-        guard let photo = album.photos[id], let key = photo.dayKey else { return album }
+        guard let photo = album.photos[id], photo.kind != .video, let key = photo.dayKey else { return album }
         var result = album
         result.photos[id]?.isSelected = true
         result.photos[id]?.selectionDecidedByUser = true
@@ -42,7 +43,7 @@ public enum AlbumUpdater {
     /// follows into the new day's layout (Task 20/21 ruling). Pure.
     ///
     /// - Sets `dayKey`. Selection fields are untouched (a move is not a selection decision).
-    /// - An unselected photo (or the same day, or an unknown photo) changes nothing else.
+    /// - An unselected photo or a video (or the same day, or an unknown photo) changes nothing else.
     /// - A selected photo leaves every journal/gallery frame that holds it (`photoID = nil`, offset
     ///   0, zoom 1: the "marked" convention) and is placed in the new day exactly like
     ///   `photoSelected` places a new photo (an empty gallery frame of the day, else a new
@@ -56,7 +57,7 @@ public enum AlbumUpdater {
         var result = album
         result.photos[id]?.dayKey = day
         photo.dayKey = day
-        guard photo.isSelected else { return result }
+        guard photo.isSelected, photo.kind != .video else { return result }
         for s in result.spreads.indices where result.spreads[s].kind == .journal || result.spreads[s].kind == .gallery {
             for f in result.spreads[s].frames.indices where result.spreads[s].frames[f].photoID == id {
                 result.spreads[s].frames[f].photoID = nil

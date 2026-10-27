@@ -9,10 +9,11 @@ enum JPEGFixtures {
     /// `offset` like "+02:00"; `date` is formatted as naive local time in that offset
     /// (UTC when `offset` is nil). `date == nil` writes no EXIF date. `orientation` is the EXIF tag.
     /// `scene == nil` draws a scaled checkerboard; otherwise `ImageFixtures.scene(seed:)` (large,
-    /// cheap to encode, sharp enough not to count as defective).
+    /// cheap to encode, sharp enough not to count as defective). `rawDate` writes that exact EXIF
+    /// `DateTimeOriginal` text (for invalid dates).
     static func write(to url: URL, size: (Int, Int) = (64, 48), date: Date? = nil,
                       offset: String? = nil, gps: GeoPoint? = nil, orientation: Int? = nil,
-                      scene: Int? = nil) throws {
+                      scene: Int? = nil, rawDate: String? = nil) throws {
         let cg: CGImage
         if let scene {
             cg = ImageFixtures.scene(seed: scene, width: size.0, height: size.1)
@@ -32,6 +33,11 @@ enum JPEGFixtures {
             f.dateFormat = "yyyy:MM:dd HH:mm:ss"
             f.timeZone = TimeZone(secondsFromGMT: offset.map(parseOffset) ?? 0)
             var exif: [CFString: Any] = [kCGImagePropertyExifDateTimeOriginal: f.string(from: date)]
+            if let offset { exif["OffsetTimeOriginal" as CFString] = offset }
+            props[kCGImagePropertyExifDictionary] = exif
+        }
+        if let rawDate {
+            var exif: [CFString: Any] = [kCGImagePropertyExifDateTimeOriginal: rawDate]
             if let offset { exif["OffsetTimeOriginal" as CFString] = offset }
             props[kCGImagePropertyExifDictionary] = exif
         }

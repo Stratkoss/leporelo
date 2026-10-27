@@ -376,3 +376,11 @@ private func sizedPhoto(_ id: String, _ w: Int, _ h: Int) -> Photo {
         #expect(rec.recorded.map(\.1) == [1418])
     }
 }
+
+@Test func pixelHintIsSafeForNonFiniteAndHugeSizes() {
+    #expect(SpreadRenderer.pixelHint(mm: 80, dpi: 300) == 945)
+    #expect(SpreadRenderer.pixelHint(mm: .nan, dpi: 300) == 1)
+    #expect(SpreadRenderer.pixelHint(mm: .infinity, dpi: 300) == SpreadRenderer.maxPixelHint)
+    #expect(SpreadRenderer.pixelHint(mm: 1e300, dpi: 300) == SpreadRenderer.maxPixelHint)
+    #expect(SpreadRenderer.pixelHint(mm: -5, dpi: 300) == 1)
+}

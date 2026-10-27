@@ -9,13 +9,17 @@ public struct PreflightIssue: Sendable, Equatable, Identifiable {
     public var severity: PreflightSeverity
     public var spreadID: String?
     public var frameID: String?
+    /// The text box the issue is about (text rules), nil otherwise.
+    public var textID: String?
     public var message: String
 
-    public init(id: String, severity: PreflightSeverity, spreadID: String?, frameID: String?, message: String) {
+    public init(id: String, severity: PreflightSeverity, spreadID: String?, frameID: String?,
+                textID: String? = nil, message: String) {
         self.id = id
         self.severity = severity
         self.spreadID = spreadID
         self.frameID = frameID
+        self.textID = textID
         self.message = message
     }
 }
@@ -25,7 +29,11 @@ public struct PreflightIssue: Sendable, Equatable, Identifiable {
 /// Order of the result (deterministic): the issues of each spread in `album.spreads` order (frames in
 /// order, then texts in order), then the cover front and back, then the album-level issues: missing
 /// cover, page count, selected photos not in the album (once spreads exist), unverified format.
-/// Within one frame: original, DPI, faces.
+/// Within one frame: original, DPI, faces. Within one text: bleed or safe zone, then overflow.
+///
+/// "Text se nevejde do rámečku" (`textOverflow:<spreadID>:<textID>`, warning) uses
+/// `SpreadRenderer.textOverflows`, i.e. the renderer's fonts and sizes; it is only checked for
+/// non-empty texts and skipped when the bundled fonts are not available.
 ///
 /// DPI matches what the renderer prints: a frame edge lying on the outer boundary of the page area is
 /// stretched by `bleedMM`, so the DPI is computed on the frame extended on those sides. The outer
@@ -42,8 +50,22 @@ public enum Preflight {
     }
 
     public static func check(album: Album, profile: SupplierProfile, format: BookFormat) -> [PreflightIssue] {
+        check(album: album, profile: profile, format: format, fontsAvailable: nil)
+    }
+
+    /// `fontsAvailable` overrides `FontRegistry.areBundledFontsAvailable` (tests); nil asks the
+    /// registry, at most once per call and only when a non-empty text is checked.
+    static func check(album: Album, profile: SupplierProfile, format: BookFormat,
+                      fontsAvailable: Bool?) -> [PreflightIssue] {
         let geometry = PageGeometry(format: format, profile: profile)
         var issues: [PreflightIssue] = []
+        var cachedFonts = fontsAvailable
+        let fonts: () -> Bool = {
+            if let cachedFonts { return cachedFonts }
+            let available = FontRegistry.areBundledFontsAvailable
+            cachedFonts = available
+            return available
+        }
 
         let w = format.pageWidthMM, h = format.pageHeightMM
         let spreadArea = Area(
@@ -55,11 +77,11 @@ public enum Preflight {
             safe: [geometry.safeRect(side: .left)], printArea: .cover, spineX: nil)
 
         for spread in album.spreads {
-            issues += check(spread, area: spreadArea, album: album, geometry: geometry)
+            issues += check(spread, area: spreadArea, album: album, geometry: geometry, fontsAvailable: fonts)
         }
         if let cover = album.cover {
-            issues += check(cover.front, area: coverArea, album: album, geometry: geometry)
-            issues += check(cover.back, area: coverArea, album: album, geometry: geometry)
+            issues += check(cover.front, area: coverArea, album: album, geometry: geometry, fontsAvailable: fonts)
+            issues += check(cover.back, area: coverArea, album: album, geometry: geometry, fontsAvailable: fonts)
         } else if profile.coverMode != .none {
             issues.append(PreflightIssue(id: "noCover", severity: .error, spreadID: nil, frameID: nil,
                                          message: "Album nemá obálku"))
@@ -114,15 +136,17 @@ public enum Preflight {
         var spineX: Double?
     }
 
+    /// The overflow rule measures with the bundled fonts; without them (a broken install) Core Text
+    /// would measure a fallback font, so the rule is skipped. Asked at most once per spread.
     private static func check(_ spread: Spread, area: Area, album: Album,
-                              geometry: PageGeometry) -> [PreflightIssue] {
+                              geometry: PageGeometry, fontsAvailable: () -> Bool) -> [PreflightIssue] {
         let profile = geometry.profile
         var issues: [PreflightIssue] = []
-        func add(_ rule: String, _ severity: PreflightSeverity, frame: String? = nil, key: String? = nil,
+        func add(_ rule: String, _ severity: PreflightSeverity, frame: String? = nil, text: String? = nil,
                  _ message: String) {
-            let id = ([rule, spread.id] + [key ?? frame].compactMap { $0 }).joined(separator: ":")
+            let id = ([rule, spread.id] + [text ?? frame].compactMap { $0 }).joined(separator: ":")
             issues.append(PreflightIssue(id: id, severity: severity, spreadID: spread.id, frameID: frame,
-                                         message: message))
+                                         textID: text, message: message))
         }
 
         for frame in spread.frames {
@@ -137,11 +161,18 @@ public enum Preflight {
                 add("missingPhoto", .error, frame: frame.id, "Fotka chybí v albu")
                 continue
             }
+            if photo.kind == .video {
+                add("video", .error, frame: frame.id, "Video nelze vložit do alba")
+                continue
+            }
             switch photo.originalState {
             case .stored: break
             case .missing: add("original", .error, frame: frame.id, "Originál fotky ještě není v projektu")
             case .downloading: add("original", .error, frame: frame.id, "Originál fotky se ještě stahuje")
-            case .unavailable: add("original", .error, frame: frame.id, "Originál fotky není dostupný v iCloudu")
+            case .unavailable:
+                add("original", .error, frame: frame.id, photo.deletedInSource
+                    ? "Fotka už není ve Fotkách a originál nebyl stažen"
+                    : "Originál fotky není dostupný v iCloudu")
             }
 
             let printed = geometry.bleedExtended(frame.rect, area: area.printArea)
@@ -149,7 +180,7 @@ public enum Preflight {
                                             frame: printed, zoom: frame.zoom)
             if dpi < warningDPI {
                 add("dpi", dpi < errorDPI ? .error : .warning, frame: frame.id,
-                    "Fotka má jen \(Int(dpi.rounded())) DPI, pro tisk je potřeba 220")
+                    "Fotka má jen \(Int(dpi.rounded(.down))) DPI, pro tisk je potřeba 220")
             }
 
             issues += faceIssues(photo: photo, frame: frame, printed: printed, area: area,
@@ -158,9 +189,13 @@ public enum Preflight {
 
         for text in spread.texts where !text.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             if !contains(area.trim, text.rect) {
-                add("textBleed", .warning, key: text.id, "Text zasahuje do zóny spadávky")
+                add("textBleed", .warning, text: text.id, "Text zasahuje do zóny spadávky")
             } else if !area.safe.contains(where: { contains($0, text.rect) }) {
-                add("textSafe", .warning, key: text.id, "Text leží mimo bezpečnou zónu")
+                add("textSafe", .warning, text: text.id, "Text leží mimo bezpečnou zónu")
+            }
+            if fontsAvailable(), SpreadRenderer.textOverflows(text) {
+                add("textOverflow", .warning, text: text.id,
+                    "Text se nevejde do rámečku, konec se nevytiskne")
             }
         }
 
@@ -170,7 +205,7 @@ public enum Preflight {
             }
             if !hasBody {
                 let key = spread.texts.first { $0.role == .body }?.id
-                add("emptyBody", .warning, key: key, "Text deníkové dvoustrany je prázdný")
+                add("emptyBody", .warning, text: key, "Text deníkové dvoustrany je prázdný")
             }
         }
         return issues

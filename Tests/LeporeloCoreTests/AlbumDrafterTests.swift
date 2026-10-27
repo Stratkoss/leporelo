@@ -279,4 +279,60 @@ import Foundation
         #expect(Self.text(cover.front, .title) == "Léto")
         #expect(cover.back.kind == .blank && cover.back.frames.isEmpty)
     }
+
+    // Final fix wave C3: a 10-day trip with 220 selected photos is above Canva's 98 pages with 2
+    // photos per gallery (~204 pages); the drafter plans again with 3 per gallery.
+    @Test func longTripReplansWithThreePhotosPerGallery() throws {
+        let (p, f) = try Self.canva()
+        #expect(p.pageCount.max == 98)
+        let days = (0..<10).map { i -> DayGroup in
+            let key = DayKey(year: 2026, month: 6, day: 10 + i)
+            return Self.day(key, Self.dayPhotos("d\(i)-", key, count: 22))
+        }
+        let a = Self.draft(days, profile: p, format: f)
+        let two = Self.draft(days, profile: try Self.canva(PageCountRule(min: 20, max: nil, multipleOf: 2)).0,
+                             format: f)
+        let galleries = a.spreads.filter { $0.kind == .gallery }
+        #expect(galleries.contains { $0.templateID == "gallery-3" })
+        #expect(!two.spreads.contains { $0.templateID == "gallery-3" })
+        #expect(AlbumDrafter.pageCount(of: two) == 204)
+        // Per day: journal-5 + 17 photos in 6 galleries (3,3,3,3,3,2) = 7 spreads; + intro + closing.
+        #expect(AlbumDrafter.pageCount(of: a) == (10 * 7 + 2) * 2)
+        #expect(AlbumDrafter.pageCount(of: a) < AlbumDrafter.pageCount(of: two))
+        // Nothing dropped.
+        #expect(Self.placed(a.spreads.filter { $0.kind == .journal || $0.kind == .gallery }).count == 220)
+    }
+
+    @Test func tripThatFitsWithThreePerGalleryIsUnderTheMaximum() throws {
+        let (p, f) = try Self.canva(PageCountRule(min: 2, max: 20, multipleOf: 2))
+        // 2 days x 13 photos: 2 per gallery = 1 + 2 x (1 + 4) + 1 = 12 spreads (24 pages);
+        // 3 per gallery = 1 + 2 x (1 + 3) + 1 = 10 spreads (20 pages).
+        let days = [Self.day(Self.june18, Self.dayPhotos("a", Self.june18, count: 13)),
+                    Self.day(Self.june19, Self.dayPhotos("b", Self.june19, count: 13))]
+        let a = Self.draft(days, profile: p, format: f)
+        #expect(AlbumDrafter.pageCount(of: a) == 20)
+        #expect(p.pageCount.isSatisfied(by: AlbumDrafter.pageCount(of: a)))
+    }
+
+    @Test func normalTripKeepsTwoPerGallery() throws {
+        let (p, f) = try Self.canva()
+        let days = [Self.day(Self.june18, Self.dayPhotos("a", Self.june18, count: 12)),
+                    Self.day(Self.june19, Self.dayPhotos("b", Self.june19, count: 12))]
+        let a = Self.draft(days, profile: p, format: f)
+        #expect(!a.spreads.contains { $0.templateID == "gallery-3" })
+        #expect(a.spreads.filter { $0.kind == .gallery }.allSatisfy { $0.frames.count <= 2 })
+    }
+
+    // Final fix wave C7: videos are never laid out, even when selected.
+    @Test func selectedVideosAreNotDrafted() throws {
+        let (p, f) = try Self.canva()
+        var photos = Self.dayPhotos("a", Self.june18, count: 6)
+        photos[0].kind = .video
+        photos[0].analysis = PhotoAnalysis(aesthetic: 1, sharpness: 900, isUtility: false, faceRects: [],
+                                           closedEyes: false, featurePrint: nil)
+        let a = Self.draft([Self.day(Self.june18, photos)], profile: p, format: f)
+        let placed = Self.placed(a.spreads) + (a.cover?.front.frames.compactMap(\.photoID) ?? [])
+        #expect(!placed.contains("a0"))
+        #expect(Set(Self.placed(a.spreads)) == Set(photos.dropFirst().map(\.id)))
+    }
 }

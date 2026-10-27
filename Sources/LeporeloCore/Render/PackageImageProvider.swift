@@ -8,8 +8,9 @@ import ImageIO
 /// - `minPixelWidth <= 1024`: the stored thumbnail (nil when there is none).
 /// - larger: the original decoded with ImageIO (EXIF orientation applied, `shouldCache` off),
 ///   scaled down only as far as `minPixelWidth` requires. If the original is missing or
-///   unreadable it falls back to the thumbnail: better a low-res image than a crash.
-///   Preflight, not this provider, is what blocks exports with missing originals.
+///   unreadable it falls back to the thumbnail: fine on screen. The export
+///   must not print that fallback: `ExportImageProvider` detects the too-small image and
+///   `PDFExporter` fails with `ExportError.missingOriginals`.
 ///
 /// It snapshots the `Album` at init: rebuild it when originals change (Task 17).
 public struct PackageImageProvider: ImageProvider {

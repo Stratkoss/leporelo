@@ -24,11 +24,25 @@ import UniformTypeIdentifiers
 /// Cache: one entry per photo, reused when it was made for at least the requested target.
 /// `PDFExporter` calls `clearCache()` after each spread, so the two pages of a spread share the
 /// work and memory stays bounded to one spread's photos.
+///
+/// Fail closed: a photo whose base image is missing (`nil`) or narrower than
+/// `min(Photo.pixelWidth, target) - tolerance` is recorded in `failedPhotos` (the base provider
+/// may fall back to the 1024 px thumbnail when an original cannot be read; that is fine on screen
+/// but would print at a fraction of the DPI). `PDFExporter` throws
+/// `ExportError.missingOriginals` when the list is not empty, before any file is moved into place.
 actor ExportImageProvider: ImageProvider {
     private let base: ImageProvider
     private let jpegQuality: Double
     private let sourceWidth: [PhotoID: Int]
     private var cache: [PhotoID: (width: Int, image: CGImage)] = [:]
+    private var failures = Set<PhotoID>()
+
+    /// Allowed shortfall of the base image against the expected width (rounding of a decoder or a
+    /// slightly different original): 2 % of the expected width, at least 4 px.
+    static func tolerance(expected: Int) -> Int { max(4, expected / 50) }
+
+    /// Photos whose image was missing or too small, sorted.
+    var failedPhotos: [PhotoID] { failures.sorted() }
 
     init(base: ImageProvider, album: Album, jpegQuality: Double) {
         self.base = base
@@ -43,7 +57,12 @@ actor ExportImageProvider: ImageProvider {
         // `width` in the cache is the requested target (before capping at the source width).
         if let hit = cache[photoID], hit.width >= wanted { return hit.image }
         let original = max(sourceWidth[photoID] ?? 0, wanted)
-        guard let source = await base.image(for: photoID, minPixelWidth: original) else { return nil }
+        guard let source = await base.image(for: photoID, minPixelWidth: original) else {
+            failures.insert(photoID)
+            return nil
+        }
+        let expected = min(sourceWidth[photoID].flatMap { $0 > 0 ? $0 : nil } ?? wanted, wanted)
+        if source.width < expected - Self.tolerance(expected: expected) { failures.insert(photoID) }
         let width = min(source.width, wanted)
         guard let image = Self.printImage(source, width: width, quality: jpegQuality) else { return nil }
         cache[photoID] = (wanted, image)

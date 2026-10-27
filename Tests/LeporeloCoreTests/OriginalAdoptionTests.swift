@@ -46,4 +46,29 @@ struct OriginalAdoptionTests {
                                                 withIntermediateDirectories: true)
         #expect(package.originalFileSizes() == ["p1.jpg": 3, "p2.jpg": 0])
     }
+
+    @Test func severalExtensionsPickTheFirstName() {
+        var a = album([photo("x", .missing)])
+        ProjectPackage.adoptOriginals(in: &a, fileSizes: ["x.jpg": 1, "x.heic": 1, "x.HEIC": 1, "x.tiff": 1])
+        #expect(a.photos["x"]?.originalState == .stored(relativePath: "originals/x.HEIC"))
+    }
+
+    @Test func idWithADotTakesItsOwnFile() {
+        var a = album([photo("abc", .missing), photo("abc.e", .missing)])
+        ProjectPackage.adoptOriginals(in: &a, fileSizes: ["abc.e.jpg": 3])
+        #expect(a.photos["abc"]?.originalState == .missing)
+        #expect(a.photos["abc.e"]?.originalState == .stored(relativePath: "originals/abc.e.jpg"))
+    }
+
+    /// 3 000 photos x 600 files: one index, not a sort per photo (was ~9 s in Debug).
+    @Test func isFastWithThousandsOfPhotosAndFiles() {
+        var a = album((0..<3000).map { photo("photo-\($0)", .missing) })
+        var files: [String: Int] = [:]
+        for i in 0..<600 { files["photo-\(i * 5).jpg"] = 1000 }
+        let start = Date()
+        let changed = ProjectPackage.adoptOriginals(in: &a, fileSizes: files)
+        let elapsed = Date().timeIntervalSince(start)
+        #expect(changed.count == 600)
+        #expect(elapsed < 0.5, "adoptOriginals took \(elapsed) s")
+    }
 }

@@ -364,4 +364,22 @@ import Foundation
         expected.photos["u"]?.dayKey = Self.june19
         #expect(b == expected)
     }
+
+    // Final fix wave C7: Core never places a video.
+    @Test func selectedOrMovedVideoIsNotPlaced() throws {
+        let (p, f) = try D.canva(Self.lax)
+        var a = D.draft([D.day(Self.june18, D.dayPhotos("a", Self.june18, count: 4))], profile: p, format: f)
+        var video = D.photo("v", day: Self.june18, minute: 40)
+        video.kind = .video
+        a = Self.adding(video, to: a)
+        #expect(AlbumUpdater.photoSelected("v", in: a, geometry: Self.geometry(p, f)) == a)
+        var selected = a
+        selected.photos["v"]?.isSelected = true
+        let moved = AlbumUpdater.photoMoved("v", to: Self.june19, in: selected, geometry: Self.geometry(p, f))
+        var expected = selected
+        expected.photos["v"]?.dayKey = Self.june19
+        #expect(moved == expected)
+        #expect(Self.frames(holding: "v", in: moved).isEmpty)
+    }
 }
+

@@ -243,7 +243,8 @@ private func isOriginalStart(_ event: FakePhotoSource.Event) -> Bool {
                              onStateChange: { await changes.append(StateChange(id: $0, state: $1)) })
 
         let values = await changes.values
-        #expect(values.filter { $0.id == "a" }.map(\.state) == [.downloading, .unavailable])
+        // Transient: `.missing` (retried later), never `.unavailable`.
+        #expect(values.filter { $0.id == "a" }.map(\.state) == [.downloading, .missing])
         #expect(values.filter { $0.id == "b" }.map(\.state)
                 == [.downloading, .stored(relativePath: "originals/b.jpg")])
         #expect(source.originalCalls("src-a") == 3)
@@ -288,8 +289,8 @@ private func isOriginalStart(_ event: FakePhotoSource.Event) -> Bool {
         let values = await changes.values
         #expect(values.last { $0.id == "gone" }?.state == .unavailable)
         #expect(values.last { $0.id == "denied" }?.state == .missing)
-        // Deleted in the source: one attempt only.
-        #expect(values.last { $0.id == "deleted" }?.state == .unavailable)
+        // Deleted in the source: one attempt only; a cloud failure stays transient.
+        #expect(values.last { $0.id == "deleted" }?.state == .missing)
         #expect(source.originalCalls("src-gone") == 1)
         #expect(source.originalCalls("src-deleted") == 1)
     }

@@ -15,9 +15,11 @@ import Foundation
 /// - States per id, reported through `onStateChange` from the run loop only (serialized, in order):
 ///   `.downloading`, then one of
 ///   - `.stored(relativePath:)` on success,
-///   - `.unavailable` after `maxAttempts` `PhotoSourceError.cloudUnavailable` failures in a row
-///     (`retryDelay` apart), or on `PhotoSourceError.notFound` (the photo is gone; retrying will
-///     not help),
+///   - `.unavailable` only on `PhotoSourceError.notFound` (the photo is gone; retrying will not
+///     help),
+///   - `.missing` after `maxAttempts` `PhotoSourceError.cloudUnavailable` failures in a row
+///     (`retryDelay` apart): iCloud or the network may be back later, so it stays transient and the
+///     app's bounded automatic retry and the "Stáhnout znovu" command enqueue it again,
 ///   - `.missing` on any other error (not authorized, disk write failure, cancellation): treated as
 ///     transient, so the user can retry by enqueueing the id again.
 /// - Photos with `deletedInSource == true` get a single attempt.
@@ -122,7 +124,7 @@ public actor OriginalsDownloader {
             } catch let error as PhotoSourceError {
                 switch error {
                 case .cloudUnavailable:
-                    if attempt >= attempts { return .unavailable }
+                    if attempt >= attempts { return .missing }  // transient: retried later
                     attempt += 1
                     do { try await Task.sleep(for: retryDelay) } catch { return .missing }
                 case .notFound:

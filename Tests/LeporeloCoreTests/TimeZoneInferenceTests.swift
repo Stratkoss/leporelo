@@ -73,4 +73,40 @@ import Foundation
         #expect(TimeZoneInference.secondsFromGMT(forLongitude: 14.4) == 3600)
         #expect(TimeZoneInference.secondsFromGMT(forLongitude: -74) == -18000)
     }
+
+    // Final fix wave C5: the nearest-neighbour search is sorted + binary search.
+    @Test func nearestNeighbourTiesAndLimits() {
+        let a = Self.photo("a", "2026-06-18T10:00:00Z", tz: 3600)
+        let b = Self.photo("b", "2026-06-18T12:00:00Z", tz: 7200)
+        let c = Self.photo("c", "2026-06-18T12:00:00Z", tz: 10800)
+        // Exactly between a and b/c: the tie goes to the smallest id ("a").
+        let mid = Self.photo("m", "2026-06-18T11:00:00Z")
+        #expect(Self.zones([c, b, a, mid])["m"] == 3600)
+        // Same distance to b and c only: "b".
+        let late = Self.photo("z", "2026-06-18T13:00:00Z")
+        #expect(Self.zones([c, b, late])["z"] == 7200)
+        // More than 12 h away: no neighbour, the Mac's zone.
+        let far = Self.photo("f", "2026-06-19T00:00:01Z")
+        #expect(Self.zones([b, far])["f"] == TimeZone.current.secondsFromGMT(for: far.capturedAt))
+        // Exactly 12 h: still a neighbour.
+        let edge = Self.photo("e", "2026-06-19T00:00:00Z")
+        #expect(Self.zones([b, edge])["e"] == 7200)
+    }
+
+    @Test func threeThousandPhotosResolveQuickly() {
+        let start = ISO8601DateFormatter().date(from: "2026-06-10T00:00:00Z")!
+        let photos = (0..<3000).map { i -> Photo in
+            var p = Self.photo("p\(i)", "2026-06-10T00:00:00Z", gps: i % 2 == 0 ? Self.positano : nil,
+                               tz: i % 50 == 0 ? 7200 : nil)
+            p.capturedAt = start.addingTimeInterval(Double(i) * 290)
+            return p
+        }
+        let begin = Date()
+        let zones = Self.zones(photos)
+        let elapsed = Date().timeIntervalSince(begin)
+        #expect(zones.count == 3000)
+        #expect(zones.values.allSatisfy { $0 == 7200 })
+        #expect(elapsed < 0.25, "resolveTimeZones took \(elapsed) s")
+    }
 }
+

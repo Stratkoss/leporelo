@@ -115,12 +115,23 @@ public struct SpreadRenderer: Sendable {
         }
         var result: [PhotoID: CGImage] = [:]
         for id in order {
-            let minWidth = Int(((widest[id] ?? 0) / 25.4 * dpi).rounded(.up))
-            if let image = await images.image(for: id, minPixelWidth: max(minWidth, 1)) {
+            let minWidth = Self.pixelHint(mm: widest[id] ?? 0, dpi: dpi)
+            if let image = await images.image(for: id, minPixelWidth: minWidth) {
                 result[id] = image
             }
         }
         return result
+    }
+
+    /// The largest pixel width the renderer ever asks for (well above any camera original).
+    static let maxPixelHint = 100_000
+
+    /// `ceil(mm / 25.4 * dpi)` clamped to 1...`maxPixelHint`; a NaN, infinite or huge value (a
+    /// corrupt frame rect or zoom) gives a safe number instead of trapping in the `Int` conversion.
+    static func pixelHint(mm: Double, dpi: Double) -> Int {
+        let pixels = (mm / 25.4 * dpi).rounded(.up)
+        guard pixels.isFinite else { return pixels == .infinity ? maxPixelHint : 1 }
+        return Int(min(Double(maxPixelHint), max(1, pixels)))
     }
 
     /// Width in mm the photo of `frame` is drawn at (cover-fit on the bleed-extended frame, zoom included).
@@ -277,12 +288,10 @@ public struct SpreadRenderer: Sendable {
         }
     }
 
-    private func drawText(_ box: TextBox, in ctx: CGContext, pageWidth: Double, isSpread: Bool) {
-        guard !box.text.isEmpty, box.rect.size.width > 0, box.rect.size.height > 0 else { return }
+    /// The text of `box` styled exactly as it is drawn (font and size of its role, word wrapping).
+    static func attributedText(_ box: TextBox, rightAligned: Bool) -> NSAttributedString {
         let spec = Self.font(for: box.role)
         let ctFont = CTFontCreateWithName(spec.name as CFString, spec.size, nil)
-        let rightAligned = box.role == .pageNumber && isSpread && (box.rect.minX + box.rect.size.width / 2) >= pageWidth
-
         var alignment: CTTextAlignment = rightAligned ? .right : .left
         var lineBreak: CTLineBreakMode = .byWordWrapping
         let style: CTParagraphStyle = withUnsafeBytes(of: &alignment) { alignBytes in
@@ -302,11 +311,34 @@ public struct SpreadRenderer: Sendable {
             NSAttributedString.Key(kCTForegroundColorAttributeName as String):
                 CGColor(srgbRed: 0.1, green: 0.1, blue: 0.1, alpha: 1),
         ]
-        let string = NSAttributedString(string: box.text, attributes: attributes)
+        return NSAttributedString(string: box.text, attributes: attributes)
+    }
+
+    private static func textFrame(_ string: NSAttributedString, width: Double, height: Double) -> CTFrame {
         let framesetter = CTFramesetterCreateWithAttributedString(string)
-        let w = box.rect.size.width, h = box.rect.size.height
-        let path = CGPath(rect: CGRect(x: 0, y: 0, width: w, height: h), transform: nil)
-        let frame = CTFramesetterCreateFrame(framesetter, CFRange(location: 0, length: 0), path, nil)
+        let path = CGPath(rect: CGRect(x: 0, y: 0, width: width, height: height), transform: nil)
+        return CTFramesetterCreateFrame(framesetter, CFRange(location: 0, length: 0), path, nil)
+    }
+
+    /// True when part of the text (trailing whitespace aside) does not fit its box and so is cut
+    /// from the print: Core Text lays it out with the renderer's font and size in the box and the
+    /// visible range ends before the text does. An empty text never overflows.
+    public static func textOverflows(_ box: TextBox) -> Bool {
+        let trimmed = String(box.text.reversed().drop(while: \.isWhitespace).reversed())
+        let needed = (trimmed as NSString).length
+        guard needed > 0 else { return false }
+        guard box.rect.size.width > 0, box.rect.size.height > 0 else { return true }
+        FontRegistry.registerBundledFonts()
+        let frame = textFrame(attributedText(box, rightAligned: false),
+                              width: box.rect.size.width, height: box.rect.size.height)
+        return CTFrameGetVisibleStringRange(frame).length < needed
+    }
+
+    private func drawText(_ box: TextBox, in ctx: CGContext, pageWidth: Double, isSpread: Bool) {
+        guard !box.text.isEmpty, box.rect.size.width > 0, box.rect.size.height > 0 else { return }
+        let rightAligned = box.role == .pageNumber && isSpread && (box.rect.minX + box.rect.size.width / 2) >= pageWidth
+        let frame = Self.textFrame(Self.attributedText(box, rightAligned: rightAligned),
+                                   width: box.rect.size.width, height: box.rect.size.height)
 
         ctx.saveGState()
         defer { ctx.restoreGState() }

@@ -9,7 +9,8 @@ import ImageIO
 ///   the instant is exact and `timeZoneSeconds` is the offset. Without an offset the zone is
 ///   unknown: the naive time is interpreted in the Mac's CURRENT time zone as a last resort and
 ///   `timeZoneSeconds` is nil (day grouping infers zones from GPS neighbours).
-///   No EXIF date: file creation date, else modification date; `timeZoneSeconds` nil.
+///   No EXIF date, or an invalid one (zero date, year outside 1...9999, a field out of range): file
+///   creation date, else modification date, else 1970-01-01; `timeZoneSeconds` nil.
 /// - GPS (0,0) without any ref is treated as "no location".
 /// - Date range queries are half-open: `start <= capturedAt < end`.
 /// - Hidden entries (leading dot) and `*.leporelo` packages are ignored; unreadable files are skipped.
@@ -197,10 +198,9 @@ public struct FolderPhotoSource: PhotoSource {
                 fraction = v
             }
             let offsetText = (exif["OffsetTimeOriginal" as CFString] as? String)
-            if let offsetText, let offset = Self.parseOffset(offsetText) {
-                let instant = Self.utcCalendar.date(from: naive)!
-                    .addingTimeInterval(-Double(offset) + fraction)
-                return (instant, offset)
+            if let offsetText, let offset = Self.parseOffset(offsetText),
+               let utc = Self.utcCalendar.date(from: naive) {
+                return (utc.addingTimeInterval(-Double(offset) + fraction), offset)
             }
             var cal = Calendar(identifier: .gregorian)
             cal.timeZone = .current
@@ -230,12 +230,17 @@ public struct FolderPhotoSource: PhotoSource {
         return c
     }()
 
-    /// "yyyy:MM:dd HH:mm:ss" -> components.
-    private static func parseNaive(_ s: String) -> DateComponents? {
-        let parts = s.split(whereSeparator: { $0 == ":" || $0 == " " }).compactMap { Int($0) }
-        guard parts.count == 6 else { return nil }
-        return DateComponents(year: parts[0], month: parts[1], day: parts[2],
-                              hour: parts[3], minute: parts[4], second: parts[5])
+    /// "yyyy:MM:dd HH:mm:ss" -> components, nil unless every field is in range (year 1...9999,
+    /// month 1...12, day 1...31, hour 0...23, minute and second 0...59). EXIF is untrusted: a zero
+    /// date ("0000:00:00 00:00:00") would become year -1, which `AlbumCoding` cannot read back, and
+    /// a huge year makes `Calendar.date(from:)` return nil.
+    static func parseNaive(_ s: String) -> DateComponents? {
+        let parts = s.split(whereSeparator: { $0 == ":" || $0 == " " }).map { Int($0) }
+        guard parts.count == 6, parts.allSatisfy({ $0 != nil }) else { return nil }
+        let p = parts.map { $0 ?? 0 }
+        guard (1...9999).contains(p[0]), (1...12).contains(p[1]), (1...31).contains(p[2]),
+              (0...23).contains(p[3]), (0...59).contains(p[4]), (0...59).contains(p[5]) else { return nil }
+        return DateComponents(year: p[0], month: p[1], day: p[2], hour: p[3], minute: p[4], second: p[5])
     }
 
     /// "+02:00" / "-0530" / "Z" -> seconds.

@@ -92,6 +92,24 @@ private func makeAlbum() -> Album {
     #expect(frame.offset == Point(x: 1, y: -1))
 }
 
+@Test func setFrameTransformSanitisesNonFiniteValues() throws {
+    func frame(_ offset: Point, _ zoom: Double) throws -> Frame {
+        try makeAlbum().applying(.setFrameTransform(spreadID: "s1", frameID: "f1", offset: offset, zoom: zoom))
+            .album.spreads[0].frames[0]
+    }
+    #expect(try frame(Point(x: .nan, y: .infinity), .nan) == Frame(id: "f1", rect: Rect(x: 0, y: 0, width: 10, height: 10),
+                                                                  photoID: "p1", offset: Point(x: 0, y: 0), zoom: 1))
+    #expect(try frame(Point(x: -.infinity, y: 0.5), .infinity).zoom == 1)
+    #expect(try frame(Point(x: -.infinity, y: 0.5), .infinity).offset == Point(x: 0, y: 0.5))
+    #expect(try frame(Point(x: 0, y: 0), -.infinity).zoom == 1)
+    #expect(try frame(Point(x: 0, y: 0), 1e9).zoom == 100)
+    #expect(try frame(Point(x: 0, y: 0), 3).zoom == 3)
+    // The result always encodes (JSONEncoder throws on NaN/infinity).
+    let (edited, _) = try makeAlbum().applying(
+        .setFrameTransform(spreadID: "s1", frameID: "f1", offset: Point(x: .nan, y: .nan), zoom: .infinity))
+    #expect(throws: Never.self) { _ = try AlbumCoding.encoder().encode(edited) }
+}
+
 @Test func deleteSpreadInverseRestoresAtSameIndex() throws {
     let album = makeAlbum()
     let (edited, inverse) = try album.applying(.deleteSpread(id: "s2"))

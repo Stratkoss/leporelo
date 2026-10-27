@@ -25,6 +25,20 @@ public enum AlbumEditError: Error, Equatable {
 }
 
 extension Album {
+    /// The largest frame zoom an edit stores.
+    public static let maxFrameZoom = 100.0
+
+    /// Zoom as stored: NaN or infinite -> 1 (JSON cannot encode them, every save would fail),
+    /// then clamped to 1...`maxFrameZoom`.
+    static func sanitizedZoom(_ zoom: Double) -> Double {
+        zoom.isFinite ? min(maxFrameZoom, max(1, zoom)) : 1
+    }
+
+    /// Offset component as stored: NaN or infinite -> 0, then clamped to -1...1.
+    static func sanitizedOffset(_ value: Double) -> Double {
+        value.isFinite ? min(1, max(-1, value)) : 0
+    }
+
     /// Applies `edit` and returns the new album plus the edit that undoes it exactly.
     ///
     /// Inverse strategy: every edit that touches the content of one spread (and sets
@@ -84,9 +98,9 @@ extension Album {
         case let .setFrameTransform(spreadID, frameID, offset, zoom):
             let inverse = try mutateSpread(spreadID) { spread in
                 let i = try frameIndex(spread, frameID)
-                spread.frames[i].zoom = max(1, zoom)
-                spread.frames[i].offset = Point(x: min(1, max(-1, offset.x)),
-                                                y: min(1, max(-1, offset.y)))
+                spread.frames[i].zoom = Self.sanitizedZoom(zoom)
+                spread.frames[i].offset = Point(x: Self.sanitizedOffset(offset.x),
+                                                y: Self.sanitizedOffset(offset.y))
             }
             return (album, inverse)
 

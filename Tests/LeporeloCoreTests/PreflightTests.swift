@@ -112,7 +112,7 @@ import Foundation
                                     photos: [small])
         #expect(w.count == 1)
         #expect(w[0].severity == .warning)
-        #expect(w[0].message == "Fotka má jen 172 DPI, pro tisk je potřeba 220")
+        #expect(w[0].message == "Fotka má jen 171 DPI, pro tisk je potřeba 220")
         // Page-wide but not touching the page edge at the spine side: left edge bleeds, right edge (spine
         // in per-page rendering) bleeds too. Use a frame spanning 297 mm shifted off the edges: exactly 175.
         let inner = try Self.issuesOfS1(Self.spread(frames: [Self.frame(Rect(x: 148.5, y: 20, width: 297, height: 150))]),
@@ -125,7 +125,7 @@ import Foundation
                                     photos: [small])
         #expect(e.count == 1)
         #expect(e[0].severity == .error)
-        #expect(e[0].message == "Fotka má jen 87 DPI, pro tisk je potřeba 220")
+        #expect(e[0].message == "Fotka má jen 86 DPI, pro tisk je potřeba 220")
     }
 
     @Test func dpiUsesBleedOnOuterEdgesOnly() throws {
@@ -306,4 +306,75 @@ import Foundation
         #expect(a.placedPhotoIDs == ["p1", "c"])
         #expect(a.unplacedSelectedPhotos.map(\.id) == ["x"])
     }
+
+    // MARK: Final fix wave
+
+    @Test func dpiIsShownRoundedDown() throws {
+        // 1765 px over a 299.6 mm wide drawn image: 149.6 DPI -> "149", an error (below 150).
+        let px = 1767
+        let frameMM = Double(px) / 149.8 * 25.4
+        let p = Self.photo("p1", w: px, h: px * 3 / 4)
+        let issues = try Self.issuesOfS1(Self.spread(frames: [Self.frame(Rect(x: 148.5, y: 20, width: frameMM,
+                                                                              height: 150))]), photos: [p])
+        #expect(issues.map(\.message) == ["Fotka má jen 149 DPI, pro tisk je potřeba 220"])
+        #expect(issues.first?.severity == .error)
+    }
+
+    @Test func unavailableDeletedInSourceDoesNotMentionICloud() throws {
+        var p = Self.photo("p1", state: .unavailable)
+        p.deletedInSource = true
+        let issues = try Self.issuesOfS1(Self.spread(), photos: [p])
+        #expect(issues.map(\.message) == ["Fotka už není ve Fotkách a originál nebyl stažen"])
+        #expect(issues.first?.severity == .error)
+    }
+
+    @Test func placedVideoIsAnError() throws {
+        var v = Self.photo("p1")
+        v.kind = .video
+        let issues = try Self.issuesOfS1(Self.spread(), photos: [v])
+        #expect(issues.map(\.id) == ["video:s1:f1"])
+        #expect(issues.first?.message == "Video nelze vložit do alba")
+        #expect(issues.first?.severity == .error)
+    }
+
+    static let longBody = String(repeating: "Ráno jsme vyrazili lodí z Amalfi do Positana a celý den se koupali. ", count: 30)
+
+    @Test func longTextInSmallBoxWarns() throws {
+        let box = TextBox(id: "body", rect: Rect(x: 20, y: 130, width: 100, height: 20), role: .body, text: Self.longBody)
+        #expect(SpreadRenderer.textOverflows(box))
+        let issues = try Self.issuesOfS1(Self.spread(texts: [box]))
+        let overflow = issues.filter { $0.id == "textOverflow:s1:body" }
+        #expect(overflow.count == 1)
+        #expect(overflow.first?.severity == .warning)
+        #expect(overflow.first?.textID == "body")
+        #expect(overflow.first?.frameID == nil)
+        #expect(overflow.first?.message == "Text se nevejde do rámečku, konec se nevytiskne")
+    }
+
+    @Test func shortOrEmptyTextDoesNotWarn() throws {
+        for text in ["Krátký text", "", "   \n ", "Dva řádky\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n"] {
+            let box = TextBox(id: "body", rect: Rect(x: 20, y: 130, width: 100, height: 20), role: .body, text: text)
+            #expect(!SpreadRenderer.textOverflows(box), "\(text)")
+            let issues = try Self.issuesOfS1(Self.spread(texts: [box]))
+            #expect(!issues.contains { $0.id.hasPrefix("textOverflow") }, "\(text)")
+        }
+    }
+
+    @Test func overflowIsSkippedWithoutFonts() throws {
+        let box = TextBox(id: "body", rect: Rect(x: 20, y: 130, width: 100, height: 20), role: .body, text: Self.longBody)
+        let (p, f) = try Self.setup()
+        let album = Self.album(spreads: [Self.spread(texts: [box]), Self.spread("s2")], cover: Self.cover())
+        #expect(Preflight.check(album: album, profile: p, format: f, fontsAvailable: true)
+            .contains { $0.id == "textOverflow:s1:body" })
+        #expect(!Preflight.check(album: album, profile: p, format: f, fontsAvailable: false)
+            .contains { $0.id.hasPrefix("textOverflow") })
+    }
+
+    @Test func textIssuesCarryTheTextID() throws {
+        let box = TextBox(id: "cap", rect: Rect(x: 1, y: 130, width: 100, height: 20), role: .caption, text: "Popisek")
+        let issues = try Self.issuesOfS1(Self.spread(texts: [box]))
+        #expect(issues.map(\.id) == ["textSafe:s1:cap"])
+        #expect(issues.first?.textID == "cap")
+    }
 }
+
