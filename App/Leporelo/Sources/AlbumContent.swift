@@ -95,7 +95,12 @@ struct AlbumContent: View {
     }
 
     private func makeModels() {
-        if triage?.store !== store { triage = TriageModel(store: store) }
+        if triage?.store !== store {
+            let model = TriageModel(store: store)
+            // Read at each selection or move, so a change in "Oblíbená rozložení…" counts at once.
+            model.layoutWeights = { LayoutPreferences().weights() }
+            triage = model
+        }
         if editor?.store !== store {
             do {
                 let (profile, format) = try ProfileCatalog.format(profileID: store.album.supplierProfileID,

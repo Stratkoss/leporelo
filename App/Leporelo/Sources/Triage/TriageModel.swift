@@ -191,6 +191,9 @@ final class TriageModel {
     let store: AlbumStore
     /// The window's undo manager (set by the view); nil means edits without undo.
     @ObservationIgnored var undoManager: UndoManager?
+    /// The liked layouts ("Oblíbená rozložení…"), read at each selection or move that lays out a
+    /// day again (spec 6), so a change counts at once. The app reads `LayoutPreferences`.
+    @ObservationIgnored var layoutWeights: () -> LayoutWeights = { LayoutWeights() }
     /// The entry the user chose; nil until they choose one. May point at an entry that no longer
     /// exists (its last photo was moved away); `visibleEntry` falls back to the first entry then.
     var currentEntry: DayEntryID? = nil
@@ -489,7 +492,8 @@ final class TriageModel {
         let select = !photo.isSelected
         if !album.spreads.isEmpty, let (profile, format) = format(of: album) {
             let updated = select
-                ? AlbumUpdater.photoSelected(id, in: album, geometry: PageGeometry(format: format, profile: profile))
+                ? AlbumUpdater.photoSelected(id, in: album, geometry: PageGeometry(format: format, profile: profile),
+                                             weights: layoutWeights())
                 : AlbumUpdater.photoDeselected(id, in: album)
             // `photoSelected` leaves a photo without a day unchanged: select it plainly then.
             if updated != album {
@@ -522,7 +526,8 @@ final class TriageModel {
         if photo.isSelected, !holders.isEmpty, !holders.contains(where: \.manuallyEdited),
            let (profile, format) = format(of: album) {
             let updated = AlbumUpdater.photoMoved(id, to: day, in: album,
-                                                  geometry: PageGeometry(format: format, profile: profile))
+                                                  geometry: PageGeometry(format: format, profile: profile),
+                                                  weights: layoutWeights())
             store.replace(album: updated, actionName: AlbumStore.actionName(for: .setPhotoDay(id, day)),
                           undoManager: undoManager)
             return

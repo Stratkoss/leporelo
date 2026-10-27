@@ -467,6 +467,51 @@ struct TriageModelTests {
         #expect(undo.undoActionName == "Přesunout fotku do dne")
     }
 
+    /// Spec 6: the liked layouts also count when triage lays a day out again (selecting a photo,
+    /// moving a placed one): the model reads `layoutWeights` and passes them to the updater.
+    @Test func selectingAndMovingUseTheLikedLayouts() throws {
+        // Every third photo portrait: the liked layouts change how such a day is laid out.
+        func mixed(_ p: Photo, _ i: Int) -> Photo {
+            var p = p
+            if i % 3 == 2 { (p.pixelWidth, p.pixelHeight) = (3000, 4000) }
+            return p
+        }
+        let photos = (0..<8).map { mixed(photo("a\($0)", minute: $0 * 10, selected: true), $0) }
+            + [mixed(photo("new", minute: 85), 2)]
+            + (0..<6).map { mixed(photo("b\($0)", minute: $0 * 10, day: june19, selected: true), $0) }
+        let (model, store, undo) = try makeModel(photos, drafted: true)
+        let (profile, format) = try ProfileCatalog.format(profileID: store.album.supplierProfileID,
+                                                          formatID: store.album.formatID)
+        let geometry = PageGeometry(format: format, profile: profile)
+        let liked = LayoutWeights(liked: ["portraits-2", "portrait-right-2l", "grid-4"])
+        var reads = 0
+        model.layoutWeights = {
+            reads += 1
+            return liked
+        }
+
+        let before = store.album
+        let withLiked = AlbumUpdater.photoSelected("new", in: before, geometry: geometry, weights: liked)
+        // The liked layouts make a difference here, so the check below tells them apart.
+        #expect(withLiked != AlbumUpdater.photoSelected("new", in: before, geometry: geometry))
+        grouped(undo) { model.toggleSelection("new") }
+        #expect(reads == 1)
+        #expect(store.album == withLiked)
+
+        // A placed photo of June 18 whose move the liked layouts lay out differently on June 19.
+        let selected = store.album
+        let placed = selected.spreads.filter { $0.kind == .gallery && $0.dayKey == june18 && !$0.manuallyEdited }
+            .flatMap { $0.frames.compactMap(\.photoID) }
+        let id = try #require(placed.first { id in
+            AlbumUpdater.photoMoved(id, to: june19, in: selected, geometry: geometry, weights: liked)
+                != AlbumUpdater.photoMoved(id, to: june19, in: selected, geometry: geometry)
+        })
+        let moved = AlbumUpdater.photoMoved(id, to: june19, in: selected, geometry: geometry, weights: liked)
+        grouped(undo) { model.move(id, to: june19) }
+        #expect(reads == 2)
+        #expect(store.album == moved)
+    }
+
     @Test func footerShowsActualPagesOnceThereAreSpreads() throws {
         let photos = (0..<10).map { photo("p\($0)", minute: $0 * 10, selected: true) }
         let (estimate, _, _) = try makeModel(photos)
