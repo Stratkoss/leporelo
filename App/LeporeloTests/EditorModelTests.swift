@@ -123,7 +123,7 @@ struct EditorModelTests {
         #expect(model.redraftPreview() == 0)
 
         let gallery = try #require(store.album.spreads.first { $0.kind == .gallery })
-        step(undo) { _ = model.dropPhoto("extra", onFrame: gallery.frames[0].id, in: gallery.id) }
+        _ = step(undo) { model.dropPhoto("extra", onFrame: gallery.frames[0].id, in: gallery.id) }
         let manual = try #require(spread(store.album, gallery.id))
         #expect(manual.manuallyEdited)
         #expect(model.redraftPreview() == 1)
@@ -177,7 +177,7 @@ struct EditorModelTests {
         let before = store.album
 
         model.currentSpreadID = gallery.id
-        #expect(step(undo) { model.dropPhoto("extra", onFrame: frameID) })
+        #expect(step(undo) { model.dropPhoto("extra", onFrame: frameID) } == .placed)
 
         let after = try #require(spread(store.album, gallery.id))
         #expect(after.frames[0].photoID == "extra")
@@ -201,7 +201,7 @@ struct EditorModelTests {
         let journal = try #require(store.album.spreads.first { $0.kind == .journal && $0.dayKey == day2 })
         let before = store.album
 
-        #expect(step(undo) { model.dropPhoto("u", onFrame: journal.frames[1].id, in: journal.id) })
+        #expect(step(undo) { model.dropPhoto("u", onFrame: journal.frames[1].id, in: journal.id) } == .placed)
         #expect(store.album.photos["u"]?.isSelected == true)
         #expect(store.album.photos["u"]?.selectionDecidedByUser == true)
         #expect(spread(store.album, journal.id)?.frames[1].photoID == "u")
@@ -218,7 +218,7 @@ struct EditorModelTests {
         let count = store.album.placedPhotoIDs.count
         step(undo) { model.nudge(frame: journal.frames[0].id, offset: Point(x: 0.4, y: 0), zoom: 1.5, in: journal.id) }
 
-        #expect(step(undo) { model.dropPhoto(a, onFrame: journal.frames[2].id, in: journal.id) })
+        #expect(step(undo) { model.dropPhoto(a, onFrame: journal.frames[2].id, in: journal.id) } == .placed)
         let after = try #require(spread(store.album, journal.id))
         #expect(after.frames[2].photoID == a)
         #expect(after.frames[0].photoID == b)
@@ -241,7 +241,10 @@ struct EditorModelTests {
         let replaced = try #require(target.frames[slot].photoID)
         let before = store.album
 
-        #expect(step(undo) { model.dropPhoto(moved, onFrame: target.frames[slot].id, in: target.id) })
+        #expect(step(undo) {
+            model.dropPhoto(moved, onFrame: target.frames[slot].id, in: target.id, duplicates: .move)
+        } == .placed)
+        #expect(undo.undoActionName == "Přesunout fotku")
         let s = try #require(spread(store.album, source.id)), t = try #require(spread(store.album, target.id))
         #expect(t.frames[slot].photoID == moved)
         #expect(s.frames[0].photoID == nil)  // emptied: preflight flags it
@@ -259,10 +262,165 @@ struct EditorModelTests {
         album.photos["v"] = photo("v", day: day1, minute: 55, kind: .video)
         let (model, store, undo) = try makeModel(album)
         let journal = try #require(store.album.spreads.first { $0.kind == .journal })
-        #expect(!model.dropPhoto("v", onFrame: journal.frames[0].id, in: journal.id))
-        #expect(!model.dropPhoto("a0", onFrame: "nope", in: journal.id))
-        #expect(!model.dropPhoto("ghost", onFrame: journal.frames[0].id, in: journal.id))
+        #expect(model.dropPhoto("v", onFrame: journal.frames[0].id, in: journal.id) == .rejected)
+        #expect(model.dropPhoto("a0", onFrame: "nope", in: journal.id) == .rejected)
+        #expect(model.dropPhoto("ghost", onFrame: journal.frames[0].id, in: journal.id) == .rejected)
+        #expect(model.dropPhoto("a0", onFrame: journal.frames[0].id, in: "nope") == .rejected)
         #expect(!undo.canUndo)
+    }
+
+    /// Where `id` sits in the album: (spread id or cover side, frame id).
+    private func occurrences(_ album: Album, _ id: PhotoID) -> [String] {
+        let all = album.spreads + [album.cover?.front, album.cover?.back].compactMap { $0 }
+        return all.flatMap { s in s.frames.filter { $0.photoID == id }.map { "\(s.id)/\($0.id)" } }
+    }
+
+    /// A photo placed exactly once in the whole album, in a spread of `kind` (and `day` if given).
+    private func soloPhoto(_ album: Album, kind: SpreadKind, day: DayKey? = nil) throws -> (Spread, Int, PhotoID) {
+        for s in album.spreads where s.kind == kind && (day == nil || s.dayKey == day) {
+            for (i, f) in s.frames.enumerated() {
+                if let id = f.photoID, occurrences(album, id).count == 1 { return (s, i, id) }
+            }
+        }
+        throw TestFailure("no solo photo in a \(kind) spread")
+    }
+
+    private struct TestFailure: Error { let message: String; init(_ m: String) { message = m } }
+
+    /// A frame of a journal spread of `day2` whose own photo sits nowhere else.
+    private func freeTargetFrame(_ album: Album) throws -> (Spread, Int) {
+        let target = try #require(album.spreads.first { $0.kind == .journal && $0.dayKey == day2 })
+        let slot = try #require(target.frames.indices.first { occurrences(album, target.frames[$0].photoID ?? "").count == 1 })
+        return (target, slot)
+    }
+
+    @Test func dropOfPhotoPlacedElsewhereAsksAndChangesNothing() throws {
+        let (model, store, undo) = try makeModel(try standardAlbum())
+        let (source, _, moved) = try soloPhoto(store.album, kind: .gallery, day: day1)
+        let (target, slot) = try freeTargetFrame(store.album)
+        let index = try #require(store.album.spreads.firstIndex { $0.id == source.id })
+        let before = store.album, revision = store.revision
+
+        let outcome = model.dropPhoto(moved, onFrame: target.frames[slot].id, in: target.id)
+        #expect(outcome == .needsDuplicateDecision(locations: ["dvoustrana \(index + 1)"]))
+        #expect(store.revision == revision)
+        #expect(store.album == before)
+        #expect(!undo.canUndo)
+    }
+
+    @Test func dropKeepBothLeavesOtherFrame() throws {
+        let (model, store, undo) = try makeModel(try standardAlbum())
+        let (source, srcFrame, moved) = try soloPhoto(store.album, kind: .gallery, day: day1)
+        let (target, slot) = try freeTargetFrame(store.album)
+        let before = store.album
+
+        let outcome = step(undo) {
+            model.dropPhoto(moved, onFrame: target.frames[slot].id, in: target.id, duplicates: .keepBoth)
+        }
+        #expect(outcome == .placed)
+        #expect(undo.undoActionName == "Vložit fotku")
+        #expect(spread(store.album, target.id)?.frames[slot].photoID == moved)
+        #expect(spread(store.album, source.id)?.frames[srcFrame].photoID == moved)
+        #expect(spread(store.album, source.id) == source)  // untouched, not even marked manual
+        #expect(occurrences(store.album, moved).count == 2)
+
+        undo.undo()
+        #expect(store.album == before)
+    }
+
+    @Test func dropMoveClearsOtherFramesAsOneUndoStep() throws {
+        var album = try standardAlbum()
+        let (_, _, moved) = try soloPhoto(album, kind: .gallery, day: day1)
+        // Put the same photo on the cover as well: both places are emptied.
+        var cover = try #require(album.cover)
+        cover.front.frames[0].photoID = moved
+        cover.front.frames[0].zoom = 1.7
+        album.cover = cover
+        let (model, store, undo) = try makeModel(album)
+        let (target, slot) = try freeTargetFrame(store.album)
+        let before = store.album
+        try #require(occurrences(before, moved).count == 2)
+
+        let outcome = step(undo) {
+            model.dropPhoto(moved, onFrame: target.frames[slot].id, in: target.id, duplicates: .move)
+        }
+        #expect(outcome == .placed)
+        #expect(undo.undoActionName == "Přesunout fotku")
+        #expect(occurrences(store.album, moved) == ["\(target.id)/\(target.frames[slot].id)"])
+        #expect(store.album.cover?.front.frames[0].photoID == nil)
+        #expect(store.album.cover?.front.frames[0].zoom == 1)
+        #expect(store.album.spreads.filter { $0.id != target.id }.allSatisfy { s in
+            s.frames.allSatisfy { $0.photoID != moved }
+        })
+
+        undo.undo()  // one undo brings back both the spread and the cover
+        #expect(store.album == before)
+        #expect(!undo.canUndo)
+    }
+
+    @Test func dropFromIntroOntoDaySpreadAsks() throws {
+        let (model, store, _) = try makeModel(try standardAlbum())
+        let intro = try #require(store.album.spreads.first { $0.kind == .intro })
+        let id = try #require(intro.frames.compactMap(\.photoID).first)
+        // A day-spread frame that does not hold this photo.
+        let target = try #require(store.album.spreads.first { $0.kind == .journal && !$0.frames.contains { $0.photoID == id } })
+        let before = store.album
+
+        let outcome = model.dropPhoto(id, onFrame: target.frames[0].id, in: target.id)
+        guard case let .needsDuplicateDecision(locations) = outcome else {
+            Issue.record("expected a decision, got \(outcome)"); return
+        }
+        let introNumber = try #require(store.album.spreads.firstIndex { $0.id == intro.id }) + 1
+        #expect(locations.contains("dvoustrana \(introNumber)"))
+        #expect(store.album == before)
+    }
+
+    @Test func dropOfCoverPhotoListsObalka() throws {
+        var album = try standardAlbum()
+        let (_, _, solo) = try soloPhoto(album, kind: .journal, day: day1)
+        var cover = try #require(album.cover)
+        cover.back.frames = cover.front.frames  // both sides hold a photo
+        cover.front.frames[0].photoID = solo
+        cover.back.frames[0].photoID = solo
+        album.cover = cover
+        let (model, store, _) = try makeModel(album)
+        let (target, slot) = try freeTargetFrame(store.album)
+        let spreadNumber = try #require(store.album.spreads.firstIndex { $0.frames.contains { $0.photoID == solo } }) + 1
+
+        let outcome = model.dropPhoto(solo, onFrame: target.frames[slot].id, in: target.id)
+        // The cover is listed once, after the spreads, although both its sides hold the photo.
+        #expect(outcome == .needsDuplicateDecision(locations: ["dvoustrana \(spreadNumber)", "obálka"]))
+        #expect(model.placementLabels(of: solo, excludingSpread: target.id) == ["dvoustrana \(spreadNumber)", "obálka"])
+        #expect(model.placementLabels(of: "ghost", excludingSpread: target.id).isEmpty)
+    }
+
+    @Test func dropWithinSameSpreadStillSwaps() throws {
+        let (model, store, undo) = try makeModel(try standardAlbum())
+        let journal = try #require(store.album.spreads.first { $0.kind == .journal && $0.dayKey == day1 })
+        let a = try #require(journal.frames[0].photoID)
+        let b = try #require(journal.frames[1].photoID)
+        let before = store.album, revision = store.revision
+
+        // Even with .ask no question: the photo is only moving inside its spread.
+        #expect(step(undo) { model.dropPhoto(a, onFrame: journal.frames[1].id, in: journal.id) } == .placed)
+        #expect(store.revision != revision)
+        let after = try #require(spread(store.album, journal.id))
+        #expect(after.frames[1].photoID == a && after.frames[0].photoID == b)
+        undo.undo()
+        #expect(store.album == before)
+    }
+
+    @Test func dropOnTheSameFrameIsRejectedAndMoveWithoutDuplicatesIsAPlainInsert() throws {
+        var album = try standardAlbum()
+        album.photos["extra"] = photo("extra", day: day1, minute: 41)
+        let (model, store, undo) = try makeModel(album)
+        let gallery = try #require(store.album.spreads.first { $0.kind == .gallery && $0.dayKey == day1 })
+        let own = try #require(gallery.frames[0].photoID)
+        #expect(model.dropPhoto(own, onFrame: gallery.frames[0].id, in: gallery.id, duplicates: .move) == .rejected)
+        #expect(!undo.canUndo)
+
+        #expect(step(undo) { model.dropPhoto("extra", onFrame: gallery.frames[0].id, in: gallery.id, duplicates: .move) } == .placed)
+        #expect(undo.undoActionName == "Vložit fotku")
     }
 
     @Test func swapExchangesPhotosWithTheirCrop() throws {
@@ -916,7 +1074,7 @@ struct EditorViewSupportTests {
         #expect(spread(store.album, page.id)?.frames.first { $0.id == frameID }?.zoom == 1)
 
         let incoming = try #require(other.frames.first { $0.id == "photo2" }?.photoID)
-        #expect(step(undo) { model.dropPhoto(incoming, onFrame: frameID, in: page.id) })
+        #expect(step(undo) { model.dropPhoto(incoming, onFrame: frameID, in: page.id, duplicates: .move) } == .placed)
         #expect(spread(store.album, page.id)?.frames.first { $0.id == frameID }?.photoID == incoming)
 
         #expect(step(undo) { model.clearFrame(frameID, in: page.id) })

@@ -14,6 +14,26 @@ enum TemplateChangeOutcome: Equatable {
     case unavailable
 }
 
+/// What `EditorModel.dropPhoto` does with a photo that is already in another frame of the book.
+enum DuplicatePolicy: Equatable {
+    /// Change nothing and report `DropOutcome.needsDuplicateDecision`.
+    case ask
+    /// Place it and leave the other frames as they are.
+    case keepBoth
+    /// Place it and empty every other frame holding it.
+    case move
+}
+
+/// The outcome of `EditorModel.dropPhoto`.
+enum DropOutcome: Equatable {
+    case placed
+    /// The photo is already placed elsewhere (`placementLabels`); nothing changed. Ask the user,
+    /// then call again with `.keepBoth` or `.move`.
+    case needsDuplicateDecision(locations: [String])
+    /// Nothing changed: a video, an unknown photo, frame or spread, or the photo is already there.
+    case rejected
+}
+
 /// The editor's model (spec 6.3 "Návrh alba", 6.4 "Ladění"): the current spread, the selected
 /// frame, the photo tray, and every layout edit, all undoable.
 ///
@@ -300,51 +320,100 @@ final class EditorModel {
 
     // MARK: Photos in frames
 
-    /// Puts photo `id` into frame `frameID` of the spread (default: the current one) as one step
-    /// "Vložit fotku". The frame's crop resets (except for a swap, below). Returns false (nothing changes) for videos,
-    /// unknown photos/frames, or a photo already in that frame.
+    /// Puts photo `id` into frame `frameID` of the spread (default: the current one). The frame's
+    /// crop resets (except for a swap, below). `.rejected` (nothing changes) for videos, unknown
+    /// photos/frames/spreads, or a photo already in that frame.
     ///
-    /// A photo is never duplicated in print:
     /// - already in ANOTHER frame of the same spread: the two frames swap photos, each photo
-    ///   keeping its crop (as `swap`);
-    /// - target is a journal/gallery spread and the photo sits in another journal/gallery spread:
-    ///   it MOVES (that frame is emptied, marked by the preflight, and that spread becomes
-    ///   manually edited too). Intro, closing and cover frames are left alone: they repeat a day
-    ///   photo by design (the drafter's title photo);
-    /// - the target frame's previous photo stays selected but unplaced (tray and preflight show it).
+    ///   keeping its crop (as `swap`), one step "Vložit fotku", never a question;
+    /// - also placed in another spread or on the cover (any kind, intro and closing included):
+    ///   what happens follows `duplicates`. `.ask` changes nothing and returns
+    ///   `.needsDuplicateDecision` with `placementLabels` for the question; `.keepBoth` places the
+    ///   photo and leaves the other frames alone (the preflight warns about the duplicate), one
+    ///   step "Vložit fotku"; `.move` places it and empties EVERY other frame holding it (spreads
+    ///   of all kinds and the cover, crops reset; the emptied spreads become manually edited, the
+    ///   cover is rebuilt by a redraft anyway), one step "Přesunout fotku";
+    /// - otherwise a plain insert, one step "Vložit fotku".
+    ///
+    /// The target frame's previous photo stays selected but unplaced (tray and preflight show it).
     /// An unselected photo (from the tray) is selected in the same step, as a user decision.
     @discardableResult
-    func dropPhoto(_ id: PhotoID, onFrame frameID: String, in spreadID: String? = nil) -> Bool {
+    func dropPhoto(_ id: PhotoID, onFrame frameID: String, in spreadID: String? = nil,
+                   duplicates: DuplicatePolicy = .ask) -> DropOutcome {
         commitSessions()
         let album = store.album
         guard let targetID = spreadID ?? currentSpreadID,
               var target = album.spreads.first(where: { $0.id == targetID }),
               let f = target.frames.firstIndex(where: { $0.id == frameID }),
               let photo = album.photos[id], photo.kind != .video,
-              target.frames[f].photoID != id else { return false }
+              target.frames[f].photoID != id else { return .rejected }
 
         var edits: [AlbumEdit] = []
         if !photo.isSelected { edits.append(.setSelected(id, true)) }
         if let g = target.frames.indices.first(where: { $0 != f && target.frames[$0].photoID == id }) {
             Self.swapFrames(&target, f, g)  // exactly like swap(): each crop stays with its photo
-        } else {
-            target.frames[f].photoID = id
-            Self.resetCrop(&target.frames[f])
+            edits.append(.replaceSpread(target))
+            return perform(edits, "Vložit fotku") ? .placed : .rejected
         }
-        edits.append(.replaceSpread(target))
 
-        if Self.isDaySpread(target) {
-            for var source in album.spreads where source.id != target.id && Self.isDaySpread(source) {
-                var changed = false
-                for i in source.frames.indices where source.frames[i].photoID == id {
-                    source.frames[i].photoID = nil
-                    Self.resetCrop(&source.frames[i])
-                    changed = true
-                }
-                if changed { edits.append(.replaceSpread(source)) }
-            }
+        let elsewhere = placementLabels(of: id, excludingSpread: target.id)
+        if !elsewhere.isEmpty, duplicates == .ask { return .needsDuplicateDecision(locations: elsewhere) }
+
+        target.frames[f].photoID = id
+        Self.resetCrop(&target.frames[f])
+        edits.append(.replaceSpread(target))
+        guard !elsewhere.isEmpty, duplicates == .move else {
+            return perform(edits, "Vložit fotku") ? .placed : .rejected
         }
-        return perform(edits, "Vložit fotku")
+
+        for var source in album.spreads where source.id != target.id {
+            if Self.clear(id, from: &source) { edits.append(.replaceSpread(source)) }
+        }
+        // The cover has no AlbumEdit: if it holds the photo, the whole step is a snapshot replace.
+        var cover = album.cover
+        var coverChanged = false
+        if cover != nil {
+            coverChanged = Self.clear(id, from: &cover!.front)
+            coverChanged = Self.clear(id, from: &cover!.back) || coverChanged
+        }
+        guard coverChanged else { return perform(edits, "Přesunout fotku") ? .placed : .rejected }
+        do {
+            var updated = album
+            for edit in edits { updated = try updated.applying(edit).album }
+            updated.cover = cover
+            startStepAfterSessionCommit()
+            store.replace(album: updated, actionName: "Přesunout fotku", undoManager: undoManager)
+            return .placed
+        } catch {
+            Logger.editor.error("Přesunout fotku failed: \(String(describing: error), privacy: .public)")
+            return .rejected
+        }
+    }
+
+    /// Where else photo `id` sits, for the question before a drop: "dvoustrana N" (N = position
+    /// in the album's spread order, 1-based) for every spread except `spreadID` that holds it,
+    /// then "obálka" once if the front or back cover holds it. Empty when nowhere else.
+    func placementLabels(of id: PhotoID, excludingSpread spreadID: String) -> [String] {
+        let album = store.album
+        var labels = album.spreads.enumerated().compactMap { index, spread in
+            spread.id != spreadID && spread.frames.contains { $0.photoID == id } ? "dvoustrana \(index + 1)" : nil
+        }
+        if let cover = album.cover,
+           [cover.front, cover.back].contains(where: { $0.frames.contains { $0.photoID == id } }) {
+            labels.append("obálka")
+        }
+        return labels
+    }
+
+    /// Empties every frame of `spread` holding `id` (crop reset); true if there was one.
+    private static func clear(_ id: PhotoID, from spread: inout Spread) -> Bool {
+        var changed = false
+        for i in spread.frames.indices where spread.frames[i].photoID == id {
+            spread.frames[i].photoID = nil
+            resetCrop(&spread.frames[i])
+            changed = true
+        }
+        return changed
     }
 
     /// Swaps the photos of two frames of the spread (default: current), each photo keeping its crop.
@@ -756,10 +825,6 @@ final class EditorModel {
     }
 
     // MARK: Helpers
-
-    private static func isDaySpread(_ spread: Spread) -> Bool {
-        spread.kind == .journal || spread.kind == .gallery
-    }
 
     private static func resetCrop(_ frame: inout Frame) {
         frame.offset = Point(x: 0, y: 0)

@@ -817,7 +817,41 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
               let photoID = PhotoPasteboard.photoID(from: sender.draggingPasteboard) else { return false }
         endGestures()
         select(frameID)
-        return model.dropPhoto(photoID, onFrame: frameID, in: page?.id)
+        let spreadID = page?.id
+        switch model.dropPhoto(photoID, onFrame: frameID, in: spreadID) {
+        case .placed:
+            return true
+        case .rejected:
+            return false
+        case let .needsDuplicateDecision(locations):
+            // The decision arrives asynchronously, so the drop itself counts as accepted.
+            guard let window else { return false }
+            askAboutDuplicate(photoID, frameID: frameID, spreadID: spreadID, locations: locations,
+                              model: model, window: window)
+            return true
+        }
+    }
+
+    /// "Tahle fotka už v knize je": a sheet on the window. The ids are captured; if the spread is
+    /// gone when the user answers, `dropPhoto` rejects the drop.
+    private func askAboutDuplicate(_ photoID: PhotoID, frameID: String, spreadID: String?, locations: [String],
+                                   model: EditorModel, window: NSWindow) {
+        let alert = NSAlert()
+        alert.messageText = "Tahle fotka už v knize je"
+        alert.informativeText = "Je na: \(locations.joined(separator: ", "))."
+        alert.addButton(withTitle: "Dát i sem")
+        alert.addButton(withTitle: "Přesunout sem")
+        let cancel = alert.addButton(withTitle: "Zrušit")
+        cancel.keyEquivalent = "\u{1b}"
+        alert.beginSheetModal(for: window) { response in
+            let policy: DuplicatePolicy
+            switch response {
+            case .alertFirstButtonReturn: policy = .keepBoth
+            case .alertSecondButtonReturn: policy = .move
+            default: return
+            }
+            model.dropPhoto(photoID, onFrame: frameID, in: spreadID, duplicates: policy)
+        }
     }
 
     override func concludeDragOperation(_ sender: NSDraggingInfo?) {
