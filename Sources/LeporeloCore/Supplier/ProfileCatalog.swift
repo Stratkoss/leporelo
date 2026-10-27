@@ -8,9 +8,17 @@ public enum ProfileCatalogError: Error, Equatable {
 
 public enum ProfileCatalog {
     public static func all() throws -> [SupplierProfile] {
-        // `.copy("Resources")` keeps the folder, so profiles live in <bundle>/Resources/Profiles.
-        let dir = Bundle.module.bundleURL.appendingPathComponent("Resources/Profiles", isDirectory: true)
-        guard FileManager.default.fileExists(atPath: dir.path) else {
+        // `.copy("Resources")` keeps the folder. SwiftPM builds a flat bundle
+        // (<bundle>/Resources/Profiles, and Foundation reports <bundle>/Resources as its
+        // `resourceURL`); Xcode builds a macOS bundle for the app
+        // (<bundle>/Contents/Resources/Resources/Profiles). Try both, like `FontRegistry`.
+        let bundle = Bundle.module
+        let candidates = [
+            bundle.bundleURL.appendingPathComponent("Resources/Profiles", isDirectory: true),
+            bundle.resourceURL?.appendingPathComponent("Resources/Profiles", isDirectory: true),
+            bundle.resourceURL?.appendingPathComponent("Profiles", isDirectory: true),
+        ].compactMap { $0 }
+        guard let dir = candidates.first(where: { FileManager.default.fileExists(atPath: $0.path) }) else {
             throw ProfileCatalogError.resourcesMissing
         }
         let files = try FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)

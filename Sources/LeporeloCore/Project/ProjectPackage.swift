@@ -99,6 +99,12 @@ public struct ProjectPackage: Sendable {
     /// Decodes album JSON. Version 1 has no migrations: any `formatVersion` other than the current
     /// one (older or newer) throws `unsupportedVersion`.
     public func migrate(_ json: Data) throws -> Album {
+        try Self.decodeAlbum(json)
+    }
+
+    /// `migrate` without a package: the app's `AlbumDocument` reads `album.json` from the
+    /// `FileWrapper` it is handed before it knows the package URL.
+    public static func decodeAlbum(_ json: Data) throws -> Album {
         let decoder = AlbumCoding.decoder()
         let version: Int
         do { version = try decoder.decode(VersionProbe.self, from: json).formatVersion } catch {
