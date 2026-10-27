@@ -123,6 +123,57 @@ struct AlbumStoreTests {
         #expect(store.album == replacement)
     }
 
+    /// Task 20 ruling: undo and redo of a `replace` restore the user's content but keep the
+    /// background-owned photo fields (analysis, original state, series, place, deleted flag) as they
+    /// are NOW.
+    @Test func replaceUndoKeepsBackgroundFields() throws {
+        let store = try makeStore(photos: [makeTestPhoto("p1"), makeTestPhoto("p2")])
+        let undo = makeUndoManager()
+        var selected = store.album
+        selected.photos["p1"]?.isSelected = true
+        selected.photos["p1"]?.selectionDecidedByUser = true
+
+        undo.beginUndoGrouping()
+        store.replace(album: selected, actionName: "Vybrat fotku", undoManager: undo)
+        undo.endUndoGrouping()
+
+        let analysis = PhotoAnalysis(aesthetic: 0.8, sharpness: 400, isUtility: false, faceRects: [],
+                                     closedEyes: false, featurePrint: nil)
+        store.setAnalyses(["p1": analysis, "p2": analysis])
+        var downloaded = store.album
+        downloaded.photos["p1"]?.originalState = .stored(relativePath: "originals/p1.jpg")
+        downloaded.photos["p2"]?.placeName = "Positano"
+        store.replaceWithoutUndo(album: downloaded)
+
+        undo.undo()
+        #expect(store.album.photos["p1"]?.isSelected == false)
+        #expect(store.album.photos["p1"]?.selectionDecidedByUser == false)
+        #expect(store.album.photos["p1"]?.analysis == analysis)
+        #expect(store.album.photos["p2"]?.analysis == analysis)
+        #expect(store.album.photos["p1"]?.originalState == .stored(relativePath: "originals/p1.jpg"))
+        #expect(store.album.photos["p2"]?.placeName == "Positano")
+
+        // A background change between undo and redo survives the redo too.
+        var later = store.album
+        later.photos["p2"]?.seriesID = "series-p2"
+        store.replaceWithoutUndo(album: later)
+
+        undo.redo()
+        #expect(store.album.photos["p1"]?.isSelected == true)
+        #expect(store.album.photos["p1"]?.analysis == analysis)
+        #expect(store.album.photos["p1"]?.originalState == .stored(relativePath: "originals/p1.jpg"))
+        #expect(store.album.photos["p2"]?.seriesID == "series-p2")
+        #expect(store.album.photos["p2"]?.placeName == "Positano")
+    }
+
+    @Test func revisionCountsEveryChange() throws {
+        let store = try makeStore(photos: [makeTestPhoto("p1")])
+        let start = store.revision
+        try store.apply(.setSelected("p1", true), undoManager: nil)
+        store.replaceWithoutUndo(album: store.album)
+        #expect(store.revision == start + 2)
+    }
+
     /// Background work (analysis, downloads) changes the album without undo; every such change
     /// must reach the document's "changed" hook so autosave runs.
     @Test func changesWithoutUndoCallMarkChanged() throws {

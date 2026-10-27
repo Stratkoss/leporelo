@@ -203,6 +203,21 @@ private func solidImage(width: Int, height: Int) -> CGImage {
         #expect(pkg.thumbnail(for: "../x") == nil)
     }
 
+    @Test func thumbnailAtASmallerSize() throws {
+        let dir = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let pkg = try ProjectPackage.create(at: dir.appendingPathComponent("x.leporelo"), album: makeAlbum())
+        try pkg.storeThumbnail(solidImage(width: 3000, height: 2000), for: "a")
+        let cell = try #require(pkg.thumbnail(for: "a", maxPixelSize: 320))
+        #expect(cell.width == 320)
+        #expect(abs(cell.height - 213) <= 1)
+        try pkg.storeThumbnail(solidImage(width: 100, height: 200), for: "b")
+        let small = try #require(pkg.thumbnail(for: "b", maxPixelSize: 320))
+        #expect(small.width == 100 && small.height == 200)
+        #expect(pkg.thumbnail(for: "missing", maxPixelSize: 320) == nil)
+        #expect(pkg.thumbnail(for: "../x", maxPixelSize: 320) == nil)
+    }
+
     @Test func newerFormatVersionThrows() throws {
         let dir = makeTempDir()
         defer { try? FileManager.default.removeItem(at: dir) }

@@ -14,12 +14,9 @@ import os
 ///   sets at bind time to mark its NSDocument edited. Passing a `nil` undo manager to `apply` or
 ///   `replace` takes this same path, so there is no change that silently skips autosave.
 ///
-/// Caveat for Tasks 19-21: undoing a `replace` restores the WHOLE previous album, including
-/// background-owned fields (`analysis`, `originalState`, photos added by a refresh) that changed
-/// after it. Use `replace` with undo only for user steps whose undo should restore everything
-/// (recommendations, redraft, format change), and keep background writes on the no-undo path.
-/// Background results that arrive between a user `replace` and its undo can be lost by that undo;
-/// re-run or merge them if that matters.
+/// Undoing a `replace` restores the previous album's user content but keeps the background-owned
+/// photo fields as they are at undo time (see `replace`). Keep background writes on the no-undo
+/// path.
 @MainActor
 @Observable
 final class AlbumStore {
@@ -27,6 +24,9 @@ final class AlbumStore {
     /// The package on disk. A `var` only so the store can follow the document when the user
     /// renames or moves it (`packageMoved(to:)`); the album and the undo history stay.
     private(set) var package: ProjectPackage
+    /// Incremented by every change of `album` (and of `package`). Views and models that derive
+    /// data from the album key their caches on it instead of comparing whole albums.
+    private(set) var revision = 0
     /// Receives every change, so the document can snapshot from any thread.
     @ObservationIgnored private let snapshotBox: AlbumSnapshotBox
     /// Marks the document changed for edits that register no undo (set by `AlbumDocument.bind`).
@@ -51,16 +51,22 @@ final class AlbumStore {
         try apply(edit, actionName: Self.actionName(for: edit), undoManager: undoManager)
     }
 
-    /// Replaces the whole album (selection recommendations, redraft, format change) as one undoable
-    /// step named `actionName` (see the caveat above). With a `nil` undo manager this is
-    /// `replaceWithoutUndo`.
+    /// Replaces the whole album (selection recommendations, redraft, format change, a selection
+    /// change once spreads exist) as one undoable step named `actionName`. With a `nil` undo
+    /// manager this is `replaceWithoutUndo`.
+    ///
+    /// Undo and redo restore the stored snapshot merged with the album as it is at that moment
+    /// (`Album.keepingBackgroundFields(of:)`): the user's content comes back, but analysis, place
+    /// names, series, original states and deleted flags written by background work in the meantime
+    /// are kept, and photos added meanwhile stay.
     func replace(album newAlbum: Album, actionName: String, undoManager: UndoManager?) {
         guard let undoManager else { return replaceWithoutUndo(album: newAlbum) }
         let previous = album
         album = newAlbum
         publish()
         undoManager.registerUndo(withTarget: self) { [weak undoManager] store in
-            store.replace(album: previous, actionName: actionName, undoManager: undoManager)
+            store.replace(album: previous.keepingBackgroundFields(of: store.album),
+                          actionName: actionName, undoManager: undoManager)
         }
         undoManager.setActionName(actionName)
     }
@@ -137,6 +143,7 @@ final class AlbumStore {
     }
 
     private func publish() {
+        revision &+= 1
         snapshotBox.publish(AlbumSnapshot(album: album, packageURL: package.url))
     }
 

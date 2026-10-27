@@ -1,8 +1,8 @@
 import LeporeloCore
 import SwiftUI
 
-/// The document window: the background-work banner on top of placeholder content (the album
-/// title; Task 20 brings the triage grid).
+/// The document window: the background-work banner on top of the triage view (Task 20) once the
+/// album is bound and has photos, else placeholder content (the album title).
 struct AlbumWindow: View {
     let document: AlbumDocument
     let fileURL: URL?
@@ -55,6 +55,9 @@ struct AlbumWindow: View {
         if let bindError = session.bindError {
             ContentUnavailableView("Album nejde otevřít", systemImage: "exclamationmark.triangle",
                                    description: Text(bindError))
+        } else if let store, !store.album.photos.isEmpty {
+            // A new store (rebind after revert, reload or move) gets a new model.
+            TriageContainer(store: store).id(ObjectIdentifier(store))
         } else {
             ContentUnavailableView {
                 Label(store?.album.title ?? document.currentAlbum.title, systemImage: "book.pages")

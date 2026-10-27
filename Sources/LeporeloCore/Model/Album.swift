@@ -60,3 +60,32 @@ extension Photo {
         (a.capturedAt, a.id) < (b.capturedAt, b.id)
     }
 }
+
+extension Album {
+    /// This album (a user-step snapshot an undo or redo restores) with the background-owned photo
+    /// fields taken from `current`, the album as it is now.
+    ///
+    /// Background work (analysis, place names, series marking, originals, source refresh) writes
+    /// `analysis`, `placeName`, `seriesID`, `originalState` and `deletedInSource` without undo; an
+    /// undo of a whole-album step must not revert them. So for photos in both albums those five
+    /// fields come from `current` and everything else (selection, day, spreads, cover, title, ...)
+    /// from `self`. Photos only in `self` keep their stored values; photos only in `current`
+    /// (added by a refresh after the snapshot) are kept as they are, because dropping them on undo
+    /// would lose data.
+    public func keepingBackgroundFields(of current: Album) -> Album {
+        var result = self
+        for (id, now) in current.photos {
+            guard var photo = result.photos[id] else {
+                result.photos[id] = now
+                continue
+            }
+            photo.analysis = now.analysis
+            photo.placeName = now.placeName
+            photo.seriesID = now.seriesID
+            photo.originalState = now.originalState
+            photo.deletedInSource = now.deletedInSource
+            result.photos[id] = photo
+        }
+        return result
+    }
+}

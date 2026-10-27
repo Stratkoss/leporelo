@@ -68,7 +68,7 @@ public enum Preflight {
         if !profile.pageCount.isSatisfied(by: pages) {
             issues.append(PreflightIssue(
                 id: "pageCount", severity: .error, spreadID: nil, frameID: nil,
-                message: "Album má \(pages) stran, dodavatel chce \(describe(profile.pageCount))"))
+                message: "Album má \(CzechPlural.pages(pages)), dodavatel chce \(describe(profile.pageCount))"))
         }
         if !profile.verified {
             issues.append(PreflightIssue(id: "unverified", severity: .warning, spreadID: nil, frameID: nil,

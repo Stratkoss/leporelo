@@ -204,6 +204,14 @@ public struct ProjectPackage: Sendable {
         return Self.decodeUpright(source, maxLongSide: Self.thumbnailMaxPixelSize)
     }
 
+    /// The stored thumbnail downsampled while decoding so its long side is at most `maxPixelSize`
+    /// (never upscaled), e.g. for a grid cell; nil when missing or unreadable. Thread-safe.
+    public func thumbnail(for id: PhotoID, maxPixelSize: Int) -> CGImage? {
+        guard (try? Self.validate(id: id)) != nil,
+              let source = CGImageSourceCreateWithURL(thumbnailURL(for: id) as CFURL, nil) else { return nil }
+        return Self.decodeUpright(source, maxLongSide: min(maxPixelSize, Self.thumbnailMaxPixelSize))
+    }
+
     private func thumbnailURL(for id: PhotoID) -> URL {
         url.appendingPathComponent("\(Self.thumbsDirectory)/\(id).jpg")
     }

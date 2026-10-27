@@ -143,13 +143,13 @@ import Foundation
     @Test func pageCountViolation() throws {
         let rule = PageCountRule(min: 20, max: nil, multipleOf: 2)
         let issues = try Self.check(Self.goodAlbum(), rule: rule)
-        let i = try #require(issues.first { $0.message.hasPrefix("Album má 4 stran, dodavatel chce") })
+        let i = try #require(issues.first { $0.message.hasPrefix("Album má 4 strany, dodavatel chce") })
         #expect(i.severity == .error)
-        #expect(i.message == "Album má 4 stran, dodavatel chce min. 20 stran, sudý počet")
+        #expect(i.message == "Album má 4 strany, dodavatel chce min. 20 stran, sudý počet")
         #expect(i.spreadID == nil)
         let capped = try Self.check(Self.goodAlbum(), rule: PageCountRule(min: 2, max: 2, multipleOf: 8))
         #expect(capped.first { $0.id == "pageCount" }?.message
-                == "Album má 4 stran, dodavatel chce min. 2 stran, max. 2 stran, násobek 8")
+                == "Album má 4 strany, dodavatel chce min. 2 stran, max. 2 stran, násobek 8")
     }
 
     @Test func emptyFrameErrorExceptBlank() throws {
