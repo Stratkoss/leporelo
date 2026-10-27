@@ -1164,3 +1164,405 @@ struct EditorViewSupportTests {
         #expect(model.trayPhotos.contains { $0.id == "b2" })
     }
 }
+
+/// Free layout editing (start-a-volne-rozlozeni Task 6): moving, resizing, adding and deleting
+/// frames and texts, the page margin and the template picker's confirmation.
+@MainActor
+struct EditorLayoutTests {
+    private func moved(_ r: Rect, dx: Double, dy: Double) -> Rect {
+        Rect(x: r.minX + dx, y: r.minY + dy, width: r.size.width, height: r.size.height)
+    }
+
+    private func rule(_ model: EditorModel) -> MarginRule {
+        MarginRule(geometry: model.geometry, marginMM: model.marginMM)
+    }
+
+    private func endEvent() {
+        RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+    }
+
+    @Test func layoutSessionIsOneUndoStep() throws {
+        let (model, store, undo) = try makeModel(try standardAlbum())
+        let gallery = try #require(store.album.spreads.first { $0.templateID == "gallery-2" })
+        model.currentSpreadID = gallery.id
+        let frame = gallery.frames[0]
+        let before = store.album
+        let revision = store.revision
+        let target = rule(model).conformFrame(moved(frame.rect, dx: 20, dy: 10), area: .spread)
+
+        step(undo) {
+            model.beginLayoutChange(.frame(frame.id))
+            #expect(model.hasPendingSession)
+            #expect(model.pendingSessionActionName == nil)  // open, unchanged
+            model.updateLayout(.frame(frame.id), rect: moved(frame.rect, dx: 5, dy: 0))
+            model.updateLayout(.frame(frame.id), rect: moved(frame.rect, dx: 20, dy: 10))
+            #expect(store.revision == revision)
+            #expect(model.displayedSpread(gallery.id)?.frames[0].rect == target)
+            #expect(model.currentSpread?.frames[0].rect == target)
+            #expect(model.pendingSessionActionName == "Upravit rozložení")
+            model.endLayoutChange()
+        }
+        #expect(!model.hasPendingSession)
+        #expect(store.revision == revision + 1)
+        #expect(spread(store.album, gallery.id)?.frames[0].rect == target)
+        #expect(spread(store.album, gallery.id)?.frames[0].photoID == frame.photoID)
+        #expect(undo.undoActionName == "Upravit rozložení")
+        undo.undo()
+        #expect(store.album == before)
+
+        // A gesture that changes nothing stores nothing.
+        let unchanged = store.revision
+        model.beginLayoutChange(.frame(frame.id))
+        model.updateLayout(.frame(frame.id), rect: frame.rect)
+        model.endLayoutChange()
+        #expect(store.revision == unchanged)
+
+        // Without a running session (or for another item), updateLayout starts one itself.
+        model.updateLayout(.text("caption"), rect: moved(try #require(gallery.texts.first { $0.id == "caption" }).rect,
+                                                          dx: -30, dy: 0))
+        #expect(model.hasPendingSession)
+        #expect(model.pendingSessionActionName == "Upravit rozložení")
+        model.commitSessions()
+        #expect(undo.undoActionName == "Upravit rozložení")
+        #expect(spread(store.album, gallery.id)?.texts.first { $0.id == "caption" }?.rect
+                != gallery.texts.first { $0.id == "caption" }?.rect)
+    }
+
+    @Test func layoutChangeConformsToMargin() throws {
+        var album = try standardAlbum()
+        album.marginMM = 20
+        let (model, store, undo) = try makeModel(album)
+        let journal = try #require(store.album.spreads.first { $0.templateID == "journal-5" })
+        model.currentSpreadID = journal.id
+        let frame = journal.frames[0]
+
+        // Edges moved into the band (14 mm from the trim, margin 20) end on the margin line.
+        step(undo) {
+            model.beginLayoutChange(.frame(frame.id))
+            model.updateLayout(.frame(frame.id), rect: Rect(x: 14, y: 14, width: 100, height: 80))
+            model.endLayoutChange()
+        }
+        let stored = try #require(spread(store.album, journal.id)?.frames.first { $0.id == frame.id }?.rect)
+        #expect(stored.minX == 20 && stored.minY == 20)
+        #expect(stored.maxX == 114 && stored.maxY == 94)
+
+        // A text stays inside the margin box of its page, keeping its size.
+        let title = try #require(journal.texts.first { $0.id == "title" })
+        step(undo) {
+            model.beginLayoutChange(.text(title.id))
+            model.updateLayout(.text(title.id), rect: Rect(x: 2, y: 3, width: 50, height: 10))
+            model.endLayoutChange()
+        }
+        #expect(spread(store.album, journal.id)?.texts.first { $0.id == title.id }?.rect
+                == Rect(x: 20, y: 20, width: 50, height: 10))
+
+        // Non-finite input is ignored.
+        model.beginLayoutChange(.frame(frame.id))
+        model.updateLayout(.frame(frame.id), rect: Rect(x: .nan, y: 0, width: 10, height: 10))
+        #expect(model.displayedSpread(journal.id)?.frames.first { $0.id == frame.id }?.rect == stored)
+        model.endLayoutChange()
+    }
+
+    @Test func layoutChangeMarksSpreadCustomAndManual() throws {
+        let (model, store, undo) = try makeModel(try standardAlbum())
+        let gallery = try #require(store.album.spreads.first { $0.templateID == "gallery-2" })
+        #expect(!gallery.manuallyEdited && !gallery.customLayout)
+        step(undo) {
+            model.beginLayoutChange(.frame("photo1"), in: gallery.id)
+            model.updateLayout(.frame("photo1"), rect: moved(gallery.frames[0].rect, dx: 0, dy: 15))
+            model.endLayoutChange()
+        }
+        let after = try #require(spread(store.album, gallery.id))
+        #expect(after.manuallyEdited && after.customLayout)
+        undo.undo()
+        #expect(spread(store.album, gallery.id) == gallery)
+    }
+
+    /// Review Focus 3: ⌘Z in the middle of a drag stores the drag as its own step and undoes
+    /// only that step, never the one before it.
+    @Test func undoDuringLayoutSessionCommitsThenUndoesOnlyIt() throws {
+        let (model, store, undo) = try makeModel(try standardAlbum())
+        let journal = try #require(store.album.spreads.first { $0.kind == .journal })
+        step(undo) { model.setText("title", "Ravello", in: journal.id) }
+        let frame = journal.frames[0]
+        let target = rule(model).conformFrame(moved(frame.rect, dx: 0, dy: 12), area: .spread)
+
+        model.beginLayoutChange(.frame(frame.id), in: journal.id)
+        model.updateLayout(.frame(frame.id), rect: moved(frame.rect, dx: 0, dy: 12))
+        model.undo()
+        #expect(!model.hasPendingSession)
+        #expect(spread(store.album, journal.id)?.frames[0].rect == frame.rect)
+        #expect(model.displayedSpread(journal.id)?.frames[0].rect == frame.rect)
+        #expect(spread(store.album, journal.id)?.texts.first { $0.id == "title" }?.text == "Ravello")
+        #expect(undo.canRedo)
+
+        model.redo()
+        #expect(spread(store.album, journal.id)?.frames[0].rect == target)
+        model.undo()
+        model.undo()
+        #expect(spread(store.album, journal.id) == journal)
+        #expect(!undo.canUndo)
+    }
+
+    /// A layout gesture ended by another action in the same event is its own step (window manager).
+    @Test func layoutSessionEndedByAnotherActionIsItsOwnStep() throws {
+        let (model, store, _) = try makeModel(try standardAlbum())
+        let undo = UndoManager()  // groups by event, like the window's
+        model.undoManager = undo
+        let journal = try #require(store.album.spreads.first { $0.templateID == "journal-5" })
+        let frame = journal.frames[0]
+
+        model.beginLayoutChange(.frame(frame.id), in: journal.id)
+        model.updateLayout(.frame(frame.id), rect: moved(frame.rect, dx: 0, dy: 12))
+        model.setText("title", "Ravello", in: journal.id)
+        endEvent()
+        #expect(undo.undoActionName == "Upravit text")
+
+        model.undo(); endEvent()
+        #expect(spread(store.album, journal.id)?.texts.first { $0.id == "title" }?.text == AlbumDrafter.noPlaceTitle)
+        #expect(spread(store.album, journal.id)?.frames[0].rect != frame.rect)
+        #expect(undo.undoActionName == "Upravit rozložení")
+        model.undo(); endEvent()
+        #expect(spread(store.album, journal.id) == journal)
+        #expect(!undo.canUndo)
+    }
+
+    @Test func addFrameIsCenteredConformedAndSelected() throws {
+        let (model, store, undo) = try makeModel(try standardAlbum())
+        let gallery = try #require(store.album.spreads.first { $0.templateID == "gallery-2" })
+        model.currentSpreadID = gallery.id
+        let before = store.album
+
+        let id = step(undo) { model.addFrame(on: .right) }
+        #expect(id == "frame-1")
+        let page = model.geometry.pageRect(side: .right)
+        let centred = Rect(x: page.minX + page.size.width / 4, y: page.size.height / 4,
+                           width: page.size.width / 2, height: page.size.height / 2)
+        let after = try #require(spread(store.album, gallery.id))
+        let frame = try #require(after.frames.first { $0.id == "frame-1" })
+        #expect(frame.rect == rule(model).conformFrame(centred, area: .spread))
+        #expect(frame.rect == centred)
+        #expect(frame.photoID == nil && frame.offset == Point(x: 0, y: 0) && frame.zoom == 1)
+        #expect(after.frames.count == gallery.frames.count + 1)
+        #expect(after.customLayout && after.manuallyEdited)
+        #expect(model.selectedItem == .frame("frame-1"))
+        #expect(model.selectedFrameID == "frame-1")
+        #expect(undo.undoActionName == "Přidat rámeček")
+
+        undo.undo()
+        #expect(store.album == before)
+        #expect(model.selectedItem == nil)
+        #expect(model.addFrame(on: .left, in: "nope") == nil)
+    }
+
+    @Test func addFrameIdsAreUnique() throws {
+        let (model, store, undo) = try makeModel(try standardAlbum())
+        let gallery = try #require(store.album.spreads.first { $0.templateID == "gallery-2" })
+        model.currentSpreadID = gallery.id
+        #expect(step(undo) { model.addFrame(on: .left) } == "frame-1")
+        #expect(step(undo) { model.addFrame(on: .right) } == "frame-2")
+        #expect(step(undo) { model.deleteItem(.frame("frame-1")) })
+        #expect(step(undo) { model.addFrame(on: .left) } == "frame-1")
+        let ids = try #require(spread(store.album, gallery.id)).frames.map(\.id)
+        #expect(Set(ids).count == ids.count)
+    }
+
+    @Test func addTextSitsAboveTheBottomMargin() throws {
+        let (model, store, undo) = try makeModel(try standardAlbum())
+        let gallery = try #require(store.album.spreads.first { $0.templateID == "gallery-2" })
+        model.currentSpreadID = gallery.id
+
+        let id = step(undo) { model.addText(on: .left) }
+        #expect(id == "text-1")
+        let page = model.geometry.pageRect(side: .left)
+        let box = try #require(spread(store.album, gallery.id)?.texts.first { $0.id == "text-1" })
+        #expect(box.role == .caption && box.text == "")
+        #expect(box.rect == Rect(x: page.minX + (page.size.width - 60) / 2, y: page.size.height - 10 - 12,
+                                 width: 60, height: 12))
+        #expect(model.selectedItem == .text("text-1"))
+        #expect(model.selectedFrameID == nil)
+        #expect(spread(store.album, gallery.id)?.customLayout == true)
+        #expect(undo.undoActionName == "Přidat text")
+        #expect(step(undo) { model.addText(on: .right) } == "text-2")
+    }
+
+    @Test func deleteEmptyFrameRemovesIt() throws {
+        let (model, store, undo) = try makeModel(try standardAlbum())
+        let id = try #require(step(undo) { model.insertSpread(kind: .gallery, after: nil) })
+        let inserted = try #require(spread(store.album, id))
+        let frameID = try #require(inserted.frames.first?.id)
+        model.selectedItem = .frame(frameID)
+        let before = store.album
+
+        #expect(step(undo) { model.deleteItem(.frame(frameID)) })
+        let after = try #require(spread(store.album, id))
+        #expect(!after.frames.contains { $0.id == frameID })
+        #expect(after.frames.count == inserted.frames.count - 1)
+        #expect(after.customLayout && after.manuallyEdited)
+        #expect(model.selectedItem == nil)
+        #expect(undo.undoActionName == "Smazat")
+
+        undo.undo()
+        #expect(store.album == before)
+        let revision = store.revision
+        #expect(!model.deleteItem(.frame("nope")))
+        #expect(!model.deleteItem(.frame(frameID), in: "nope"))
+        #expect(store.revision == revision)
+    }
+
+    @Test func deleteFrameWithPhotoLeavesPhotoUnplaced() throws {
+        let (model, store, undo) = try makeModel(try standardAlbum())
+        let gallery = try #require(store.album.spreads.first { $0.templateID == "gallery-2" })
+        let frame = gallery.frames[0]
+        let photoID = try #require(frame.photoID)
+        #expect(!model.unplacedSelectedPhotos.contains { $0.id == photoID })
+
+        #expect(step(undo) { model.deleteItem(.frame(frame.id), in: gallery.id) })
+        #expect(spread(store.album, gallery.id)?.frames.contains { $0.id == frame.id } == false)
+        #expect(store.album.photos[photoID]?.isSelected == true)
+        #expect(model.unplacedSelectedPhotos.contains { $0.id == photoID })
+        undo.undo()
+        #expect(spread(store.album, gallery.id) == gallery)
+    }
+
+    @Test func deleteTextRemovesIt() throws {
+        let (model, store, undo) = try makeModel(try standardAlbum())
+        let journal = try #require(store.album.spreads.first { $0.templateID == "journal-5" })
+        model.currentSpreadID = journal.id
+        model.selectedItem = .text("title")
+        #expect(model.selectedItem == .text("title"))
+
+        #expect(step(undo) { model.deleteItem(.text("title")) })
+        let after = try #require(spread(store.album, journal.id))
+        #expect(!after.texts.contains { $0.id == "title" })
+        #expect(after.customLayout)
+        #expect(model.selectedItem == nil)
+        #expect(undo.undoActionName == "Smazat")
+        undo.undo()
+        #expect(spread(store.album, journal.id) == journal)
+    }
+
+    @Test func setMarginIsOneUndoStepAndConforms() throws {
+        let (model, store, undo) = try makeModel(try standardAlbum())
+        let before = store.album
+        let g = model.geometry
+        #expect(model.marginMM == 10)
+
+        step(undo) { model.setMargin(20) }
+        #expect(model.marginMM == 20)
+        #expect(store.album == AlbumUpdater.settingMargin(20, in: before, profile: g.profile, format: g.format))
+        #expect(undo.undoActionName == "Změnit okraj")
+        let w = g.format.pageWidthMM, h = g.format.pageHeightMM
+        for frame in store.album.spreads.flatMap(\.frames) {
+            for (v, edges) in [(frame.rect.minX, [0, w, 2 * w]), (frame.rect.maxX, [0, w, 2 * w]),
+                               (frame.rect.minY, [0, h]), (frame.rect.maxY, [0, h])] {
+                let d = edges.map { abs($0 - v) }.min() ?? 0
+                #expect(d < 1e-6 || d >= 20 - 1e-6)
+            }
+        }
+
+        // The same value (also after clamping) changes nothing.
+        let revision = store.revision
+        model.setMargin(20)
+        #expect(store.revision == revision)
+
+        step(undo) { model.setMargin(100) }
+        #expect(model.marginMM == MarginRule.maxMarginMM)
+        model.setMargin(31)
+        #expect(store.revision == revision + 1)
+        step(undo) { model.setMargin(1) }
+        #expect(model.marginMM == g.profile.safeMM)
+
+        undo.undo(); undo.undo(); undo.undo()
+        #expect(store.album == before)
+    }
+
+    @Test func newSpreadsAndTemplatesUseTheAlbumMargin() throws {
+        var album = try standardAlbum()
+        album.marginMM = 25
+        let (model, store, undo) = try makeModel(album)
+        func rects(_ s: Spread?) -> [Rect] { (s?.frames.map(\.rect) ?? []) + (s?.texts.map(\.rect) ?? []) }
+        func instance(_ templateID: String, margin: Double) throws -> Spread {
+            let template = try #require(TemplateCatalog.template(id: templateID))
+            return TemplateLayout.instantiate(template, geometry: model.geometry, dayKey: nil, marginMM: margin)
+        }
+
+        let id = try #require(step(undo) { model.insertSpread(kind: .journal, after: nil) })
+        #expect(rects(spread(store.album, id)) == rects(try instance("journal-3", margin: 25)))
+        #expect(rects(try instance("journal-3", margin: 25)) != rects(try instance("journal-3", margin: 10)))
+
+        let gallery = try #require(store.album.spreads.first { $0.templateID == "gallery-2" })
+        let preview = try #require(model.previewTemplateChange(to: "journal-4", in: gallery.id))
+        #expect(rects(preview.spread) == rects(try instance("journal-4", margin: 25)))
+        #expect(rects(try instance("journal-4", margin: 25)) != rects(try instance("journal-4", margin: 10)))
+    }
+
+    @Test func changeTemplateOnCustomLayoutAsksFirst() throws {
+        let (model, store, undo) = try makeModel(try standardAlbum())
+        let journal = try #require(store.album.spreads.first { $0.templateID == "journal-5" })
+        model.currentSpreadID = journal.id
+        step(undo) {
+            model.beginLayoutChange(.frame(journal.frames[0].id))
+            model.updateLayout(.frame(journal.frames[0].id), rect: moved(journal.frames[0].rect, dx: 0, dy: 12))
+            model.endLayoutChange()
+        }
+        let custom = try #require(spread(store.album, journal.id))
+        #expect(custom.customLayout)
+        let revision = store.revision
+
+        // First the layout question, then (journal-5 -> gallery-2 drops the date and title) the texts.
+        #expect(model.changeTemplate(to: "gallery-2") == .needsLayoutReplaceConfirmation)
+        #expect(store.revision == revision)
+        let texts = model.changeTemplate(to: "gallery-2", confirmLayoutReplace: true)
+        guard case .needsTextLossConfirmation = texts else {
+            Issue.record("expected a text-loss confirmation, got \(texts)")
+            return
+        }
+        #expect(store.revision == revision)
+        #expect(model.changeTemplate(to: "no-such-template") == .unavailable)
+
+        let applied = step(undo) {
+            model.changeTemplate(to: "gallery-2", confirmTextLoss: true, confirmLayoutReplace: true)
+        }
+        guard case .applied = applied else {
+            Issue.record("expected applied, got \(applied)")
+            return
+        }
+        #expect(spread(store.album, journal.id)?.templateID == "gallery-2")
+        #expect(spread(store.album, journal.id)?.customLayout == false)
+        #expect(undo.undoActionName == "Změnit šablonu")
+        undo.undo()
+        #expect(spread(store.album, journal.id) == custom)
+
+        // The spread's own template on a custom layout restores the recommended layout (asked first).
+        #expect(model.changeTemplate(to: "journal-5") == .needsLayoutReplaceConfirmation)
+        let restored = step(undo) { model.changeTemplate(to: "journal-5", confirmLayoutReplace: true) }
+        #expect(restored == .applied(unplacedPhotoIDs: []))
+        let reset = try #require(spread(store.album, journal.id))
+        #expect(!reset.customLayout)
+        #expect(reset.frames.map(\.rect) == journal.frames.map(\.rect))
+        #expect(reset.texts == journal.texts)
+    }
+
+    @Test func selectedFrameIDMirrorsSelectedItem() throws {
+        let (model, store, _) = try makeModel(try standardAlbum())
+        let gallery = try #require(store.album.spreads.first { $0.templateID == "gallery-2" })
+        model.currentSpreadID = gallery.id
+
+        model.selectedItem = .frame("photo1")
+        #expect(model.selectedFrameID == "photo1")
+        model.selectedItem = .text("caption")
+        #expect(model.selectedItem == .text("caption"))
+        #expect(model.selectedFrameID == nil)
+        model.selectedFrameID = "photo2"
+        #expect(model.selectedItem == .frame("photo2"))
+        model.selectedFrameID = nil
+        #expect(model.selectedItem == nil)
+        model.selectedItem = .text("nope")
+        #expect(model.selectedItem == nil)
+
+        model.selectedItem = .text("caption")
+        model.nextSpread()
+        #expect(model.selectedItem == nil)  // another spread is shown
+    }
+}

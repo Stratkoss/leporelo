@@ -2,41 +2,57 @@ import AppKit
 import LeporeloCore
 import SwiftUI
 
-/// "Změnit šablonu…": the templates `EditorModel.availableTemplates(for:)` offers for a spread,
-/// each with a small rendered preview (blank grey frames, the placeholders as text) and its
-/// frame count. Choosing one runs `attempt(templateID, confirmTextLoss)` (the editor's
-/// `changeTemplate`). When texts would be lost, the confirmation ("Tyto texty by se ztratily: …")
-/// is shown INSIDE this sheet, so it can never be dropped by the sheet's dismissal; the sheet
-/// closes (`onDone`) only once the change is applied or the user cancels. A refused change says so.
+/// "Doporučená rozložení" ("Změnit šablonu…"): the templates `EditorModel.availableTemplates(for:)`
+/// offers for a spread, each with a small rendered preview (blank grey frames, the placeholders as
+/// text, conformed to the book's `marginMM`) and its frame count. Choosing one runs
+/// `attempt(templateID, confirmTextLoss, confirmLayoutReplace)` (the editor's `changeTemplate`).
+/// The confirmations are shown INSIDE this sheet, so they can never be dropped by the sheet's
+/// dismissal: a hand-made layout asks "Ruční rozložení se nahradí doporučeným." (with the texts
+/// that would be lost, `droppedTexts`, in the same question), otherwise texts that would be lost
+/// ask "Tyto texty by se ztratily: …". The sheet closes (`onDone`) only once the change is
+/// applied or the user cancels. A refused change says so. On a hand-made layout the current
+/// template can be chosen too: it restores the recommended layout.
 struct TemplatePicker: View {
     let templates: [SpreadTemplate]
     let currentTemplateID: String?
+    /// The spread's layout was changed by hand (`Spread.customLayout`).
+    let customLayout: Bool
     let geometry: PageGeometry
-    let attempt: (_ templateID: String, _ confirmTextLoss: Bool) -> TemplateChangeOutcome
+    let marginMM: Double
+    let droppedTexts: (_ templateID: String) -> [TextBox]
+    let attempt: (_ templateID: String, _ confirmTextLoss: Bool, _ confirmLayoutReplace: Bool) -> TemplateChangeOutcome
     let onDone: () -> Void
 
     private struct PendingLoss: Identifiable {
+        let templateID: String
+        let texts: [TextBox]
+        let layoutConfirmed: Bool
+        var id: String { templateID }
+    }
+
+    private struct PendingLayout: Identifiable {
         let templateID: String
         let texts: [TextBox]
         var id: String { templateID }
     }
 
     @State private var pendingLoss: PendingLoss?
+    @State private var pendingLayout: PendingLayout?
     @State private var showsUnavailable = false
 
     private let columns = [GridItem(.adaptive(minimum: 190), spacing: 14)]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Změnit šablonu").font(.title3.bold())
+            Text("Doporučená rozložení").font(.title3.bold())
             Text("Fotky se rozmístí znovu, texty zůstanou, kde to jde.")
                 .foregroundStyle(.secondary)
             ScrollView {
                 LazyVGrid(columns: columns, spacing: 14) {
                     ForEach(templates, id: \.id) { template in
-                        Button { choose(template.id, confirmed: false) } label: { cell(template) }
+                        Button { choose(template.id) } label: { cell(template) }
                             .buttonStyle(.plain)
-                            .disabled(template.id == currentTemplateID)
+                            .disabled(template.id == currentTemplateID && !customLayout)
                             .accessibilityLabel(EditorText.templateLabel(template)
                                                 + (template.id == currentTemplateID ? ", současná šablona" : ""))
                     }
@@ -54,10 +70,22 @@ struct TemplatePicker: View {
         .alert("Změnit šablonu?", isPresented: Binding(get: { pendingLoss != nil },
                                                         set: { if !$0 { pendingLoss = nil } }),
                presenting: pendingLoss) { pending in
-            Button("Změnit šablonu", role: .destructive) { choose(pending.templateID, confirmed: true) }
+            Button("Změnit šablonu", role: .destructive) {
+                choose(pending.templateID, confirmTextLoss: true, confirmLayoutReplace: pending.layoutConfirmed)
+            }
             Button("Zrušit", role: .cancel) {}
         } message: { pending in
             Text(EditorText.textLoss(pending.texts))
+        }
+        .alert("Ruční rozložení se nahradí doporučeným.",
+               isPresented: Binding(get: { pendingLayout != nil }, set: { if !$0 { pendingLayout = nil } }),
+               presenting: pendingLayout) { pending in
+            Button("Nahradit", role: .destructive) {
+                choose(pending.templateID, confirmTextLoss: !pending.texts.isEmpty, confirmLayoutReplace: true)
+            }
+            Button("Zrušit", role: .cancel) {}
+        } message: { pending in
+            if !pending.texts.isEmpty { Text(EditorText.textLoss(pending.texts)) }
         }
         .alert("Šablonu nejde použít", isPresented: $showsUnavailable) {
             Button("OK", role: .cancel) {}
@@ -66,15 +94,19 @@ struct TemplatePicker: View {
         }
     }
 
-    private func choose(_ templateID: String, confirmed: Bool) {
-        switch attempt(templateID, confirmed) {
+    private func choose(_ templateID: String, confirmTextLoss: Bool = false, confirmLayoutReplace: Bool = false) {
+        switch attempt(templateID, confirmTextLoss, confirmLayoutReplace) {
         case .applied:
             pendingLoss = nil
+            pendingLayout = nil
             onDone()
+        case .needsLayoutReplaceConfirmation:
+            pendingLayout = PendingLayout(templateID: templateID, texts: droppedTexts(templateID))
         case .needsTextLossConfirmation(let texts):
-            pendingLoss = PendingLoss(templateID: templateID, texts: texts)
+            pendingLoss = PendingLoss(templateID: templateID, texts: texts, layoutConfirmed: confirmLayoutReplace)
         case .unavailable:
             pendingLoss = nil
+            pendingLayout = nil
             showsUnavailable = true
         }
     }
@@ -83,7 +115,7 @@ struct TemplatePicker: View {
         let isCurrent = template.id == currentTemplateID
         return VStack(spacing: 6) {
             Group {
-                if let image = TemplatePreview.image(template, geometry: geometry, width: 360) {
+                if let image = TemplatePreview.image(template, geometry: geometry, marginMM: marginMM, width: 360) {
                     Image(nsImage: image).resizable().aspectRatio(contentMode: .fit)
                 } else {
                     Color.white
@@ -102,16 +134,18 @@ struct TemplatePicker: View {
     }
 }
 
-/// A template rendered with empty (grey) frames and its placeholder texts, synchronously (no
-/// images to load; a few milliseconds), cached per template, geometry and width.
+/// A template rendered with empty (grey) frames and its placeholder texts, conformed to the page
+/// margin, synchronously (no images to load; a few milliseconds), cached per template, geometry,
+/// margin and width.
 @MainActor
 enum TemplatePreview {
     private static var cache: [String: NSImage] = [:]
 
-    static func image(_ template: SpreadTemplate, geometry: PageGeometry, width: Int) -> NSImage? {
-        let key = "\(template.id)|\(geometry.profile.id)|\(geometry.format.id)|\(width)"
+    static func image(_ template: SpreadTemplate, geometry: PageGeometry, marginMM: Double, width: Int) -> NSImage? {
+        let key = "\(template.id)|\(geometry.profile.id)|\(geometry.format.id)|\(marginMM)|\(width)"
         if let image = cache[key] { return image }
-        var spread = TemplateLayout.instantiate(template, geometry: geometry, dayKey: nil, id: "preview")
+        var spread = TemplateLayout.instantiate(template, geometry: geometry, dayKey: nil, id: "preview",
+                                                marginMM: marginMM)
         for i in spread.texts.indices {
             spread.texts[i].text = template.texts.first { $0.id == spread.texts[i].id }?.placeholder ?? ""
         }

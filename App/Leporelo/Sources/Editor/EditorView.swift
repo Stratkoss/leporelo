@@ -69,11 +69,16 @@ struct EditorView: View {
         .onChange(of: undoManager) { _, manager in model.undoManager = manager }
         .onDisappear { model.commitSessions() }
         .sheet(item: Binding(get: { templateSpreadID.map(SheetID.init) }, set: { templateSpreadID = $0?.id })) { sheet in
+            let spread = model.store.album.spreads.first { $0.id == sheet.id }
             TemplatePicker(templates: model.availableTemplates(for: sheet.id),
-                           currentTemplateID: model.store.album.spreads.first { $0.id == sheet.id }?.templateID,
+                           currentTemplateID: spread?.templateID,
+                           customLayout: spread?.customLayout ?? false,
                            geometry: model.geometry,
-                           attempt: { templateID, confirmed in
-                               model.changeTemplate(to: templateID, in: sheet.id, confirmTextLoss: confirmed)
+                           marginMM: model.marginMM,
+                           droppedTexts: { model.previewTemplateChange(to: $0, in: sheet.id)?.droppedTexts ?? [] },
+                           attempt: { templateID, confirmTextLoss, confirmLayoutReplace in
+                               model.changeTemplate(to: templateID, in: sheet.id, confirmTextLoss: confirmTextLoss,
+                                                    confirmLayoutReplace: confirmLayoutReplace)
                            },
                            onDone: { templateSpreadID = nil })
         }

@@ -10,8 +10,17 @@ enum TemplateChangeOutcome: Equatable {
     /// Not applied: these non-empty texts have no slot in the new template. Call again with
     /// `confirmTextLoss: true` once the user agreed.
     case needsTextLossConfirmation([TextBox])
+    /// Not applied: the spread has a hand-made layout (`Spread.customLayout`) that the template
+    /// would replace. Call again with `confirmLayoutReplace: true` once the user agreed.
+    case needsLayoutReplaceConfirmation
     /// Unknown spread or template, or a template not offered for the spread.
     case unavailable
+}
+
+/// A frame or a text box of a spread, by id: what the canvas selects, moves, resizes and deletes.
+enum LayoutItem: Hashable {
+    case frame(String)
+    case text(String)
 }
 
 /// What `EditorModel.dropPhoto` does with a photo that is already in another frame of the book.
@@ -41,8 +50,9 @@ enum DropOutcome: Equatable {
 /// inverses, one undo step per user action) for frame, text and spread changes; whole-album
 /// `AlbumStore.replace` for "Navrhnout album", "Navrhnout znovu" and "Změnit formát".
 ///
-/// Coalescing: a text editing session (`beginTextEditing` / `updateText` / `endTextEditing`) and a
-/// crop gesture (`beginTransform` / `nudge` / `endTransform`) keep a live preview in the model
+/// Coalescing: a text editing session (`beginTextEditing` / `updateText` / `endTextEditing`), a
+/// crop gesture (`beginTransform` / `nudge` / `endTransform`) and a layout gesture
+/// (`beginLayoutChange` / `updateLayout` / `endLayoutChange`) keep a live preview in the model
 /// (`displayedSpread`) and are ONE undo step each. Session text also reaches the store
 /// `textCommitDelay` after the last keystroke (same step), because autosave reads the album off
 /// the main thread and cannot ask the model to flush (see `AlbumSnapshotBox`). Any other edit,
@@ -161,12 +171,12 @@ final class EditorModel {
     private var requestedSpreadID: String?
     /// Index of the current spread when last resolved: the fallback position after it vanished.
     @ObservationIgnored private var lastSpreadIndex = 0
-    /// The frame the user chose, with the spread it belongs to.
-    private var requestedFrame: FrameRef?
+    /// The frame or text the user chose, with the spread it belongs to.
+    private var requestedItem: ItemRef?
 
-    private struct FrameRef: Equatable {
+    private struct ItemRef: Equatable {
         var spreadID: String
-        var frameID: String
+        var item: LayoutItem
     }
     /// The tray day the user chose for the current spread; nil follows the spread.
     private var chosenTrayDay: DayKey?
@@ -204,18 +214,27 @@ final class EditorModel {
     /// The current spread as shown (with a running session's preview).
     var currentSpread: Spread? { currentSpreadID.flatMap(displayedSpread) }
 
-    /// The selected frame of the current spread; nil when that frame (or spread) no longer exists
-    /// or another spread is shown.
-    var selectedFrameID: String? {
+    /// The selected frame or text of the current spread; nil when that item (or spread) no longer
+    /// exists (deleted, undone) or another spread is shown.
+    var selectedItem: LayoutItem? {
         get {
-            guard let requestedFrame, requestedFrame.spreadID == currentSpreadID,
-                  let spread = store.album.spreads.first(where: { $0.id == requestedFrame.spreadID }),
-                  spread.frames.contains(where: { $0.id == requestedFrame.frameID }) else { return nil }
-            return requestedFrame.frameID
+            guard let requestedItem, requestedItem.spreadID == currentSpreadID,
+                  let spread = store.album.spreads.first(where: { $0.id == requestedItem.spreadID }),
+                  Self.rect(of: requestedItem.item, in: spread) != nil else { return nil }
+            return requestedItem.item
         }
         set {
-            requestedFrame = newValue.flatMap { frame in currentSpreadID.map { FrameRef(spreadID: $0, frameID: frame) } }
+            requestedItem = newValue.flatMap { item in currentSpreadID.map { ItemRef(spreadID: $0, item: item) } }
         }
+    }
+
+    /// The selected frame (`selectedItem` when it is a frame); setting it selects that frame.
+    var selectedFrameID: String? {
+        get {
+            if case .frame(let id) = selectedItem { return id }
+            return nil
+        }
+        set { selectedItem = newValue.map(LayoutItem.frame) }
     }
 
     func spreadIndex(of id: String) -> Int? {
@@ -483,13 +502,14 @@ final class EditorModel {
     /// Whether a crop gesture is running (`beginTransform` ... `endTransform`).
     var isTransforming: Bool { transformSession != nil }
 
-    /// Whether a text or crop session holds edits that are not stored as an undo step yet. The
-    /// Undo menu is enabled for it: `undo()` commits the session, then undoes it.
-    var hasPendingSession: Bool { textSession != nil || transformSession != nil }
+    /// Whether a text, crop or layout session holds edits that are not stored as an undo step yet.
+    /// The Undo menu is enabled for it: `undo()` commits the session, then undoes it.
+    var hasPendingSession: Bool { textSession != nil || transformSession != nil || layoutSession != nil }
 
-    /// The undo name of a running session that has CHANGES ("Upravit text", "Posunout fotku");
-    /// nil when no session runs or it changes nothing yet. Edit > Undo shows it: ⌘Z then commits
-    /// and undoes the session. An open but unchanged session would undo the step before it.
+    /// The undo name of a running session that has CHANGES ("Upravit text", "Posunout fotku",
+    /// "Upravit rozložení"); nil when no session runs or it changes nothing yet. Edit > Undo shows
+    /// it: ⌘Z then commits and undoes the session. An open but unchanged session would undo the
+    /// step before it.
     var pendingSessionActionName: String? {
         let album = store.album
         if let t = textSession,
@@ -501,6 +521,11 @@ final class EditorModel {
            let frame = album.spreads.first(where: { $0.id == s.spreadID })?.frames.first(where: { $0.id == s.frameID }),
            frame.offset != s.offset || frame.zoom != s.zoom {
             return "Posunout fotku"
+        }
+        if let l = layoutSession,
+           let spread = album.spreads.first(where: { $0.id == l.spreadID }),
+           let rect = Self.rect(of: l.item, in: spread), rect != l.rect {
+            return "Upravit rozložení"
         }
         return nil
     }
@@ -626,8 +651,8 @@ final class EditorModel {
         perform([.setText(spreadID: id, textID: textID, text: text)], "Upravit text")
     }
 
-    /// The spread as the canvas shows it: the stored spread with a running text or crop session
-    /// applied.
+    /// The spread as the canvas shows it: the stored spread with a running text, crop or layout
+    /// session applied.
     func displayedSpread(_ id: String) -> Spread? {
         guard var spread = store.album.spreads.first(where: { $0.id == id }) else { return nil }
         if let t = textSession, t.spreadID == id, let i = spread.texts.firstIndex(where: { $0.id == t.textID }) {
@@ -637,6 +662,7 @@ final class EditorModel {
             spread.frames[i].offset = s.offset
             spread.frames[i].zoom = s.zoom
         }
+        if let l = layoutSession, l.spreadID == id { _ = Self.setRect(l.rect, of: l.item, in: &spread) }
         return spread
     }
 
@@ -646,6 +672,7 @@ final class EditorModel {
     func commitSessions() {
         endTextEditing()
         endTransform()
+        endLayoutChange()
     }
 
     /// A session commit registered a step in the current event; the next action must start a
@@ -697,6 +724,170 @@ final class EditorModel {
         undoManager.beginUndoGrouping()
     }
 
+    // MARK: Layout (move, resize, add, delete, margin)
+
+    private struct LayoutSession {
+        var spreadID: String
+        var item: LayoutItem
+        var rect: Rect
+    }
+
+    private var layoutSession: LayoutSession?
+
+    /// The book's page margin in mm (`Album.marginMM`).
+    var marginMM: Double { store.album.marginMM }
+
+    /// The margin rule every layout edit obeys: the current geometry and the book's margin.
+    private var marginRule: MarginRule { MarginRule(geometry: geometry, marginMM: store.album.marginMM) }
+
+    /// Starts a layout gesture (move or resize by mouse, or a run of arrow keys) on a frame or text
+    /// of the spread (default: current): `updateLayout` then only updates the preview,
+    /// `endLayoutChange` stores one step "Upravit rozložení".
+    func beginLayoutChange(_ item: LayoutItem, in spreadID: String? = nil) {
+        commitSessions()
+        guard let id = spreadID ?? currentSpreadID,
+              let spread = store.album.spreads.first(where: { $0.id == id }),
+              let rect = Self.rect(of: item, in: spread) else { return }
+        layoutSession = LayoutSession(spreadID: id, item: item, rect: rect)
+    }
+
+    /// The item's new rectangle (spread mm) in the preview, conformed to the page margin
+    /// (`MarginRule.conformFrame` / `conformText`, area `.spread`). Without a running session for
+    /// `item` it starts one on the current spread first (committing any other session). A
+    /// rectangle with a non-finite value is ignored.
+    func updateLayout(_ item: LayoutItem, rect: Rect) {
+        if layoutSession?.item != item { beginLayoutChange(item) }
+        guard layoutSession != nil,
+              [rect.minX, rect.minY, rect.size.width, rect.size.height].allSatisfy(\.isFinite) else { return }
+        switch item {
+        case .frame: layoutSession?.rect = marginRule.conformFrame(rect, area: .spread)
+        case .text: layoutSession?.rect = marginRule.conformText(rect, area: .spread)
+        }
+    }
+
+    /// Ends the layout gesture: stores its final rectangle as one step "Upravit rozložení" (nothing
+    /// if unchanged); the spread becomes manually edited with a custom layout.
+    func endLayoutChange() {
+        guard let session = layoutSession else { return }
+        layoutSession = nil
+        guard var spread = store.album.spreads.first(where: { $0.id == session.spreadID }),
+              let rect = Self.rect(of: session.item, in: spread), rect != session.rect else { return }
+        _ = Self.setRect(session.rect, of: session.item, in: &spread)
+        spread.manuallyEdited = true
+        spread.customLayout = true
+        asOwnStep { perform([.replaceSpread(spread)], "Upravit rozložení") }
+    }
+
+    /// "Přidat rámeček": an empty frame `frame-N` (smallest free N) centred on the page `side`,
+    /// half the page's width and height, conformed to the margin. One step; it becomes the
+    /// selected item. Returns its id (nil: unknown spread).
+    @discardableResult
+    func addFrame(on side: PageSide, in spreadID: String? = nil) -> String? {
+        commitSessions()
+        guard let id = spreadID ?? currentSpreadID,
+              var spread = store.album.spreads.first(where: { $0.id == id }) else { return nil }
+        let frameID = Self.freeID("frame", taken: spread.frames.map(\.id))
+        let page = geometry.pageRect(side: side)
+        let rect = Rect(x: page.minX + page.size.width / 4, y: page.minY + page.size.height / 4,
+                        width: page.size.width / 2, height: page.size.height / 2)
+        spread.frames.append(Frame(id: frameID, rect: marginRule.conformFrame(rect, area: .spread), photoID: nil,
+                                   offset: Point(x: 0, y: 0), zoom: 1))
+        return addItem(.frame(frameID), to: spread, "Přidat rámeček")
+    }
+
+    /// "Přidat text": an empty caption `text-N` (smallest free N), 60 × 12 mm, centred
+    /// horizontally on the page `side` with its bottom edge on the bottom margin, conformed. One
+    /// step; it becomes the selected item. Returns its id (nil: unknown spread).
+    @discardableResult
+    func addText(on side: PageSide, in spreadID: String? = nil) -> String? {
+        commitSessions()
+        guard let id = spreadID ?? currentSpreadID,
+              var spread = store.album.spreads.first(where: { $0.id == id }) else { return nil }
+        let textID = Self.freeID("text", taken: spread.texts.map(\.id))
+        let page = geometry.pageRect(side: side)
+        let width = 60.0, height = 12.0
+        let rect = Rect(x: page.minX + (page.size.width - width) / 2, y: page.maxY - marginMM - height,
+                        width: width, height: height)
+        spread.texts.append(TextBox(id: textID, rect: marginRule.conformText(rect, area: .spread),
+                                    role: .caption, text: ""))
+        return addItem(.text(textID), to: spread, "Přidat text")
+    }
+
+    /// Stores `spread` (with the new item) as one step and selects the item.
+    private func addItem(_ item: LayoutItem, to spread: Spread, _ actionName: String) -> String? {
+        var spread = spread
+        spread.manuallyEdited = true
+        spread.customLayout = true
+        guard perform([.replaceSpread(spread)], actionName) else { return nil }
+        requestedItem = ItemRef(spreadID: spread.id, item: item)
+        switch item {
+        case .frame(let id), .text(let id): return id
+        }
+    }
+
+    /// "Smazat": removes a frame (its photo stays selected but unplaced: tray, preflight) or a
+    /// text box, as one step; the spread gets a custom layout. False for an unknown item or spread.
+    @discardableResult
+    func deleteItem(_ item: LayoutItem, in spreadID: String? = nil) -> Bool {
+        commitSessions()
+        guard let id = spreadID ?? currentSpreadID,
+              var spread = store.album.spreads.first(where: { $0.id == id }) else { return false }
+        switch item {
+        case .frame(let frameID):
+            guard let i = spread.frames.firstIndex(where: { $0.id == frameID }) else { return false }
+            spread.frames.remove(at: i)
+        case .text(let textID):
+            guard let i = spread.texts.firstIndex(where: { $0.id == textID }) else { return false }
+            spread.texts.remove(at: i)
+        }
+        spread.manuallyEdited = true
+        spread.customLayout = true
+        guard perform([.replaceSpread(spread)], "Smazat") else { return false }
+        if requestedItem == ItemRef(spreadID: id, item: item) { requestedItem = nil }
+        return true
+    }
+
+    /// "Okraj": sets the book's page margin (`AlbumUpdater.settingMargin`: clamped to the profile's
+    /// safe zone ... `MarginRule.maxMarginMM`, every spread and the cover conformed) as one step
+    /// "Změnit okraj". Nothing when the clamped value equals the current margin.
+    func setMargin(_ mm: Double) {
+        commitSessions()
+        let g = geometry
+        guard mm.isFinite, MarginRule.clampedMargin(mm, profile: g.profile) != store.album.marginMM else { return }
+        let updated = AlbumUpdater.settingMargin(mm, in: store.album, profile: g.profile, format: g.format)
+        startStepAfterSessionCommit()
+        store.replace(album: updated, actionName: "Změnit okraj", undoManager: undoManager)
+    }
+
+    /// `prefix-N` with the smallest N >= 1 not in `taken`.
+    private static func freeID(_ prefix: String, taken: [String]) -> String {
+        let taken = Set(taken)
+        var n = 1
+        while taken.contains("\(prefix)-\(n)") { n += 1 }
+        return "\(prefix)-\(n)"
+    }
+
+    /// The rectangle of a frame or text of `spread`; nil when it has no such item.
+    private static func rect(of item: LayoutItem, in spread: Spread) -> Rect? {
+        switch item {
+        case .frame(let id): spread.frames.first { $0.id == id }?.rect
+        case .text(let id): spread.texts.first { $0.id == id }?.rect
+        }
+    }
+
+    /// Sets the rectangle of a frame or text of `spread`; false when it has no such item.
+    private static func setRect(_ rect: Rect, of item: LayoutItem, in spread: inout Spread) -> Bool {
+        switch item {
+        case .frame(let id):
+            guard let i = spread.frames.firstIndex(where: { $0.id == id }) else { return false }
+            spread.frames[i].rect = rect
+        case .text(let id):
+            guard let i = spread.texts.firstIndex(where: { $0.id == id }) else { return false }
+            spread.texts[i].rect = rect
+        }
+        return true
+    }
+
     // MARK: Templates
 
     /// Templates the picker offers for the spread: journal and gallery spreads switch freely
@@ -716,21 +907,25 @@ final class EditorModel {
         guard let id = spreadID ?? currentSpreadID,
               let spread = store.album.spreads.first(where: { $0.id == id }),
               let template = availableTemplates(for: id).first(where: { $0.id == templateID }) else { return nil }
-        return TemplateLayout.retemplate(spread, to: template, geometry: geometry, photos: store.album.photos)
+        return TemplateLayout.retemplate(spread, to: template, geometry: geometry, photos: store.album.photos,
+                                         marginMM: store.album.marginMM)
     }
 
-    /// "Změnit šablonu" (`TemplateLayout.retemplate`, edit `replaceSpread`, one step). Texts that
-    /// would be lost block the change until `confirmTextLoss`; photos without a frame stay
-    /// selected but unplaced; extra frames stay empty (preflight).
+    /// "Změnit šablonu" (`TemplateLayout.retemplate`, edit `replaceSpread`, one step). A hand-made
+    /// layout (`customLayout`) blocks the change until `confirmLayoutReplace` (asked first), then
+    /// texts that would be lost block it until `confirmTextLoss`; photos without a frame stay
+    /// selected but unplaced; extra frames stay empty (preflight). On a hand-made layout the
+    /// spread's own template restores the recommended layout.
     @discardableResult
     func changeTemplate(to templateID: String, in spreadID: String? = nil,
-                        confirmTextLoss: Bool = false) -> TemplateChangeOutcome {
+                        confirmTextLoss: Bool = false, confirmLayoutReplace: Bool = false) -> TemplateChangeOutcome {
         commitSessions()
         guard let id = spreadID ?? currentSpreadID,
               let spread = store.album.spreads.first(where: { $0.id == id }) else { return .unavailable }
         // The spread's own template: nothing to do, no undo step, the spread stays unedited.
-        if spread.templateID == templateID { return .applied(unplacedPhotoIDs: []) }
+        if spread.templateID == templateID && !spread.customLayout { return .applied(unplacedPhotoIDs: []) }
         guard let result = previewTemplateChange(to: templateID, in: id) else { return .unavailable }
+        if spread.customLayout && !confirmLayoutReplace { return .needsLayoutReplaceConfirmation }
         if !result.droppedTexts.isEmpty && !confirmTextLoss { return .needsTextLossConfirmation(result.droppedTexts) }
         return perform([.replaceSpread(result.spread)], "Změnit šablonu")
             ? .applied(unplacedPhotoIDs: result.unplacedPhotoIDs) : .unavailable
@@ -778,7 +973,8 @@ final class EditorModel {
                 ?? (index < spreads.count ? spreads[index].dayKey : nil)
                 ?? trayDay
         }
-        var spread = TemplateLayout.instantiate(template, geometry: geometry, dayKey: day, id: id)
+        var spread = TemplateLayout.instantiate(template, geometry: geometry, dayKey: day, id: id,
+                                                marginMM: store.album.marginMM)
         spread.manuallyEdited = true
         guard perform([.insertSpread(spread, at: index)], "Přidat dvoustranu") else { return nil }
         currentSpreadID = id
