@@ -1236,15 +1236,25 @@ struct EditorLayoutTests {
         model.currentSpreadID = journal.id
         let frame = journal.frames[0]
 
-        // Edges moved into the band (14 mm from the trim, margin 20) end on the margin line.
+        // A frame moved into the band (14 mm from the trim, margin 20) shifts onto the margin line
+        // and keeps its size.
         step(undo) {
             model.beginLayoutChange(.frame(frame.id))
-            model.updateLayout(.frame(frame.id), rect: Rect(x: 14, y: 14, width: 100, height: 80))
+            model.updateLayout(.frame(frame.id), rect: Rect(x: 14, y: 14, width: 100, height: 80), mode: .move)
             model.endLayoutChange()
         }
         let stored = try #require(spread(store.album, journal.id)?.frames.first { $0.id == frame.id }?.rect)
-        #expect(stored.minX == 20 && stored.minY == 20)
-        #expect(stored.maxX == 114 && stored.maxY == 94)
+        #expect(stored == Rect(x: 20, y: 20, width: 100, height: 80))
+
+        // A resize snaps each edge on its own: the dragged edges land on the margin line, the
+        // opposite ones stay.
+        step(undo) {
+            model.beginLayoutChange(.frame(frame.id))
+            model.updateLayout(.frame(frame.id), rect: Rect(x: 14, y: 14, width: 106, height: 80), mode: .resize)
+            model.endLayoutChange()
+        }
+        #expect(spread(store.album, journal.id)?.frames.first { $0.id == frame.id }?.rect
+                == Rect(x: 20, y: 20, width: 100, height: 74))
 
         // A text stays inside the margin box of its page, keeping its size.
         let title = try #require(journal.texts.first { $0.id == "title" })
@@ -1257,10 +1267,39 @@ struct EditorLayoutTests {
                 == Rect(x: 20, y: 20, width: 50, height: 10))
 
         // Non-finite input is ignored.
+        let resized = try #require(spread(store.album, journal.id)?.frames.first { $0.id == frame.id }?.rect)
         model.beginLayoutChange(.frame(frame.id))
-        model.updateLayout(.frame(frame.id), rect: Rect(x: .nan, y: 0, width: 10, height: 10))
-        #expect(model.displayedSpread(journal.id)?.frames.first { $0.id == frame.id }?.rect == stored)
+        model.updateLayout(.frame(frame.id), rect: Rect(x: .nan, y: 0, width: 10, height: 10), mode: .move)
+        #expect(model.displayedSpread(journal.id)?.frames.first { $0.id == frame.id }?.rect == resized)
         model.endLayoutChange()
+    }
+
+    /// Arrow keys (incremental `.move` updates in one session) at the margin line never shrink
+    /// the frame: each 1 mm step into the band shifts back to the margin line (the nearer side).
+    @Test func arrowNudgeAtMarginDoesNotShrink() throws {
+        let (model, store, undo) = try makeModel(try standardAlbum())
+        let gallery = try #require(store.album.spreads.first { $0.templateID == "gallery-2" })
+        model.currentSpreadID = gallery.id
+        let start = Rect(x: 10, y: 40, width: 120, height: 90)
+        step(undo) {
+            model.beginLayoutChange(.frame("photo1"))
+            model.updateLayout(.frame("photo1"), rect: start, mode: .move)
+            model.endLayoutChange()
+        }
+        #expect(spread(store.album, gallery.id)?.frames.first { $0.id == "photo1" }?.rect == start)
+
+        try step(undo) {
+            model.beginLayoutChange(.frame("photo1"))
+            for _ in 0..<5 {
+                let current = try #require(model.displayedSpread(gallery.id)?.frames.first { $0.id == "photo1" }?.rect)
+                model.updateLayout(.frame("photo1"), rect: moved(current, dx: -1, dy: 0), mode: .move)
+                let after = try #require(model.displayedSpread(gallery.id)?.frames.first { $0.id == "photo1" }?.rect)
+                #expect(after.size == start.size)
+                #expect(after.minX == 10)
+            }
+            model.endLayoutChange()
+        }
+        #expect(spread(store.album, gallery.id)?.frames.first { $0.id == "photo1" }?.rect == start)
     }
 
     @Test func layoutChangeMarksSpreadCustomAndManual() throws {

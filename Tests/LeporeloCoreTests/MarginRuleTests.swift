@@ -55,6 +55,57 @@ import Foundation
         #expect(spread.minX >= 0 && spread.minY >= 0)
     }
 
+    // MARK: Moves keep the size
+
+    @Test func movedFrameKeepsSizeAndLeavesBand() throws {
+        let rule = try Self.rule()
+        // Both edges 7 mm from the trim (in the band): the whole frame moves to the margin line.
+        #expect(rule.conformMovedFrame(Rect(x: 7, y: 7, width: 100, height: 80), area: .spread)
+                == Rect(x: 10, y: 10, width: 100, height: 80))
+        let wide = try Self.rule(margin: 20)
+        #expect(wide.conformMovedFrame(Rect(x: 14, y: 14, width: 100, height: 80), area: .spread)
+                == Rect(x: 20, y: 20, width: 100, height: 80))
+        // Already conforming: unchanged.
+        let fine = Rect(x: 40, y: 30, width: 100, height: 80)
+        #expect(rule.conformMovedFrame(fine, area: .spread) == fine)
+    }
+
+    @Test func movedFrameSnapsToBleedEdgeWhenCloser() throws {
+        let rule = try Self.rule()
+        #expect(rule.conformMovedFrame(Rect(x: 3, y: 3, width: 100, height: 80), area: .spread)
+                == Rect(x: 0, y: 0, width: 100, height: 80))
+        // Outside the area: clamped in without resizing.
+        #expect(rule.conformMovedFrame(Rect(x: -30, y: 150, width: 100, height: 80), area: .spread)
+                == Rect(x: 0, y: 130, width: 100, height: 80))
+    }
+
+    @Test func movedFrameNearSpineShiftsWholly() throws {
+        let rule = try Self.rule()
+        // maxX 293 is 4 mm before the spine: onto the spine.
+        #expect(rule.conformMovedFrame(Self.frame(x0: 201, x1: 293), area: .spread) == Self.frame(x0: 205, x1: 297))
+        // maxX 291 is 6 mm before the spine: back to the margin line.
+        #expect(rule.conformMovedFrame(Self.frame(x0: 199, x1: 291), area: .spread) == Self.frame(x0: 195, x1: 287))
+        // Right of the spine, minX 300: onto the spine.
+        #expect(rule.conformMovedFrame(Self.frame(x0: 300, x1: 400), area: .spread) == Self.frame(x0: 297, x1: 397))
+        // A tie (5 mm either way) takes the smaller shift: back to the margin line.
+        #expect(rule.conformMovedFrame(Self.frame(x0: 200, x1: 292), area: .spread) == Self.frame(x0: 195, x1: 287))
+    }
+
+    @Test func movedFrameTooWideFallsBack() throws {
+        let rule = try Self.rule()
+        // 290 mm wide on a 297 mm page: no shift clears both bands.
+        let tight = Rect(x: 3, y: 50, width: 290, height: 100)
+        #expect(rule.conformMovedFrame(tight, area: .spread) == rule.conformFrame(tight, area: .spread))
+        // Wider than the whole spread.
+        let huge = Rect(x: -10, y: 50, width: 620, height: 100)
+        #expect(rule.conformMovedFrame(huge, area: .spread) == rule.conformFrame(huge, area: .spread))
+        // The fallback is per axis: y still only moves.
+        let mixed = Rect(x: 3, y: 3, width: 290, height: 80)
+        let result = rule.conformMovedFrame(mixed, area: .spread)
+        #expect(result.minY == 0 && result.size.height == 80)
+        #expect(result.minX == rule.conformFrame(mixed, area: .spread).minX)
+    }
+
     @Test func textIsClampedInsideMargin() throws {
         let rule = try Self.rule()
         let text = rule.conformText(Rect(x: 2, y: 200, width: 58, height: 9), area: .spread)

@@ -23,6 +23,15 @@ enum LayoutItem: Hashable {
     case text(String)
 }
 
+/// How `EditorModel.updateLayout` conforms a frame to the page margin.
+enum LayoutUpdateMode {
+    /// The frame is dragged or nudged: it only shifts, never changes size
+    /// (`MarginRule.conformMovedFrame`).
+    case move
+    /// An edge or corner is dragged: each edge snaps on its own (`MarginRule.conformFrame`).
+    case resize
+}
+
 /// What `EditorModel.dropPhoto` does with a photo that is already in another frame of the book.
 enum DuplicatePolicy: Equatable {
     /// Change nothing and report `DropOutcome.needsDuplicateDecision`.
@@ -740,8 +749,9 @@ final class EditorModel {
     /// The margin rule every layout edit obeys: the current geometry and the book's margin.
     private var marginRule: MarginRule { MarginRule(geometry: geometry, marginMM: store.album.marginMM) }
 
-    /// Starts a layout gesture (move or resize by mouse, or a run of arrow keys) on a frame or text
-    /// of the spread (default: current): `updateLayout` then only updates the preview,
+    /// Starts a layout gesture on a frame or text of the spread (default: current): a mouse move
+    /// (`updateLayout` with `.move`), a resize by a handle (`.resize`) or a run of arrow keys from
+    /// keyDown to keyUp (`.move`). `updateLayout` then only updates the preview,
     /// `endLayoutChange` stores one step "Upravit rozložení".
     func beginLayoutChange(_ item: LayoutItem, in spreadID: String? = nil) {
         commitSessions()
@@ -751,16 +761,19 @@ final class EditorModel {
         layoutSession = LayoutSession(spreadID: id, item: item, rect: rect)
     }
 
-    /// The item's new rectangle (spread mm) in the preview, conformed to the page margin
-    /// (`MarginRule.conformFrame` / `conformText`, area `.spread`). Without a running session for
-    /// `item` it starts one on the current spread first (committing any other session). A
-    /// rectangle with a non-finite value is ignored.
-    func updateLayout(_ item: LayoutItem, rect: Rect) {
+    /// The item's new rectangle (spread mm) in the preview, conformed to the page margin (area
+    /// `.spread`): a frame by `MarginRule.conformMovedFrame` for `.move` (it keeps its size) or
+    /// `conformFrame` for `.resize`; a text by `conformText` in both modes (it only shifts unless
+    /// larger than the margin box). Without a running session for `item` it starts one on the
+    /// current spread first (committing any other session). A non-finite rectangle is ignored.
+    func updateLayout(_ item: LayoutItem, rect: Rect, mode: LayoutUpdateMode = .resize) {
         if layoutSession?.item != item { beginLayoutChange(item) }
         guard layoutSession != nil,
               [rect.minX, rect.minY, rect.size.width, rect.size.height].allSatisfy(\.isFinite) else { return }
         switch item {
-        case .frame: layoutSession?.rect = marginRule.conformFrame(rect, area: .spread)
+        case .frame:
+            layoutSession?.rect = mode == .move ? marginRule.conformMovedFrame(rect, area: .spread)
+                                                : marginRule.conformFrame(rect, area: .spread)
         case .text: layoutSession?.rect = marginRule.conformText(rect, area: .spread)
         }
     }

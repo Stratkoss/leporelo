@@ -44,6 +44,22 @@ public struct MarginRule: Sendable {
         return Rect(x: x0, y: y0, width: x1 - x0, height: y1 - y0)
     }
 
+    /// `rect` MOVED (never resized) so that it lies inside the area with no edge in the band next
+    /// to a page edge: a frame being dragged or nudged keeps its size. Per axis the position is
+    /// first clamped into the area; if an edge then lies in a band, the candidates are the shifts
+    /// that put that edge on the page edge or on its margin line (inward side), and the smallest
+    /// shift whose result is inside the area with no edge in any band wins (a tie: the smaller
+    /// value). An axis no shift can satisfy (too long, or below `minItemMM`) is conformed as in
+    /// `conformFrame`.
+    public func conformMovedFrame(_ rect: Rect, area: PrintArea) -> Rect {
+        let fallback = conformFrame(rect, area: area)
+        let (x0, x1) = moveAxis(rect.minX, length: rect.size.width, edges: pageEdgesX(area))
+            ?? (fallback.minX, fallback.maxX)
+        let (y0, y1) = moveAxis(rect.minY, length: rect.size.height, edges: pageEdgesY())
+            ?? (fallback.minY, fallback.maxY)
+        return Rect(x: x0, y: y0, width: x1 - x0, height: y1 - y0)
+    }
+
     /// `rect` moved inside, and shrunk to, the margin box of the page its centre lies on.
     public func conformText(_ rect: Rect, area: PrintArea) -> Rect {
         let box: Rect
@@ -109,6 +125,36 @@ public struct MarginRule: Sendable {
             }
         }
         return (a, b)
+    }
+
+    /// One axis of `conformMovedFrame`: the new (lo, hi) with the length kept, or nil when no
+    /// shift works.
+    private func moveAxis(_ lo: Double, length: Double, edges: [Double]) -> (Double, Double)? {
+        let m = marginMM
+        let limit = edges.last ?? 0
+        guard lo.isFinite, length.isFinite, length >= Self.minItemMM - Self.eps,
+              length <= limit + Self.eps else { return nil }
+        let a = min(max(lo, 0), limit - length)
+
+        func inBand(_ v: Double) -> Bool {
+            edges.contains { abs(v - $0) > Self.eps && abs(v - $0) < m - Self.eps }
+        }
+        func fits(_ start: Double) -> Bool {
+            start >= -Self.eps && start + length <= limit + Self.eps && !inBand(start) && !inBand(start + length)
+        }
+        if fits(a) { return (a, a + length) }
+
+        var shifts: [Double] = []
+        for v in [a, a + length] {
+            for e in edges where abs(v - e) > Self.eps && abs(v - e) < m - Self.eps {
+                shifts.append(e - v)
+                shifts.append((v > e ? e + m : e - m) - v)
+            }
+        }
+        let best = shifts.filter { fits(a + $0) }.min { s, t in
+            abs(abs(s) - abs(t)) > Self.eps ? abs(s) < abs(t) : s < t
+        }
+        return best.map { (a + $0, a + $0 + length) }
     }
 
     private func snap(_ v: Double, edges: [Double]) -> Double {
