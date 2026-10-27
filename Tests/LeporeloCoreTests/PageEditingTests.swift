@@ -221,8 +221,7 @@ import Foundation
 
         let one = try Self.apply("full", to: s, side: .left, ps)
         #expect(one.spread.pageLayouts == ["full", nil])
-        #expect(one.unplacedPhotoIDs == ["a2"] || one.unplacedPhotoIDs == ["a1"])
-        #expect(one.unplacedPhotoIDs.count == 1)
+        #expect(one.unplacedPhotoIDs == ["a2"])
         // On the right page.
         let rr = try Self.apply("full", to: s, side: .right, ps)
         #expect(rr.spread.pageLayouts == [nil, "full"])
@@ -241,6 +240,25 @@ import Foundation
         #expect(r.spread.frames.map(\.id) == ["R.photo1"])
         #expect(r.spread.frames[0].photoID == nil)
         #expect(r.spread.texts.map(\.id) == ["R.caption"])
+    }
+
+    @Test func applyingOnBlankKeepsItemsOnTheOtherPage() throws {
+        let t = try #require(TemplateCatalog.template(id: "blank"))
+        var blank = try TemplateLayout.instantiate(t, geometry: Self.geometry(), dayKey: nil, id: "b")
+        let mine = Frame(id: "mine", rect: Rect(x: 250, y: 20, width: 60, height: 40), photoID: "x",
+                         offset: Point(x: 0, y: 0), zoom: 1)
+        blank.frames = [mine]
+        let r = try Self.apply("framed-1", to: blank, side: .left, [])
+        #expect(r.spread.pageLayouts == ["framed-1", nil])
+        #expect(r.spread.customLayout && r.spread.manuallyEdited)
+        #expect(r.spread.frames.last == mine)
+        #expect(r.spread.frames.map(\.id) == ["L.photo1", "mine"])
+        // A hand-added text counts too, on the left page when applying to the right.
+        var withText = try TemplateLayout.instantiate(t, geometry: Self.geometry(), dayKey: nil, id: "b")
+        withText.texts = [TextBox(id: "note", rect: Rect(x: 20, y: 20, width: 60, height: 10), role: .caption, text: "n")]
+        let rt = try Self.apply("framed-1", to: withText, side: .right, [])
+        #expect(rt.spread.pageLayouts == [nil, "framed-1"])
+        #expect(rt.spread.texts.first?.id == "note")
     }
 
     @Test func applyingFollowsTheMargin() throws {

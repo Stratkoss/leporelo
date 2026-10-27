@@ -82,7 +82,7 @@ public enum PageEditing {
     ///   non-empty ones without a slot are `droppedTexts`;
     /// - `manuallyEdited = true`, `customLayout = pageLayouts.contains(nil)`;
     /// - an old spread (no `pageLayouts`) becomes `"pages"` and its other page manual (`nil`),
-    ///   keeping its frames and texts; a `blank` spread becomes a gallery whose other page is `empty`.
+    ///   keeping its frames and texts; a `blank` spread becomes a gallery whose other page is `empty`, or manual (`nil`) when it holds items.
     /// The intro, the closing and an unknown layout id come back unchanged.
     public static func applying(_ layoutID: String, to spread: Spread, side: PageSide, geometry: PageGeometry,
                                 photos: [PhotoID: Photo], marginMM: Double) -> RetemplateResult {
@@ -94,7 +94,12 @@ public enum PageEditing {
         let blank = spread.templateID == "blank"
         if blank {
             result.kind = .gallery
-            result.pageLayouts = side == .left ? [layoutID, "empty"] : ["empty", layoutID]
+            // Items the user put on the other page keep it manual: an `empty` page would lose them.
+            let other: PageSide = side == .left ? .right : .left
+            let held = spread.frames.contains { onPage($0.rect, other, geometry) }
+                || spread.texts.contains { onPage($0.rect, other, geometry) }
+            let rest: String? = held ? nil : "empty"
+            result.pageLayouts = side == .left ? [layoutID, rest] : [rest, layoutID]
         } else if spread.pageLayouts.isEmpty {
             result.pageLayouts = side == .left ? [layoutID, nil] : [nil, layoutID]
         } else {
