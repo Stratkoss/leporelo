@@ -7,13 +7,15 @@ import Foundation
     static let june19 = DayKey(year: 2026, month: 6, day: 19)
 
     static func photo(_ id: String, day: DayKey, minute: Int, landscape: Bool = true,
-                      aesthetic: Double = 0.5, selected: Bool = true, place: String? = nil) -> Photo {
+                      aesthetic: Double = 0.5, selected: Bool = true, place: String? = nil,
+                      pixels: (Int, Int)? = nil) -> Photo {
         var c = DateComponents()
         c.year = day.year; c.month = day.month; c.day = day.day; c.hour = 8; c.minute = minute
         var cal = Calendar(identifier: .gregorian)
         cal.timeZone = TimeZone(secondsFromGMT: 0)!
         return Photo(id: id, sourceIdentifier: id, capturedAt: cal.date(from: c)!, timeZoneSeconds: 0,
-                     location: nil, pixelWidth: landscape ? 4000 : 3000, pixelHeight: landscape ? 3000 : 4000,
+                     location: nil, pixelWidth: pixels?.0 ?? (landscape ? 4000 : 3000),
+                     pixelHeight: pixels?.1 ?? (landscape ? 3000 : 4000),
                      kind: .photo,
                      analysis: PhotoAnalysis(aesthetic: aesthetic, sharpness: 500, isUtility: false,
                                              faceRects: [], closedEyes: false, featurePrint: nil),
@@ -34,9 +36,10 @@ import Foundation
                      createdAt: Date(timeIntervalSince1970: 0))
     }
 
-    /// Canva profile, A4 landscape; `rule` replaces the page-count rule when given.
-    static func canva(_ rule: PageCountRule? = nil) throws -> (SupplierProfile, BookFormat) {
-        var (p, f) = try ProfileCatalog.format(profileID: "canva-photobook", formatID: "landscape-a4")
+    /// Canva profile, A4 landscape by default; `rule` replaces the page-count rule when given.
+    static func canva(_ rule: PageCountRule? = nil,
+                      formatID: String = "landscape-a4") throws -> (SupplierProfile, BookFormat) {
+        var (p, f) = try ProfileCatalog.format(profileID: "canva-photobook", formatID: formatID)
         if let rule { p.pageCount = rule }
         return (p, f)
     }

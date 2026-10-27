@@ -50,9 +50,13 @@ public struct Spread: Sendable, Codable, Equatable, Identifiable {
     public var manuallyEdited: Bool
     /// True once the user has changed the layout by hand (move, resize, add, delete).
     public var customLayout: Bool
+    /// Page layout ids of a spread composed of two pages (`templateID == "pages"`): `[left, right]`,
+    /// an entry is nil for a page changed by hand. Empty for spreads from the template catalog.
+    public var pageLayouts: [String?]
 
     public init(id: String, kind: SpreadKind, templateID: String, dayKey: DayKey?,
-                frames: [Frame], texts: [TextBox], manuallyEdited: Bool, customLayout: Bool = false) {
+                frames: [Frame], texts: [TextBox], manuallyEdited: Bool, customLayout: Bool = false,
+                pageLayouts: [String?] = []) {
         self.id = id
         self.kind = kind
         self.templateID = templateID
@@ -61,9 +65,10 @@ public struct Spread: Sendable, Codable, Equatable, Identifiable {
         self.texts = texts
         self.manuallyEdited = manuallyEdited
         self.customLayout = customLayout
+        self.pageLayouts = pageLayouts
     }
 
-    /// Spreads written before `customLayout` existed decode it as false.
+    /// Spreads written before `customLayout` or `pageLayouts` existed decode them as false / empty.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(String.self, forKey: .id)
@@ -74,6 +79,7 @@ public struct Spread: Sendable, Codable, Equatable, Identifiable {
         texts = try c.decode([TextBox].self, forKey: .texts)
         manuallyEdited = try c.decode(Bool.self, forKey: .manuallyEdited)
         customLayout = try c.decodeIfPresent(Bool.self, forKey: .customLayout) ?? false
+        pageLayouts = try c.decodeIfPresent([String?].self, forKey: .pageLayouts) ?? []
     }
 }
 

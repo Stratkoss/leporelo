@@ -209,11 +209,12 @@ extension TemplateLayout {
         return result
     }
 
+    /// A square photo fits both a landscape and a portrait frame.
     public static func fits(_ photo: Photo, _ orientation: Orientation) -> Bool {
         switch orientation {
         case .any: return true
-        case .landscape: return photo.pixelWidth > photo.pixelHeight
-        case .portrait: return photo.pixelHeight > photo.pixelWidth
+        case .landscape: return photo.pixelWidth >= photo.pixelHeight
+        case .portrait: return photo.pixelHeight >= photo.pixelWidth
         }
     }
 

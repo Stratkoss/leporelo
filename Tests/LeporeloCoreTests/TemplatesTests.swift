@@ -21,6 +21,14 @@ import Testing
         }
     }
 
+    @Test func squareFitsBoth() {
+        let square = AlbumDrafterTests.photo("sq", day: AlbumDrafterTests.june18, minute: 0, pixels: (3000, 3000))
+        #expect(TemplateLayout.fits(square, .landscape) && TemplateLayout.fits(square, .portrait))
+        #expect(TemplateLayout.fits(square, .any))
+        let wide = AlbumDrafterTests.photo("w", day: AlbumDrafterTests.june18, minute: 0)
+        #expect(TemplateLayout.fits(wide, .landscape) && !TemplateLayout.fits(wide, .portrait))
+    }
+
     @Test func templatesPerKind() {
         #expect(TemplateCatalog.templates(kind: .journal).count == 3)
         #expect(TemplateCatalog.templates(kind: .gallery).count == 3)

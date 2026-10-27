@@ -108,6 +108,27 @@ import Foundation
         #expect(again == changed)
     }
 
+    @Test func oldSpreadDecodesWithoutPageLayouts() throws {
+        let spread = Spread(id: "s1", kind: .journal, templateID: "journal-3", dayKey: nil, frames: [], texts: [],
+                            manuallyEdited: false)
+        let data = try AlbumCoding.encoder().encode(spread)
+        var json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        json.removeValue(forKey: "pageLayouts")
+        let legacy = try JSONSerialization.data(withJSONObject: json)
+        #expect(!String(decoding: legacy, as: UTF8.self).contains("pageLayouts"))
+        let decoded = try AlbumCoding.decoder().decode(Spread.self, from: legacy)
+        #expect(decoded.pageLayouts == [])
+        #expect(decoded == spread)
+    }
+
+    @Test func pageLayoutsRoundTripIncludingNil() throws {
+        let spread = Spread(id: "s1", kind: .gallery, templateID: "pages", dayKey: nil, frames: [], texts: [],
+                            manuallyEdited: false, pageLayouts: ["grid-4", nil])
+        let again = try AlbumCoding.decoder().decode(Spread.self, from: try AlbumCoding.encoder().encode(spread))
+        #expect(again.pageLayouts == ["grid-4", nil])
+        #expect(again == spread)
+    }
+
     @Test func photoInitDefaultsToUndecided() {
         let photo = Photo(id: "x", sourceIdentifier: "x", capturedAt: Date(timeIntervalSince1970: 0),
                           timeZoneSeconds: nil, location: nil, pixelWidth: 1, pixelHeight: 1, kind: .photo,
