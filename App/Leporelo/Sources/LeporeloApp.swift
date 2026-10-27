@@ -21,6 +21,7 @@ struct LeporeloApp: App {
             StartCommands()
             ExportCommands()
             SourceCommands()
+            LayoutCommands()
             UndoCommands()
         }
 
@@ -37,6 +38,17 @@ struct LeporeloApp: App {
         }
         .defaultSize(width: 1000, height: 680)
         .defaultLaunchBehavior(.presented)
+        .commandsRemoved()
+
+        // Leporelo > "Oblíbená rozložení…" (`LayoutCommands`): the layouts the draft favours.
+        Window("Oblíbená rozložení", id: FavoriteLayoutsWindow.windowID) {
+            if AppRuntime.isHostingTests {
+                Color.clear
+            } else {
+                FavoriteLayoutsWindow()
+            }
+        }
+        .windowResizability(.contentSize)
         .commandsRemoved()
     }
 }
@@ -120,6 +132,17 @@ struct ExportCommands: Commands {
             Button("Exportovat…") { export?.run() }
                 .keyboardShortcut("e", modifiers: [.command, .shift])
                 .disabled(export == nil)
+        }
+    }
+}
+
+/// Leporelo > "Oblíbená rozložení…": opens the choice of favourite layouts (spec 6).
+struct LayoutCommands: Commands {
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some Commands {
+        CommandGroup(after: .appSettings) {
+            Button("Oblíbená rozložení…") { openWindow(id: FavoriteLayoutsWindow.windowID) }
         }
     }
 }

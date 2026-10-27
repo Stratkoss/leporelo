@@ -100,7 +100,10 @@ struct AlbumContent: View {
             do {
                 let (profile, format) = try ProfileCatalog.format(profileID: store.album.supplierProfileID,
                                                                   formatID: store.album.formatID)
-                editor = EditorModel(store: store, geometry: PageGeometry(format: format, profile: profile))
+                let model = EditorModel(store: store, geometry: PageGeometry(format: format, profile: profile))
+                // Read at each draft, so a change in "Oblíbená rozložení…" counts at once.
+                model.layoutWeights = { LayoutPreferences().weights() }
+                editor = model
                 editorError = nil
             } catch {
                 editor = nil

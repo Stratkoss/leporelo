@@ -70,12 +70,12 @@ Otevři album s fotkami, které ještě nemá dvoustrany (nebo jeho kopii). Fotk
 - [ ] Přichytávání a vodítka (zapnuté „Přichytávat“, mřížka vypnutá): při tažení blízko okraje stránky, okrajové čáry, středu stránky, hřbetu nebo hrany či středu jiného rámečku (i mezery 4 mm) se rámeček přichytí a přes celou dvoustranu se ukáže tenká čára v barvě akcentu; po puštění zmizí. S podrženým Cmd se nepřichytává a čára se neukáže. S vypnutým „Přichytávat“ se nepřichytává k ničemu.
 - [ ] Mřížka: „Mřížka“ v liště nakreslí jemné čáry po 5 mm v ořezu každé stránky (pod úchyty a vodítky, čitelné i v tmavém režimu) a rámečky se k nim přichytávají. Nastavení „Mřížka“ a „Přichytávat“ zůstane po novém spuštění aplikace.
 - [ ] Okraj: „Okraj: 10 mm“ v liště, krok na 20 mm. Rámečky a texty, které ležely v pásu nového okraje, se odsunou (nebo zarovnají ke spadávce); jedno Cmd-Z vše vrátí na 10 mm. Stepper nejde pod bezpečnou zónu profilu ani nad 30 mm.
-- [ ] Spadávka: rámeček přetažený k hraně stránky se přichytí na hranu a fotka pokryje i spadávku (červený pás). Rámeček nejde nechat v pásu okraje: po puštění stojí buď na hraně stránky, nebo na okrajové čáře. Šipka o 1 mm ven z okrajové čáry ho vrátí zpět (záměr); Shift-šipka (5 mm) nebo tažení ho dostane až ke spadávce.
+- [ ] Spadávka: rámeček přetažený k hraně stránky se přichytí na hranu a fotka pokryje i spadávku (červený pás). Rámeček nejde nechat v pásu okraje: po puštění stojí buď na hraně stránky, nebo na okrajové čáře. Šipka ven z okrajové čáry ho neuvězní, ale přesune na hranu stránky (viz kontrola šipek u kraje stránky níže); tažením se dostane až ke spadávce.
 - [ ] Šipky s vybraným rámečkem nebo textem ho posouvají o 1 mm (Shift = 5 mm), držení klávesy je jeden krok zpět. Šipky vlevo a vpravo bez výběru přepínají dvoustrany.
 - [ ] Šipky u kraje stránky: rámeček na čáře okraje se šipkou ven (i o 1 mm) přesune na hranu stránky do spadávky a šipkou dovnitř se z hrany vrátí na čáru okraje; Shift+šipka od pravé čáry okraje dojede na hřbet. Rámeček přes celou stranu se šipkou → odsune o šířku okraje (přes hřbet), nahoru ani dolů se nehne (nemá kam).
 - [ ] Režim výřezu: dvojklik na fotku ho zapne (čárkovaný okraj v barvě akcentu, bez úchytů). Tažení pak posouvá fotku pod ukazatelem a zastaví se na krajích; jedno Cmd-Z vrátí celé tažení („Odvolat: Posunout fotku“). Šipky posouvají fotku (Shift = 5 mm). Escape, Return nebo klik mimo rámeček režim ukončí (klik na jiný rámeček ho rovnou vybere). Dvouprstové rolování a pinch zoomují 1× až 4× v režimu výřezu i mimo něj, jedno Cmd-Z na gesto.
 - [ ] Kontextová nabídka (pravé tlačítko): na pozadí jen „Přidat rámeček“ a „Přidat text“ (přidají se na stránku pod ukazatelem a vyberou se); na fotce navíc „Upravit výřez“, „Obnovit výřez“ (jen když je výřez posunutý nebo přiblížený), „Odebrat fotku“ a „Smazat“; na prázdném rámečku a textu „Smazat“. Každá akce je jeden krok zpět. Na obálce se nabídka neukáže.
-- [ ] Lišta: „Přidat rámeček“ a „Přidat text“ přidají na pravou stránku; když je zobrazená obálka, jsou neaktivní. Delete na prázdném rámečku nebo textu ho smaže.
+- [ ] Lišta: „Přidat rámeček“ a „Přidat text“ přidají na aktuální stránku (stránka vybraného rámečku nebo textu, jinak naposledy kliknutá); bez aktuální stránky na pravou. Když je zobrazená obálka, jsou neaktivní. Delete na prázdném rámečku nebo textu ho smaže.
 - [ ] Podržená klávesa Delete na rámečku s fotkou jen odebere fotku, rámeček zůstane.
 - [ ] Cmd-Z uprostřed tažení rámečku (myš drží): tažení pokračuje, po puštění jedno Cmd-Z vrátí zbytek tažení, žádný řetěz drobných kroků.
 - [ ] Klasická myš s kolečkem (bez plynulého rolování): kolečko nad fotkou zoomuje rozumnými kroky (ne skokem na 4×), po chvíli bez otáčení se gesto uzavře a jedno Cmd-Z ho vrátí.
@@ -100,6 +100,23 @@ Otevři album s fotkami, které ještě nemá dvoustrany (nebo jeho kopii). Fotk
 - [ ] Panel nástrojů: „Navrhnout znovu“ ukáže „Zachovám N ručně upravených dvoustran. Pokračovat?“ se správným N; „Formát“ vypíše formáty se zatržením a změna ukáže „Rozložení se přepočítá, obsah zůstane.“ a přepočítá.
 - [ ] VoiceOver: položky pásu čtou „Dvoustrana 3, Deník, čtvrtek 18. června 2026, 2 problémy“, buňky zásobníku „Fotka čt 18. 6. · 9:05, vybraná, v albu“.
 - [ ] Výkon: psaní textu ve velkém albu (stovky dvoustran) nesekne (miniatury v pásu se při změně přepočítávají).
+
+## E2. Rozložení stránek a oblíbená rozložení
+
+Potřebuješ album s dvoustranami (ideálně Davidovo z Canvy) a čistý stav oblíbených: `defaults delete com.stratkoss.leporelo layouts.liked` a totéž pro `layouts.asked`.
+
+- [ ] První „Udělat z toho knihu“ ukáže nejdřív „Která rozložení se ti líbí?“: 9 náhledů v mřížce 3 sloupců s názvem a srdíčkem, list široký 640. Klik na náhled ho orámuje barvou akcentu a změní srdíčko na plné, druhý klik označení zruší. Po „Hotovo“ nebo „Přeskočit“ se objeví obvyklý formulář (užší list, 500).
+- [ ] Přeskočit: po „Přeskočit“ a dalším „Udělat z toho knihu“ se výběr už neukáže. Totéž po „Hotovo“ bez označení. Escape na listu s výběrem list zavře, ale nic neuloží, takže se výběr ukáže znovu.
+- [ ] Menu Leporelo > „Oblíbená rozložení…“ otevře samostatné okno se stejným obsahem, s předvyplněnými dřívějšími oblíbenými. „Hotovo“ i „Přeskočit“ okno zavřou; „Přeskočit“ oblíbená smaže. Okno otevřené podruhé ukáže uložený stav.
+- [ ] Náhledy v obou místech: ukázkové fotky jsou barevné přechody s ikonou ▭ / ▯, texty „čtvrtek 18. června“ a „Ravello“ jsou čitelné; v tmavém režimu zůstává stránka bílá a rámeček výběru i srdíčko jsou vidět.
+- [ ] Návrh knihy z Davidova alba z Canvy: pokud označíš například `mosaic-6` a `opener-3`, „Navrhnout album“ je používá častěji než bez označení; nejlepší fotky mají celou stránku bez ohledu na výběr. Žádné prázdné rámečky, každý den má sudý počet stran. Změna oblíbených se projeví při dalším „Navrhnout znovu“ nebo přidání fotky; existující stránky se nemění.
+- [ ] Aktuální stránka: klik na stránku dvoustrany ji orámuje (2 pt v barvě akcentu, odsazeno o 1 pt dovnitř); na obálce rámeček není. Výběr rámečku nebo textu určí aktuální stránku podle jeho středu.
+- [ ] „Zkusit jinak“ (lišta): bez aktuální stránky je neaktivní s nápovědou po najetí „Klikni na stránku“; na stránce, pro kterou jiné rozložení neexistuje, je neaktivní s nápovědou „Pro tyhle fotky jiné rozložení není“. Jinak změní rozložení jen té stránky.
+- [ ] „Zkusit jinak“ na 3 různých stránkách: každé kliknutí je jeden krok zpět („Odvolat: Zkusit jinak“); třikrát Cmd-Z vrátí stránku krok po kroku do původního stavu. Fotky zůstávají ve správných rámečcích (▯ nikdy v ▭), žádný prázdný rámeček.
+- [ ] Ruční rozložení: na stránce, kterou jsi předtím upravil ručně (posun nebo změna velikosti rámečku), „Zkusit jinak“ i výběr z „Doporučené rozložení…“ nejdřív ukážou „Ruční rozložení se nahradí doporučeným.“ s tlačítkem „Nahradit“; když by se tím ztratil text, následuje ještě otázka na ztrátu textu. Cmd-Z vrátí ruční rozložení.
+- [ ] Výběr rozložení stránky („Doporučené rozložení…“ na dvoustraně s aktuální stránkou): rozložení jsou seskupená podle počtu fotek („1 fotka“, „2 fotky“ …, „Bez fotek“ nakonec), u každého je náhled stránky a název; náhledy jsou čitelné i v tmavém režimu. Bez aktuální stránky nabídka ukáže jen „Klikni na stránku“.
+- [ ] Stará kniha se dvoustranami `journal-*` / `gallery-*`: otevře se, jde změnit formát i okraj; „Zkusit jinak“ nejdřív potvrdí a pak převede jen vybranou stránku.
+- [ ] Export nové knihy (PDF) a nahrání do Canvy: stránky vypadají jako v editoru, fotky na výšku jsou ve svislých rámečcích, žádný text nezmizel, nic není mimo bezpečnou zónu ani označené jako nízké rozlišení.
 
 ## F. Originály a automatické ukládání
 
