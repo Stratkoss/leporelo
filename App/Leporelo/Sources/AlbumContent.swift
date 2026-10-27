@@ -52,7 +52,7 @@ struct AlbumContent: View {
                     Text(EditorText.spreads).tag(WindowMode.editor)
                 }
                 .pickerStyle(.segmented)
-                .help("Třídění fotek, nebo ladění dvoustran")
+                .help("Třídění fotek nebo ladění dvoustran")
             }
         }
         .focusedSceneValue(\.albumUndo, undoTarget)

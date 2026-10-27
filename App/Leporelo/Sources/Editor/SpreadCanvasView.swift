@@ -227,6 +227,10 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
         guard let page, let album, let geometry, let package, let layout = layoutForBounds,
               let ctx = NSGraphicsContext.current?.cgContext else { return }
 
+        var drawn = page
+        if let id = overlayTextID, let i = drawn.texts.firstIndex(where: { $0.id == id }) {
+            drawn.texts[i].text = ""  // the overlay shows it; drawn below it would double faintly
+        }
         let images = imageCache.images(for: page, area: area, album: album, revision: revision, geometry: geometry,
                                        package: package)
         let renderer = SpreadRenderer(album: album, geometry: geometry, images: PlaceholderImageProvider())
@@ -234,9 +238,9 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
         ctx.saveGState()
         ctx.concatenate(layout.rendererTransform)
         if content?.isCover == true {
-            renderer.drawCover(page, images: images, into: ctx, options: options)
+            renderer.drawCover(drawn, images: images, into: ctx, options: options)
         } else {
-            renderer.draw(page, images: images, into: ctx, options: options)
+            renderer.draw(drawn, images: images, into: ctx, options: options)
         }
         ctx.restoreGState()
 
@@ -389,7 +393,7 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
         if event.clickCount == 2 {
             switch target {
             case .text(let id): beginTextOverlay(id)
-            case .frame(let id): model.resetCrop(frame: id)
+            case .frame(let id): model.resetCrop(frame: id, in: page?.id)
             case nil: break
             }
             return
@@ -417,13 +421,14 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
         let delta = CGSize(width: current.x - state.start.x, height: current.y - state.start.y)
         if !state.began {
             guard hypot(delta.width, delta.height) >= 3 else { return }
-            model.beginTransform(frame: state.frameID)
             state.began = true
             drag = state
         }
+        // Also after an outside commit mid-gesture (e.g. ⌘Z): a new session, never one step per event.
+        ensureTransform(state.frameID)
         let offset = CropMath.offset(start: state.startOffset, drag: layout.mmDelta(delta), frame: state.frameRect,
                                      photo: state.photoSize, zoom: state.zoom)
-        model.nudge(frame: state.frameID, offset: offset, zoom: state.zoom)
+        model.nudge(frame: state.frameID, offset: offset, zoom: state.zoom, in: page?.id)
         needsDisplay = true
     }
 
@@ -448,12 +453,14 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
                                    inSession: scrollFrame != nil && model.isTransforming)
         if step.begin {
             select(frameID)
-            model.beginTransform(frame: frameID)
+            model.beginTransform(frame: frameID, in: page?.id)
             scrollFrame = frameID
         }
         if step.update, let frame = frame(frameID) {
+            ensureTransform(frameID)
             let delta = event.hasPreciseScrollingDeltas ? event.scrollingDeltaY : event.scrollingDeltaY * 10
-            model.nudge(frame: frameID, offset: frame.offset, zoom: CropMath.zoom(frame.zoom, scrollDelta: delta))
+            model.nudge(frame: frameID, offset: frame.offset, zoom: CropMath.zoom(frame.zoom, scrollDelta: delta),
+                        in: page?.id)
             needsDisplay = true
         }
         if step.end { endScrollSession() }
@@ -465,6 +472,13 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
                 self?.endScrollSession()
             }
         }
+    }
+
+    /// Starts a crop session on the canvas page's frame unless one runs (an outside commit, e.g.
+    /// ⌘Z or a toolbar action, may have ended it mid-gesture).
+    private func ensureTransform(_ frameID: String) {
+        guard let model, !model.isTransforming else { return }
+        model.beginTransform(frame: frameID, in: page?.id)
     }
 
     private func endScrollSession() {
@@ -480,12 +494,14 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
         if event.phase.contains(.began) || (magnifyFrame == nil && !ending) {
             guard let p = mmPoint(event), let frame = photoFrame(at: p) else { return }
             select(frame.id)
-            model.beginTransform(frame: frame.id)
+            model.beginTransform(frame: frame.id, in: page?.id)
             magnifyFrame = frame.id
         }
         guard let id = magnifyFrame else { return }
         if let frame = frame(id) {
-            model.nudge(frame: id, offset: frame.offset, zoom: CropMath.zoom(frame.zoom, magnification: event.magnification))
+            if !ending { ensureTransform(id) }
+            model.nudge(frame: id, offset: frame.offset, zoom: CropMath.zoom(frame.zoom, magnification: event.magnification),
+                        in: page?.id)
             needsDisplay = true
         }
         if ending {
@@ -511,7 +527,7 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
         let selected = isEditable ? model.selectedFrameID : nil
         switch event.keyCode {
         case 51, 117:  // delete, forward delete
-            if let selected { model.clearFrame(selected); return }
+            if let selected { model.clearFrame(selected, in: page?.id); return }
         case 53:  // escape
             endGestures()
             select(nil)
@@ -522,13 +538,13 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
         if let (dx, dy) = Self.arrow(event.keyCode) {
             if let selected, let frame = frame(selected), let size = photoSize(frame) {
                 if !model.isTransforming || !arrowSession {
-                    model.beginTransform(frame: selected)
+                    model.beginTransform(frame: selected, in: page?.id)
                     arrowSession = true
                 }
                 let stepMM = event.modifierFlags.contains(.shift) ? 5.0 : 1.0
                 let offset = CropMath.arrowOffset(frame.offset, dx: dx, dy: dy, stepMM: stepMM,
                                                   frame: printedRect(frame), photo: size, zoom: frame.zoom)
-                model.nudge(frame: selected, offset: offset, zoom: frame.zoom)
+                model.nudge(frame: selected, offset: offset, zoom: frame.zoom, in: page?.id)
                 needsDisplay = true
                 return
             }
@@ -622,6 +638,7 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
         view.string = box.text
         view.delegate = self
         view.onFinish = { [weak self] in self?.finishTextEditing() }
+        view.onResign = { [weak self] in self?.finishTextEditing(resigning: true) }
         view.setAccessibilityLabel("Text dvoustrany")
         view.wantsLayer = true
         view.layer?.borderColor = NSColor.controlAccentColor.cgColor
@@ -634,15 +651,23 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
         needsDisplay = true
     }
 
-    /// Ends the overlay: the model stores the text as one step "Upravit text".
-    private func finishTextEditing() {
+    /// Ends the overlay: the model stores the text as one step "Upravit text". Idempotent.
+    ///
+    /// `resigning`: called from the text view's own `resignFirstResponder` (a click elsewhere,
+    /// another window): the first responder is already changing, so no nested
+    /// `makeFirstResponder`. The view is hidden at once and removed on the next run-loop turn,
+    /// never while AppKit is still inside its resign.
+    private func finishTextEditing(resigning: Bool = false) {
         guard let view = overlay else { return }
         overlay = nil
         overlayTextID = nil
-        model?.endTextEditing()
+        view.onFinish = nil
+        view.onResign = nil
         view.delegate = nil
-        if window?.firstResponder === view { window?.makeFirstResponder(self) }
-        view.removeFromSuperview()
+        model?.endTextEditing()
+        if !resigning, window?.firstResponder === view { window?.makeFirstResponder(self) }
+        view.isHidden = true
+        DispatchQueue.main.async { view.removeFromSuperview() }
         needsDisplay = true
     }
 
@@ -673,7 +698,7 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
     }
 
     func textDidEndEditing(_ notification: Notification) {
-        finishTextEditing()
+        finishTextEditing(resigning: true)
     }
 
     // MARK: Dragging a photo to another frame (⌥-drag)
@@ -738,7 +763,7 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
               let photoID = PhotoPasteboard.photoID(from: sender.draggingPasteboard) else { return false }
         endGestures()
         select(frameID)
-        return model.dropPhoto(photoID, onFrame: frameID)
+        return model.dropPhoto(photoID, onFrame: frameID, in: page?.id)
     }
 
     override func concludeDragOperation(_ sender: NSDraggingInfo?) {
@@ -751,6 +776,9 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
 /// committed), Return ends single-line texts; the field has no undo of its own.
 final class CanvasTextView: NSTextView {
     var onFinish: (() -> Void)?
+    /// Called after the view resigned first responder: AppKit does not always post an end-editing
+    /// notification when nothing was typed, and an unfocused overlay must not stay behind.
+    var onResign: (() -> Void)?
     var isMultiline = true
 
     override func keyDown(with event: NSEvent) {
@@ -768,5 +796,11 @@ final class CanvasTextView: NSTextView {
 
     override func cancelOperation(_ sender: Any?) {
         onFinish?()
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let resigned = super.resignFirstResponder()
+        if resigned { onResign?() }
+        return resigned
     }
 }

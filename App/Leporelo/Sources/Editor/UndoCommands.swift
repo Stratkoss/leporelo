@@ -3,7 +3,8 @@ import SwiftUI
 
 /// The album window's answer to Edit > Undo/Redo (published with `focusedSceneValue`), routed by
 /// `UndoRouter`: the editor's model in editor mode (commits a running session first), the window's
-/// undo manager in triage.
+/// undo manager in triage. The items are never disabled (`UndoMenuItem`); their titles name the
+/// step ⌘Z really undoes (a session only once it has changes).
 @MainActor
 @Observable
 final class AlbumUndoTarget {
@@ -16,48 +17,27 @@ final class AlbumUndoTarget {
         UndoRouter.route(mode: mode, hasEditor: editor != nil, hasUndoManager: undoManager != nil)
     }
 
-    /// Reading the store's revision makes the menu re-evaluate after every change (each undo
-    /// registration and each undo/redo changes the album).
-    private func observeChanges() {
+    /// The editor session's pending action (only with changes). Reading it and the store's
+    /// revision lets the menu re-evaluate after every change, session previews included.
+    private var pendingAction: String? {
         _ = store?.revision
-        _ = editor?.hasPendingSession
+        return route == .editor ? editor?.pendingSessionActionName : nil
     }
 
-    var canUndo: Bool {
-        observeChanges()
-        switch route {
-        case .editor: return (editor?.hasPendingSession ?? false) || (undoManager?.canUndo ?? false)
-        case .window: return undoManager?.canUndo ?? false
-        case .responderChain: return true
-        }
+    var undoItem: UndoMenuItem {
+        UndoRouter.undoItem(route: route, pendingAction: pendingAction,
+                            undoActionName: undoManager?.undoActionName ?? "")
     }
 
-    var canRedo: Bool {
-        observeChanges()
-        switch route {
-        case .editor, .window: return undoManager?.canRedo ?? false
-        case .responderChain: return true
-        }
-    }
-
-    var undoTitle: String {
-        observeChanges()
-        if route == .editor, let editor {
-            if editor.isEditingText { return UndoRouter.undoTitle("Upravit text") }
-            if editor.isTransforming { return UndoRouter.undoTitle("Posunout fotku") }
-        }
-        return UndoRouter.undoTitle(undoManager?.undoActionName ?? "")
-    }
-
-    var redoTitle: String {
-        observeChanges()
-        return UndoRouter.redoTitle(undoManager?.redoActionName ?? "")
+    var redoItem: UndoMenuItem {
+        UndoRouter.redoItem(route: route, pendingAction: pendingAction,
+                            redoActionName: undoManager?.redoActionName ?? "")
     }
 
     func undo() {
         switch route {
         case .editor: editor?.undo()
-        case .window: undoManager?.undo()
+        case .window: if undoManager?.canUndo == true { undoManager?.undo() }
         case .responderChain: Self.sendToResponderChain("undo:")
         }
     }
@@ -65,7 +45,7 @@ final class AlbumUndoTarget {
     func redo() {
         switch route {
         case .editor: editor?.redo()
-        case .window: undoManager?.redo()
+        case .window: if undoManager?.canRedo == true { undoManager?.redo() }
         case .responderChain: Self.sendToResponderChain("redo:")
         }
     }
@@ -87,17 +67,21 @@ struct UndoCommands: Commands {
 
     var body: some Commands {
         CommandGroup(replacing: .undoRedo) {
-            Button(target?.undoTitle ?? UndoRouter.undoTitle("")) {
+            let undo = target?.undoItem
+                ?? UndoRouter.undoItem(route: .responderChain, pendingAction: nil, undoActionName: "")
+            Button(undo.title) {
                 if let target { target.undo() } else { AlbumUndoTarget.sendToResponderChain("undo:") }
             }
             .keyboardShortcut("z", modifiers: .command)
-            .disabled(target.map { !$0.canUndo } ?? false)
+            .disabled(!undo.isEnabled)
 
-            Button(target?.redoTitle ?? UndoRouter.redoTitle("")) {
+            let redo = target?.redoItem
+                ?? UndoRouter.redoItem(route: .responderChain, pendingAction: nil, redoActionName: "")
+            Button(redo.title) {
                 if let target { target.redo() } else { AlbumUndoTarget.sendToResponderChain("redo:") }
             }
             .keyboardShortcut("z", modifiers: [.command, .shift])
-            .disabled(target.map { !$0.canRedo } ?? false)
+            .disabled(!redo.isEnabled)
         }
     }
 }

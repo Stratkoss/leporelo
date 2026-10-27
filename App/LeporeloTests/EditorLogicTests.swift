@@ -392,6 +392,32 @@ struct UndoRouterTests {
         #expect(UndoRouter.redoTitle("Vložit fotku") == "Znovu: Vložit fotku")
         #expect(UndoRouter.redoTitle("") == "Znovu")
     }
+
+    /// The items are never disabled (a stale disabled item would swallow ⌘Z; the model and the
+    /// undo manager guard themselves). A session WITH changes names itself; an open but unchanged
+    /// session names the step that ⌘Z will really undo.
+    @Test func menuItemsPerRoute() {
+        // Editor, a text session with changes.
+        #expect(UndoRouter.undoItem(route: .editor, pendingAction: "Upravit text", undoActionName: "Vložit fotku")
+                == UndoMenuItem(title: "Odvolat: Upravit text", isEnabled: true))
+        #expect(UndoRouter.redoItem(route: .editor, pendingAction: "Upravit text", redoActionName: "Vložit fotku")
+                == UndoMenuItem(title: "Znovu", isEnabled: true))
+        // Editor, no changed session.
+        #expect(UndoRouter.undoItem(route: .editor, pendingAction: nil, undoActionName: "Vložit fotku")
+                == UndoMenuItem(title: "Odvolat: Vložit fotku", isEnabled: true))
+        #expect(UndoRouter.redoItem(route: .editor, pendingAction: nil, redoActionName: "Prohodit fotky")
+                == UndoMenuItem(title: "Znovu: Prohodit fotky", isEnabled: true))
+        // Triage: the window's manager; a pending action is irrelevant there.
+        #expect(UndoRouter.undoItem(route: .window, pendingAction: "Upravit text", undoActionName: "Vybrat fotku")
+                == UndoMenuItem(title: "Odvolat: Vybrat fotku", isEnabled: true))
+        #expect(UndoRouter.undoItem(route: .window, pendingAction: nil, undoActionName: "")
+                == UndoMenuItem(title: "Odvolat", isEnabled: true))
+        // No album window in front: plain titles, the responder chain decides.
+        #expect(UndoRouter.undoItem(route: .responderChain, pendingAction: nil, undoActionName: "x")
+                == UndoMenuItem(title: "Odvolat", isEnabled: true))
+        #expect(UndoRouter.redoItem(route: .responderChain, pendingAction: nil, redoActionName: "x")
+                == UndoMenuItem(title: "Znovu", isEnabled: true))
+    }
 }
 
 struct WindowModeTests {
@@ -417,7 +443,8 @@ struct EditorTextTests {
         #expect(EditorText.issueBanner(2) == "2 problémy na této dvoustraně")
         #expect(EditorText.redraftMessage(1) == "Zachovám 1 ručně upravenou dvoustranu. Pokračovat?")
         #expect(EditorText.redraftMessage(3) == "Zachovám 3 ručně upravené dvoustrany. Pokračovat?")
-        #expect(EditorText.redraftMessage(0) == "Zachovám 0 ručně upravených dvoustran. Pokračovat?")
+        #expect(EditorText.redraftMessage(0) == "Žádná dvoustrana není ručně upravená, navrhnu znovu všechny. Pokračovat?")
+        #expect(EditorText.redraftMessage(5) == "Zachovám 5 ručně upravených dvoustran. Pokračovat?")
         #expect(EditorText.photoCount(0) == "bez fotek")
         #expect(EditorText.photoCount(3) == "3 fotky")
     }

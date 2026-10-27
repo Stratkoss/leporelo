@@ -412,6 +412,24 @@ final class EditorModel {
     /// Undo menu is enabled for it: `undo()` commits the session, then undoes it.
     var hasPendingSession: Bool { textSession != nil || transformSession != nil }
 
+    /// The undo name of a running session that has CHANGES ("Upravit text", "Posunout fotku");
+    /// nil when no session runs or it changes nothing yet. Edit > Undo shows it: ⌘Z then commits
+    /// and undoes the session. An open but unchanged session would undo the step before it.
+    var pendingSessionActionName: String? {
+        let album = store.album
+        if let t = textSession,
+           let box = album.spreads.first(where: { $0.id == t.spreadID })?.texts.first(where: { $0.id == t.textID }),
+           box.text != t.text {
+            return "Upravit text"
+        }
+        if let s = transformSession,
+           let frame = album.spreads.first(where: { $0.id == s.spreadID })?.frames.first(where: { $0.id == s.frameID }),
+           frame.offset != s.offset || frame.zoom != s.zoom {
+            return "Posunout fotku"
+        }
+        return nil
+    }
+
     /// "Obnovit výřez" (double-click on a photo): offset 0, zoom 1 as one step. False (nothing
     /// changes) for an empty frame or a crop that is already reset.
     @discardableResult

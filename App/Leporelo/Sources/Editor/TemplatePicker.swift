@@ -4,14 +4,25 @@ import SwiftUI
 
 /// "Změnit šablonu…": the templates `EditorModel.availableTemplates(for:)` offers for a spread,
 /// each with a small rendered preview (blank grey frames, the placeholders as text) and its
-/// frame count. Choosing one calls `onChoose`; the editor then runs `changeTemplate` and asks
-/// before texts would be lost.
+/// frame count. Choosing one runs `attempt(templateID, confirmTextLoss)` (the editor's
+/// `changeTemplate`). When texts would be lost, the confirmation ("Tyto texty by se ztratily: …")
+/// is shown INSIDE this sheet, so it can never be dropped by the sheet's dismissal; the sheet
+/// closes (`onDone`) only once the change is applied or the user cancels. A refused change says so.
 struct TemplatePicker: View {
     let templates: [SpreadTemplate]
     let currentTemplateID: String?
     let geometry: PageGeometry
-    let onChoose: (String) -> Void
-    let onCancel: () -> Void
+    let attempt: (_ templateID: String, _ confirmTextLoss: Bool) -> TemplateChangeOutcome
+    let onDone: () -> Void
+
+    private struct PendingLoss: Identifiable {
+        let templateID: String
+        let texts: [TextBox]
+        var id: String { templateID }
+    }
+
+    @State private var pendingLoss: PendingLoss?
+    @State private var showsUnavailable = false
 
     private let columns = [GridItem(.adaptive(minimum: 190), spacing: 14)]
 
@@ -23,7 +34,7 @@ struct TemplatePicker: View {
             ScrollView {
                 LazyVGrid(columns: columns, spacing: 14) {
                     ForEach(templates, id: \.id) { template in
-                        Button { onChoose(template.id) } label: { cell(template) }
+                        Button { choose(template.id, confirmed: false) } label: { cell(template) }
                             .buttonStyle(.plain)
                             .disabled(template.id == currentTemplateID)
                             .accessibilityLabel(EditorText.templateLabel(template)
@@ -34,12 +45,38 @@ struct TemplatePicker: View {
             }
             HStack {
                 Spacer()
-                Button("Zrušit", role: .cancel, action: onCancel)
+                Button("Zrušit", role: .cancel, action: onDone)
                     .keyboardShortcut(.cancelAction)
             }
         }
         .padding(20)
         .frame(minWidth: 460, idealWidth: 640, minHeight: 360, idealHeight: 460)
+        .alert("Změnit šablonu?", isPresented: Binding(get: { pendingLoss != nil },
+                                                        set: { if !$0 { pendingLoss = nil } }),
+               presenting: pendingLoss) { pending in
+            Button("Změnit šablonu", role: .destructive) { choose(pending.templateID, confirmed: true) }
+            Button("Zrušit", role: .cancel) {}
+        } message: { pending in
+            Text(EditorText.textLoss(pending.texts))
+        }
+        .alert("Šablonu nejde použít", isPresented: $showsUnavailable) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Dvoustrana se mezitím změnila. Zkuste to prosím znovu.")
+        }
+    }
+
+    private func choose(_ templateID: String, confirmed: Bool) {
+        switch attempt(templateID, confirmed) {
+        case .applied:
+            pendingLoss = nil
+            onDone()
+        case .needsTextLossConfirmation(let texts):
+            pendingLoss = PendingLoss(templateID: templateID, texts: texts)
+        case .unavailable:
+            pendingLoss = nil
+            showsUnavailable = true
+        }
     }
 
     private func cell(_ template: SpreadTemplate) -> some View {

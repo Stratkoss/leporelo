@@ -30,18 +30,10 @@ struct EditorView: View {
     @State private var showsSpreadIssues = false
 
     @State private var templateSpreadID: String?
-    @State private var pendingTextLoss: PendingTemplateChange?
     @State private var deleteCandidate: String?
     @State private var showsRedraft = false
     @State private var redraftKept = 0
     @State private var formatCandidate: BookFormat?
-
-    struct PendingTemplateChange: Identifiable {
-        let spreadID: String
-        let templateID: String
-        let texts: [TextBox]
-        var id: String { spreadID + "|" + templateID }
-    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -75,21 +67,10 @@ struct EditorView: View {
             TemplatePicker(templates: model.availableTemplates(for: sheet.id),
                            currentTemplateID: model.store.album.spreads.first { $0.id == sheet.id }?.templateID,
                            geometry: model.geometry,
-                           onChoose: { templateID in
-                               templateSpreadID = nil
-                               changeTemplate(sheet.id, to: templateID, confirmed: false)
+                           attempt: { templateID, confirmed in
+                               model.changeTemplate(to: templateID, in: sheet.id, confirmTextLoss: confirmed)
                            },
-                           onCancel: { templateSpreadID = nil })
-        }
-        .alert("Změnit šablonu?", isPresented: Binding(get: { pendingTextLoss != nil },
-                                                        set: { if !$0 { pendingTextLoss = nil } }),
-               presenting: pendingTextLoss) { pending in
-            Button("Změnit šablonu", role: .destructive) {
-                changeTemplate(pending.spreadID, to: pending.templateID, confirmed: true)
-            }
-            Button("Zrušit", role: .cancel) {}
-        } message: { pending in
-            Text(EditorText.textLoss(pending.texts))
+                           onDone: { templateSpreadID = nil })
         }
         .alert(EditorText.deleteTitle(), isPresented: Binding(get: { deleteCandidate != nil },
                                                              set: { if !$0 { deleteCandidate = nil } }),
@@ -217,15 +198,6 @@ struct EditorView: View {
     }
 
     // MARK: Actions
-
-    private func changeTemplate(_ spreadID: String, to templateID: String, confirmed: Bool) {
-        switch model.changeTemplate(to: templateID, in: spreadID, confirmTextLoss: confirmed) {
-        case .needsTextLossConfirmation(let texts):
-            pendingTextLoss = PendingTemplateChange(spreadID: spreadID, templateID: templateID, texts: texts)
-        case .applied, .unavailable:
-            pendingTextLoss = nil
-        }
-    }
 
     /// Confirmation only when the spread holds photos or text; an empty one goes at once (undoable).
     private func requestDelete(_ spreadID: String) {

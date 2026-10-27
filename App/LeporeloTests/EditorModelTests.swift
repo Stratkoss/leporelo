@@ -845,6 +845,101 @@ struct EditorViewSupportTests {
         #expect(undo.undoActionName == "Upravit text")
     }
 
+    @Test func pendingSessionActionNameNeedsChanges() throws {
+        let (model, store, _) = try makeModel(try standardAlbum())
+        let journal = try #require(store.album.spreads.first { $0.kind == .journal })
+        model.currentSpreadID = journal.id
+        model.beginTextEditing("body")
+        #expect(model.pendingSessionActionName == nil)  // open, unchanged
+        model.updateText("Pláž")
+        #expect(model.pendingSessionActionName == "Upravit text")
+        model.updateText("")  // back to the stored text
+        #expect(model.pendingSessionActionName == nil)
+        model.endTextEditing()
+
+        let frame = journal.frames[0]
+        model.beginTransform(frame: frame.id)
+        #expect(model.pendingSessionActionName == nil)
+        model.nudge(frame: frame.id, offset: Point(x: 0.3, y: 0), zoom: 1.2)
+        #expect(model.pendingSessionActionName == "Posunout fotku")
+        model.endTransform()
+        #expect(model.pendingSessionActionName == nil)
+    }
+
+    /// The canvas passes its page's spread id: edits land there even while the model's current
+    /// spread is another one (frame ids repeat across spreads).
+    @Test func canvasEditsTargetTheGivenSpread() throws {
+        let (model, store, undo) = try makeModel(try standardAlbum())
+        let journals = store.album.spreads.filter { $0.kind == .journal }
+        try #require(journals.count == 2)
+        let page = journals[0], other = journals[1]
+        model.currentSpreadID = other.id
+        let frameID = "photo1"
+        try #require(page.frames.contains { $0.id == frameID } && other.frames.contains { $0.id == frameID })
+
+        step(undo) {
+            model.beginTransform(frame: frameID, in: page.id)
+            model.nudge(frame: frameID, offset: Point(x: 0.5, y: 0), zoom: 1.5, in: page.id)
+            model.endTransform()
+        }
+        #expect(spread(store.album, page.id)?.frames.first { $0.id == frameID }?.zoom == 1.5)
+        #expect(spread(store.album, other.id) == other)
+
+        #expect(step(undo) { model.resetCrop(frame: frameID, in: page.id) })
+        #expect(spread(store.album, page.id)?.frames.first { $0.id == frameID }?.zoom == 1)
+
+        let incoming = try #require(other.frames.first { $0.id == "photo2" }?.photoID)
+        #expect(step(undo) { model.dropPhoto(incoming, onFrame: frameID, in: page.id) })
+        #expect(spread(store.album, page.id)?.frames.first { $0.id == frameID }?.photoID == incoming)
+
+        #expect(step(undo) { model.clearFrame(frameID, in: page.id) })
+        #expect(spread(store.album, page.id)?.frames.first { $0.id == frameID }?.photoID == nil)
+        #expect(spread(store.album, other.id)?.frames.first { $0.id == frameID }?.photoID
+                == other.frames.first { $0.id == frameID }?.photoID)
+        #expect(model.currentSpreadID == other.id)
+    }
+
+    /// Edit > Undo/Redo per route (`AlbumUndoTarget`, the window's published target).
+    @Test func undoTargetTitlesAndRoutes() throws {
+        let (model, store, undo) = try makeModel(try standardAlbum())
+        let journal = try #require(store.album.spreads.first { $0.kind == .journal })
+        model.currentSpreadID = journal.id
+        step(undo) { model.setText("title", "Ravello") }
+
+        let target = AlbumUndoTarget()
+        target.editor = model
+        target.store = store
+        target.undoManager = undo
+        target.mode = .editor
+        #expect(target.route == .editor)
+        #expect(target.undoItem == UndoMenuItem(title: "Odvolat: Upravit text", isEnabled: true))
+
+        // An open but unchanged overlay: ⌘Z undoes the previous step, and the title says so.
+        _ = step(undo) { model.insertSpread(kind: .blank, after: journal.id) }
+        model.currentSpreadID = journal.id
+        model.beginTextEditing("body")
+        #expect(target.undoItem.title == "Odvolat: Přidat dvoustranu")
+        model.updateText("Pláž")
+        #expect(target.undoItem.title == "Odvolat: Upravit text")
+        target.undo()  // commits the session, then undoes it
+        #expect(spread(store.album, journal.id)?.texts.first { $0.id == "body" }?.text == "")
+        #expect(target.redoItem.title == "Znovu: Upravit text")
+        target.redo()
+        #expect(spread(store.album, journal.id)?.texts.first { $0.id == "body" }?.text == "Pláž")
+
+        // Triage: the window's manager, still enabled.
+        target.mode = .triage
+        #expect(target.route == .window)
+        #expect(target.undoItem == UndoMenuItem(title: "Odvolat: Upravit text", isEnabled: true))
+        target.undo()
+        #expect(spread(store.album, journal.id)?.texts.first { $0.id == "body" }?.text == "")
+
+        // Without an undo manager or an editor: the responder chain.
+        let bare = AlbumUndoTarget()
+        #expect(bare.route == .responderChain)
+        #expect(bare.undoItem == UndoMenuItem(title: "Odvolat", isEnabled: true))
+    }
+
     @Test func showInTrayJumpsToThePhotosDay() throws {
         let (model, store, _) = try makeModel(try standardAlbum())
         model.trayShowsAll = true

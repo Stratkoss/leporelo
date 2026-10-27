@@ -285,7 +285,35 @@ enum UndoRoute: Equatable {
     case editor, window, responderChain
 }
 
+/// One Edit menu item. Never disabled on purpose: a disabled item whose Commands body SwiftUI
+/// did not re-evaluate would swallow ⌘Z; `EditorModel.undo()` and `UndoManager` do nothing when
+/// there is nothing to undo.
+struct UndoMenuItem: Equatable {
+    var title: String
+    var isEnabled: Bool
+}
+
 enum UndoRouter {
+    /// `pendingAction`: the action name of an editor session that has CHANGES (committing it is
+    /// what ⌘Z undoes first); an open but unchanged session is nil, so the title names the step
+    /// that will really be undone.
+    static func undoItem(route: UndoRoute, pendingAction: String?, undoActionName: String) -> UndoMenuItem {
+        switch route {
+        case .editor: UndoMenuItem(title: undoTitle(pendingAction ?? undoActionName), isEnabled: true)
+        case .window: UndoMenuItem(title: undoTitle(undoActionName), isEnabled: true)
+        case .responderChain: UndoMenuItem(title: undoTitle(""), isEnabled: true)
+        }
+    }
+
+    /// A changed session is a new change: committing it leaves nothing to redo, so the plain title.
+    static func redoItem(route: UndoRoute, pendingAction: String?, redoActionName: String) -> UndoMenuItem {
+        switch route {
+        case .editor: UndoMenuItem(title: redoTitle(pendingAction == nil ? redoActionName : ""), isEnabled: true)
+        case .window: UndoMenuItem(title: redoTitle(redoActionName), isEnabled: true)
+        case .responderChain: UndoMenuItem(title: redoTitle(""), isEnabled: true)
+        }
+    }
+
     static func route(mode: WindowMode?, hasEditor: Bool, hasUndoManager: Bool) -> UndoRoute {
         guard let mode else { return .responderChain }
         if mode == .editor && hasEditor { return .editor }
@@ -412,6 +440,7 @@ enum EditorText {
     }
 
     static func redraftMessage(_ kept: Int) -> String {
+        if kept == 0 { return "Žádná dvoustrana není ručně upravená, navrhnu znovu všechny. Pokračovat?" }
         let phrase = CzechPlural.choose(kept, one: "ručně upravenou dvoustranu", few: "ručně upravené dvoustrany",
                                         many: "ručně upravených dvoustran")
         return "Zachovám \(CzechPlural.grouped(kept)) \(phrase). Pokračovat?"
