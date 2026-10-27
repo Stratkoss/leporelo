@@ -29,7 +29,11 @@ public struct PreflightIssue: Sendable, Equatable, Identifiable {
 /// Order of the result (deterministic): the issues of each spread in `album.spreads` order (frames in
 /// order, then texts in order), then the cover front and back, then the album-level issues: missing
 /// cover, page count, selected photos not in the album (once spreads exist), unverified format.
-/// Within one frame: original, DPI, faces. Within one text: bleed or safe zone, then overflow.
+/// Within one frame: original, DPI, faces, photo used twice. Within one text: bleed or safe zone, then overflow.
+///
+/// "Fotka je v knize víckrát" (`duplicatePhoto:<spreadID>:<frameID>`, warning) flags every occurrence
+/// of a photo except the first among the frames of the `.journal` and `.gallery` spreads, in album
+/// order. Intro, closing and cover repeat day photos on purpose, so they neither count nor are flagged.
 ///
 /// "Text se nevejde do rámečku" (`textOverflow:<spreadID>:<textID>`, warning) uses
 /// `SpreadRenderer.textOverflows`, i.e. the renderer's fonts and sizes; it is only checked for
@@ -76,12 +80,16 @@ public enum Preflight {
             trim: Rect(x: 0, y: 0, width: w, height: h),
             safe: [geometry.safeRect(side: .left)], printArea: .cover, spineX: nil)
 
+        let firstUse = firstDayUse(in: album)
         for spread in album.spreads {
-            issues += check(spread, area: spreadArea, album: album, geometry: geometry, fontsAvailable: fonts)
+            issues += check(spread, area: spreadArea, album: album, geometry: geometry, firstUse: firstUse,
+                            fontsAvailable: fonts)
         }
         if let cover = album.cover {
-            issues += check(cover.front, area: coverArea, album: album, geometry: geometry, fontsAvailable: fonts)
-            issues += check(cover.back, area: coverArea, album: album, geometry: geometry, fontsAvailable: fonts)
+            issues += check(cover.front, area: coverArea, album: album, geometry: geometry, firstUse: [:],
+                            fontsAvailable: fonts)
+            issues += check(cover.back, area: coverArea, album: album, geometry: geometry, firstUse: [:],
+                            fontsAvailable: fonts)
         } else if profile.coverMode != .none {
             issues.append(PreflightIssue(id: "noCover", severity: .error, spreadID: nil, frameID: nil,
                                          message: "Album nemá obálku"))
@@ -128,6 +136,24 @@ public enum Preflight {
 
     // MARK: -
 
+    /// Where a photo is first used in the day spreads (`.journal`, `.gallery`).
+    private struct FirstUse {
+        var spreadNumber: Int // 1-based position in `album.spreads`
+        var spreadID: String
+        var frameID: String
+    }
+
+    private static func firstDayUse(in album: Album) -> [PhotoID: FirstUse] {
+        var first: [PhotoID: FirstUse] = [:]
+        for (index, spread) in album.spreads.enumerated() where spread.kind == .journal || spread.kind == .gallery {
+            for frame in spread.frames {
+                guard let photoID = frame.photoID, first[photoID] == nil else { continue }
+                first[photoID] = FirstUse(spreadNumber: index + 1, spreadID: spread.id, frameID: frame.id)
+            }
+        }
+        return first
+    }
+
     private struct Area {
         var trim: Rect
         var safe: [Rect]
@@ -139,7 +165,8 @@ public enum Preflight {
     /// The overflow rule measures with the bundled fonts; without them (a broken install) Core Text
     /// would measure a fallback font, so the rule is skipped. Asked at most once per spread.
     private static func check(_ spread: Spread, area: Area, album: Album,
-                              geometry: PageGeometry, fontsAvailable: () -> Bool) -> [PreflightIssue] {
+                              geometry: PageGeometry, firstUse: [PhotoID: FirstUse],
+                              fontsAvailable: () -> Bool) -> [PreflightIssue] {
         let profile = geometry.profile
         var issues: [PreflightIssue] = []
         func add(_ rule: String, _ severity: PreflightSeverity, frame: String? = nil, text: String? = nil,
@@ -185,6 +212,13 @@ public enum Preflight {
 
             issues += faceIssues(photo: photo, frame: frame, printed: printed, area: area,
                                  safeMM: profile.safeMM, spreadID: spread.id)
+
+            // `firstUse` holds day spreads only, so the intro, closing and cover never match it.
+            if spread.kind == .journal || spread.kind == .gallery, let first = firstUse[photoID],
+               first.spreadID != spread.id || first.frameID != frame.id {
+                add("duplicatePhoto", .warning, frame: frame.id,
+                    "Fotka je v knize víckrát (poprvé na dvoustraně \(first.spreadNumber))")
+            }
         }
 
         for text in spread.texts where !text.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {

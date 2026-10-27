@@ -59,7 +59,9 @@ import Foundation
     }
 
     static func goodAlbum() -> Album {
-        album(spreads: [spread("s1"), spread("s2")], cover: cover())
+        // Two different photos: the same photo on two day spreads would give a duplicatePhoto warning.
+        album(spreads: [spread("s1"), spread("s2", frames: [frame(photo: "p2")])],
+              photos: [photo("p1"), photo("p2")], cover: cover())
     }
 
     static func body(_ text: String) -> TextBox {
@@ -229,11 +231,17 @@ import Foundation
     }
 
     @Test func journalBodyEmptyWarns() throws {
-        let empty = Self.spread("s1", kind: .journal, texts: [Self.body("  ")])
-        let none = Self.spread("s2", kind: .journal)
-        let ok = Self.spread("s3", kind: .journal, texts: [Self.body("Dnes jsme šli na pláž.")])
-        let gallery = Self.spread("s4", kind: .gallery)
-        let w = try Self.check(Self.album(spreads: [empty, none, ok, gallery], cover: Self.cover()))
+        // One photo per spread: a repeated photo would add a duplicatePhoto warning.
+        func day(_ id: String, _ kind: SpreadKind, _ photo: PhotoID, texts: [TextBox] = []) -> Spread {
+            Self.spread(id, kind: kind, frames: [Self.frame(photo: photo)], texts: texts)
+        }
+        let empty = day("s1", .journal, "p1", texts: [Self.body("  ")])
+        let none = day("s2", .journal, "p2")
+        let ok = day("s3", .journal, "p3", texts: [Self.body("Dnes jsme šli na pláž.")])
+        let gallery = day("s4", .gallery, "p4")
+        let w = try Self.check(Self.album(spreads: [empty, none, ok, gallery],
+                                          photos: ["p1", "p2", "p3", "p4"].map { Self.photo($0) },
+                                          cover: Self.cover()))
         #expect(w.map(\.spreadID) == ["s1", "s2"])
         #expect(w.allSatisfy { $0.severity == .warning })
     }
@@ -376,5 +384,65 @@ import Foundation
         #expect(issues.map(\.id) == ["textSafe:s1:cap"])
         #expect(issues.first?.textID == "cap")
     }
-}
 
+    // MARK: Photo used twice
+
+    static func duplicateIssues(_ issues: [PreflightIssue]) -> [PreflightIssue] {
+        issues.filter { $0.id.hasPrefix("duplicatePhoto") }
+    }
+
+    @Test func duplicateInTwoDaySpreadsWarnsOnSecond() throws {
+        // The first occurrence is on the second spread of the album (after an intro).
+        let intro = Self.spread("s0", kind: .intro, frames: [Self.frame(photo: nil)])
+        let first = Self.spread("s1", frames: [Self.frame("f1", photo: "p1")])
+        let second = Self.spread("s2", kind: .journal, frames: [Self.frame("f9", photo: "p1")],
+                                 texts: [Self.body("Text")])
+        let issues = Self.duplicateIssues(try Self.check(Self.album(spreads: [intro, first, second],
+                                                                     cover: Self.cover(photo: "p1"))))
+        #expect(issues.count == 1)
+        #expect(issues[0].id == "duplicatePhoto:s2:f9")
+        #expect(issues[0].severity == .warning)
+        #expect(issues[0].spreadID == "s2")
+        #expect(issues[0].frameID == "f9")
+        #expect(issues[0].message == "Fotka je v knize víckrát (poprvé na dvoustraně 2)")
+    }
+
+    @Test func duplicateInSameSpreadWarns() throws {
+        let s1 = Self.spread("s1", frames: [Self.frame("f1", photo: "p1"),
+                                            Self.frame("f2", Rect(x: 200, y: 20, width: 150, height: 100), photo: "p1"),
+                                            Self.frame("f3", Rect(x: 400, y: 20, width: 150, height: 100), photo: "p1")])
+        let issues = Self.duplicateIssues(try Self.check(Self.album(spreads: [s1], cover: Self.cover())))
+        #expect(issues.map(\.id) == ["duplicatePhoto:s1:f2", "duplicatePhoto:s1:f3"])
+        #expect(issues.allSatisfy { $0.message == "Fotka je v knize víckrát (poprvé na dvoustraně 1)" })
+    }
+
+    @Test func introRepeatOfDayPhotoIsNotDuplicate() throws {
+        let intro = Self.spread("s0", kind: .intro, frames: [Self.frame("f1", photo: "p1")])
+        let day = Self.spread("s1", frames: [Self.frame("f1", photo: "p1")])
+        let closing = Self.spread("s2", kind: .closing, frames: [Self.frame("f1", photo: "p1")])
+        let issues = try Self.check(Self.album(spreads: [intro, day, closing], cover: Self.cover()))
+        #expect(Self.duplicateIssues(issues).isEmpty)
+    }
+
+    @Test func coverRepeatIsNotDuplicate() throws {
+        let issues = try Self.check(Self.album(spreads: [Self.spread("s1"), Self.spread("s2", frames: [Self.frame(photo: nil)])],
+                                               cover: Self.cover(photo: "p1")))
+        #expect(Self.duplicateIssues(issues).isEmpty)
+    }
+
+    @Test func duplicateIsWarningNotError() throws {
+        let issues = try Self.check(Self.album(spreads: [Self.spread("s1"), Self.spread("s2")], cover: Self.cover()))
+        #expect(issues.map(\.id) == ["duplicatePhoto:s2:f1"])
+        #expect(!Preflight.hasErrors(issues))
+    }
+
+    @Test func duplicateComesAfterOtherIssuesOfTheFrame() throws {
+        let small = Self.photo("p1", w: 2048, h: 1536)
+        let big = Rect(x: 0, y: 0, width: 297, height: 210)
+        let a = Self.album(spreads: [Self.spread("s1", frames: [Self.frame("f1", big)]),
+                                     Self.spread("s2", frames: [Self.frame("f1", big)])],
+                           photos: [small], cover: Self.cover())
+        let ids = try Self.check(a).map(\.id).filter { $0.hasSuffix(":s2:f1") }
+        #expect(ids == ["dpi:s2:f1", "duplicatePhoto:s2:f1"])
+    }
+}
