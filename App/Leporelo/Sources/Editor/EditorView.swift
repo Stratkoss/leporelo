@@ -16,13 +16,14 @@ extension FocusedValues {
     @Entry var albumExport: ExportAlbumAction? = nil
 }
 
-/// Ladění (spec 6.4): the big spread in the middle (`SpreadCanvasView`) with a banner for the
-/// spread's problems that belong to no frame, the tray on the right (`PhotoTrayView`), the strip
-/// at the bottom (`SpreadStripView`); toolbar: "Zkusit jinak" (the current page, spec 5),
-/// "Přidat rámeček", "Přidat text" (on the current page, else the right one), "Mřížka",
-/// "Přichytávat", "Okraj", "Navrhnout znovu", "Formát", "Exportovat…" (the window adds
-/// "Třídění | Dvoustrany" and "Zpět do třídění"). The grid and snapping switches are remembered
-/// for the app (`@AppStorage`); the margin belongs to the book (`EditorModel.setMargin`).
+/// Ladění (spec 6.4): the big spread in the middle (`SpreadCanvasView`) with the text bar above it
+/// (`TextToolsBar`, spec 3.2) and a banner for the spread's problems that belong to no frame,
+/// the tray on the right (`PhotoTrayView`), the strip at the bottom (`SpreadStripView`); toolbar:
+/// "Zkusit jinak" (the current page, spec 5), "Přidat rámeček", "Přidat text" (on the current
+/// page, else the right one), "Mřížka", "Přichytávat", "Okraj", "Navrhnout znovu", "Formát",
+/// "Exportovat…" (the window adds "Třídění | Dvoustrany" and "Zpět do třídění"). The grid and
+/// snapping switches are remembered for the app (`@AppStorage`); the margin belongs to the book
+/// (`EditorModel.setMargin`).
 struct EditorView: View {
     let model: EditorModel
     let onBackToTriage: () -> Void
@@ -60,6 +61,7 @@ struct EditorView: View {
         VStack(spacing: 0) {
             HStack(spacing: 0) {
                 VStack(spacing: 0) {
+                    if canvasContent != nil { TextToolsBar(model: model) }
                     issueBanner
                     canvas
                     Text(model.coverSide == nil ? EditorText.canvasHint : EditorText.coverReadOnly)

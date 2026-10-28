@@ -367,7 +367,7 @@ public struct SpreadRenderer: Sendable {
 
     /// sRGB colour of a "#RRGGBB" string; the default colour (and anything unreadable) is the
     /// renderer's original near-black, sRGB 0.1 0.1 0.1.
-    static func color(hex: String) -> CGColor {
+    public static func color(hex: String) -> CGColor {
         let digits = hex.hasPrefix("#") ? hex.dropFirst() : Substring(hex)
         guard hex != defaultColorHex, digits.count == 6, let value = UInt32(digits, radix: 16) else {
             return CGColor(srgbRed: 0.1, green: 0.1, blue: 0.1, alpha: 1)

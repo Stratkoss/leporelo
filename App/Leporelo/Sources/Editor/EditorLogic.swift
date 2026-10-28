@@ -543,6 +543,67 @@ enum SnapStyle {
     static let purple = NSColor(srgbRed: 0xA0 / 255.0, green: 0x20 / 255.0, blue: 0xF0 / 255.0, alpha: 1)
 }
 
+// MARK: - Text bar
+
+/// The ready-made choices of the text bar (spec 3.2).
+enum TextBarPresets {
+    /// The size menu, in points.
+    static let sizesPt: [Double] = [8, 9, 10, 11, 12, 14, 18, 24, 28, 36, 48, 72]
+
+    /// The colour swatches: the default near-black, white, dark grey and muted colours that go
+    /// with the book ("#RRGGBB", sRGB).
+    static let colours: [(name: String, hex: String)] = [
+        ("Téměř černá", "#1A1A1A"),
+        ("Bílá", "#FFFFFF"),
+        ("Tmavě šedá", "#4A4A4A"),
+        ("Terakota", "#B5543A"),
+        ("Olivová", "#6B7046"),
+        ("Modrošedá", "#4F6475"),
+        ("Písková", "#C2A878"),
+    ]
+
+    /// A typed size clamped to `TextStyle.sizeRangePt`; nil when it is no number.
+    static func clampedSize(_ pt: Double) -> Double? {
+        guard pt.isFinite else { return nil }
+        let range = TextStyle.sizeRangePt
+        return min(max(pt, range.lowerBound), range.upperBound)
+    }
+
+    /// One click of the size stepper: the next whole point up or down (9.92 → 10 or 9), clamped.
+    static func steppedSize(_ pt: Double, up: Bool) -> Double {
+        let epsilon = 1e-6
+        let next = up ? (pt + epsilon).rounded(.down) + 1 : (pt - epsilon).rounded(.up) - 1
+        return clampedSize(next) ?? pt
+    }
+}
+
+/// Searching the family list: a case- and diacritics-insensitive substring; an empty (or blank)
+/// query matches every family.
+enum FontFamilyFilter {
+    static func matches(_ family: String, query: String) -> Bool {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty || family.range(of: trimmed, options: [.caseInsensitive, .diacriticInsensitive]) != nil
+    }
+}
+
+/// Text colours as stored ("#RRGGBB", sRGB).
+enum TextColour {
+    /// "#RRGGBB" of `color` converted to sRGB; nil when it cannot be (a pattern colour).
+    static func hex(_ color: NSColor) -> String? {
+        guard let srgb = color.usingColorSpace(.sRGB) else { return nil }
+        func byte(_ c: CGFloat) -> Int { Int((min(max(c, 0), 1) * 255).rounded()) }
+        return String(format: "#%02X%02X%02X", byte(srgb.redComponent), byte(srgb.greenComponent),
+                      byte(srgb.blueComponent))
+    }
+
+    /// A light colour (luma of its sRGB components above 0.5) needs a dark background while it
+    /// is edited (the overlay), else white text on the white editor is invisible.
+    static func isLight(_ hex: String) -> Bool {
+        guard let c = NSColor(cgColor: SpreadRenderer.color(hex: hex))?.usingColorSpace(.sRGB) else { return false }
+        return 0.2126 * c.redComponent + 0.7152 * c.greenComponent + 0.0722 * c.blueComponent > 0.5
+    }
+}
+
 // MARK: - Texts
 
 /// Texts of the editor (Czech, sentence case, no exclamation marks).
@@ -583,6 +644,22 @@ enum EditorText {
     static let resetCrop = "Obnovit výřez"
     static let grid = "Mřížka"
     static let snap = "Přichytávat"
+    static let fontFamily = "Písmo"
+    static let fontSize = "Velikost"
+    static let bold = "Tučně"
+    static let italic = "Kurzíva"
+    static let alignment = "Zarovnání"
+    static let alignLeft = "Vlevo"
+    static let alignCenter = "Na střed"
+    static let alignRight = "Vpravo"
+    static let textColour = "Barva textu"
+    static let otherColour = "Jiná…"
+    static let resetStyle = "Výchozí"
+    static let searchFont = "Hledat písmo"
+    static let noFontFound = "Žádné písmo"
+
+    /// The warning of a family this Mac does not have (the text is drawn with its role's font).
+    static func missingFont(_ family: String) -> String { "Písmo „\(family)“ v tomto Macu chybí" }
 
     /// The help of the "Zkusit jinak" button: why it is disabled, else its name.
     static func tryAnotherHelp(_ availability: TryAnotherAvailability) -> String {

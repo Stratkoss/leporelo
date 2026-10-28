@@ -36,7 +36,9 @@ enum CanvasContent: Equatable {
 /// `beginTransform`/`nudge`/`endTransform`, Escape, Return or a click elsewhere leave it); scroll
 /// wheel or pinch over a photo = zoom (one session per gesture, also outside crop mode); ⌥-drag =
 /// carry the photo to another frame (swap); drop a photo from the tray = `dropPhoto`;
-/// double-click a text = overlay editor (`beginTextEditing`/`updateText`/`endTextEditing`);
+/// double-click a text = overlay editor (`beginTextEditing`/`updateText`/`endTextEditing`; drawn
+/// in the text's printed style, `EditorModel.overlayTextID` while open, the text stays selected
+/// after it);
 /// Delete = "Odebrat fotku" on a photo, "Smazat" on an empty frame or a text; arrows = move the
 /// selected item by 1 mm (⇧ 5 mm), in crop mode the crop, one step per key press-and-hold;
 /// without a selection they switch spreads; Escape = deselect; right click = context menu.
@@ -259,7 +261,7 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
         let pageChanged = content?.page.id != self.content?.page.id || content?.isCover != self.content?.isCover
         if pageChanged {
             endGestures()
-            finishTextEditing()
+            finishTextEditing(reselect: false)
             cropFrameID = nil
         }
         self.content = content
@@ -524,9 +526,13 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
             path.stroke()
             guard box.text.isEmpty, let placeholder = EditorText.placeholder(templateID: page.templateID, textID: box.id)
             else { continue }
+            let style = resolvedStyle(box)
+            let paragraph = NSMutableParagraphStyle()
+            paragraph.alignment = Self.alignment(style.alignment)
             let attributes: [NSAttributedString.Key: Any] = [
-                .font: font(for: box.role, scale: layout.scale),
+                .font: Self.font(style, scale: layout.scale),
                 .foregroundColor: NSColor.placeholderTextColor,
+                .paragraphStyle: paragraph,
             ]
             NSAttributedString(string: placeholder, attributes: attributes)
                 .draw(with: r, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
@@ -547,9 +553,27 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
                               width: size.width, height: size.height))
     }
 
-    private func font(for role: TextRole, scale: CGFloat) -> NSFont {
-        let spec = SpreadRenderer.font(for: role)
-        return CTFontCreateWithName(spec.name as CFString, max(spec.size * scale, 4), nil) as NSFont
+    /// The look `box` is printed with (`SpreadRenderer.resolvedStyle`; the spine decides a page
+    /// number's default alignment, none on the cover).
+    private func resolvedStyle(_ box: TextBox) -> ResolvedTextStyle {
+        let pageWidth = content?.isCover == false ? geometry?.format.pageWidthMM : nil
+        return SpreadRenderer.resolvedStyle(for: box, pageWidth: pageWidth)
+    }
+
+    /// The printed font of `style` at the canvas scale (`ctFont` sizes in mm, so points = mm size
+    /// × points per mm), at least 4 pt.
+    static func font(_ style: ResolvedTextStyle, scale: CGFloat) -> NSFont {
+        var scaled = style
+        scaled.sizePt = max(style.sizePt * Double(scale), 4 * 72 / 25.4)
+        return SpreadRenderer.ctFont(for: scaled) as NSFont
+    }
+
+    static func alignment(_ alignment: LeporeloCore.TextAlignment) -> NSTextAlignment {
+        switch alignment {
+        case .left: .left
+        case .center: .center
+        case .right: .right
+        }
     }
 
     // MARK: Badges and tooltips
@@ -1093,6 +1117,13 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
 
     // MARK: Window and app lifecycle: never leave a session pending
 
+    /// Leaving the window (back to triage) closes the overlay, so `EditorModel.overlayTextID`
+    /// does not outlive it.
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        if newWindow == nil { finishTextEditing(resigning: true, reselect: false) }
+        super.viewWillMove(toWindow: newWindow)
+    }
+
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         for observer in observers { NotificationCenter.default.removeObserver(observer) }
@@ -1130,7 +1161,6 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
         model.beginTextEditing(textID, in: page.id)
 
         let (scroll, view) = Self.makeTextOverlay(frame: layout.viewRect(box.rect))
-        view.font = font(for: box.role, scale: layout.scale)
         view.isMultiline = EditorText.isMultiline(box.role)
         view.string = box.text
         view.delegate = self
@@ -1140,20 +1170,25 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
         overlayScroll = scroll
         overlay = view
         overlayTextID = textID
+        model.overlayTextID = textID
+        applyStyle(of: box, to: view, scale: layout.scale)
         window?.makeFirstResponder(view)
         view.setSelectedRange(NSRange(location: (view.string as NSString).length, length: 0))
         needsDisplay = true
     }
 
     /// Ends the overlay: the model stores the text as one step "Upravit text". Idempotent.
+    /// `reselect`: the edited text becomes the selection, so the text bar stays (a click into its
+    /// size field or font popover takes the focus from the overlay); not when the page changed.
     ///
     /// `resigning`: called from the text view's own `resignFirstResponder` (a click elsewhere,
     /// another window): the first responder is already changing, so no nested
     /// `makeFirstResponder`. The view is hidden at once and removed on the next run-loop turn,
     /// never while AppKit is still inside its resign.
-    private func finishTextEditing(resigning: Bool = false) {
+    private func finishTextEditing(resigning: Bool = false, reselect: Bool = true) {
         guard let view = overlay else { return }
         let container: NSView = overlayScroll ?? view
+        let textID = overlayTextID
         overlay = nil
         overlayScroll = nil
         overlayTextID = nil
@@ -1161,6 +1196,8 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
         view.onResign = nil
         view.delegate = nil
         model?.endTextEditing()
+        model?.overlayTextID = nil
+        if reselect, let textID, page?.texts.contains(where: { $0.id == textID }) == true { select(.text(textID)) }
         if !resigning, window?.firstResponder === view { window?.makeFirstResponder(self) }
         container.isHidden = true
         DispatchQueue.main.async { container.removeFromSuperview() }
@@ -1172,7 +1209,7 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
     /// changed, template changed) closes the overlay.
     private func syncOverlay() {
         guard let view = overlay, let id = overlayTextID else { return }
-        guard let box = page?.texts.first(where: { $0.id == id }) else { return finishTextEditing() }
+        guard let box = page?.texts.first(where: { $0.id == id }) else { return finishTextEditing(reselect: false) }
         if model?.isEditingText != true, !view.hasMarkedText(), view.string != box.text {
             view.string = box.text
         }
@@ -1191,7 +1228,22 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
         } else {
             view.frame = rect
         }
-        view.font = font(for: box.role, scale: layout.scale)
+        applyStyle(of: box, to: view, scale: layout.scale)
+    }
+
+    /// The overlay shows the text as printed: its font, alignment and colour (a light colour on a
+    /// dark backing). Set only when changed, so typing (and marked text) is not disturbed.
+    private func applyStyle(of box: TextBox, to view: CanvasTextView, scale: CGFloat) {
+        let style = resolvedStyle(box)
+        let font = Self.font(style, scale: scale)
+        if view.font != font { view.font = font }
+        let alignment = Self.alignment(style.alignment)
+        if view.alignment != alignment { view.alignment = alignment }
+        let color = NSColor(cgColor: SpreadRenderer.color(hex: style.colorHex)) ?? .black
+        if view.textColor != color { view.textColor = color }
+        let backing = TextColour.isLight(style.colorHex) ? NSColor.black.withAlphaComponent(0.6)
+            : NSColor.white.withAlphaComponent(0.92)
+        if view.backgroundColor != backing { view.backgroundColor = backing }
     }
 
     /// The overlay editor for a text box at `frame` (view coordinates): a `CanvasTextView` in a

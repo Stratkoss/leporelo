@@ -707,3 +707,63 @@ struct PhotoPasteboardTests {
         #expect(SpreadDrag.spreadID(from: "hello") == nil)
     }
 }
+
+// MARK: - Text bar
+
+struct TextBarTests {
+    @Test func familyFilterIgnoresCaseAndDiacritics() {
+        #expect(FontFamilyFilter.matches("Fraunces", query: "frau"))
+        #expect(FontFamilyFilter.matches("Schibsted Grotesk", query: "GROTESK"))
+        #expect(FontFamilyFilter.matches("Helvetica Neue", query: "helvetica neue"))
+        #expect(!FontFamilyFilter.matches("Fraunces", query: "times"))
+        #expect(FontFamilyFilter.matches("Fraunces", query: ""))
+        #expect(FontFamilyFilter.matches("Fraunces", query: "  "))
+        #expect(FontFamilyFilter.matches("Hiragino Mincho ProN", query: "míncho"))
+    }
+
+    @Test func sizePresetsInRange() {
+        #expect(TextBarPresets.sizesPt == [8, 9, 10, 11, 12, 14, 18, 24, 28, 36, 48, 72])
+        #expect(TextBarPresets.sizesPt.allSatisfy { TextStyle.sizeRangePt.contains($0) })
+    }
+
+    @Test func colourPresetsAreSRGBHex() {
+        #expect(TextBarPresets.colours.map(\.name)
+                == ["Téměř černá", "Bílá", "Tmavě šedá", "Terakota", "Olivová", "Modrošedá", "Písková"])
+        #expect(TextBarPresets.colours.map(\.hex) == ["#1A1A1A", "#FFFFFF", "#4A4A4A", "#B5543A", "#6B7046",
+                                                      "#4F6475", "#C2A878"])
+        #expect(TextBarPresets.colours[0].hex == SpreadRenderer.defaultColorHex)
+    }
+
+    @Test func sizeIsClampedAndSteppedToWholePoints() {
+        #expect(TextBarPresets.clampedSize(3) == 6)
+        #expect(TextBarPresets.clampedSize(250) == 200)
+        #expect(TextBarPresets.clampedSize(12.5) == 12.5)
+        #expect(TextBarPresets.clampedSize(.nan) == nil)
+        // A role's default size (body 3.5 mm = 9.92 pt) steps to whole points.
+        #expect(TextBarPresets.steppedSize(9.92, up: true) == 10)
+        #expect(TextBarPresets.steppedSize(9.92, up: false) == 9)
+        #expect(TextBarPresets.steppedSize(12, up: true) == 13)
+        #expect(TextBarPresets.steppedSize(12, up: false) == 11)
+        #expect(TextBarPresets.steppedSize(200, up: true) == 200)
+        #expect(TextBarPresets.steppedSize(6, up: false) == 6)
+    }
+
+    @Test func colourHexFromAnyColourSpaceAndLightness() {
+        #expect(TextColour.hex(NSColor(srgbRed: 0xB5 / 255.0, green: 0x54 / 255.0, blue: 0x3A / 255.0, alpha: 1))
+                == "#B5543A")
+        #expect(TextColour.hex(NSColor(white: 1, alpha: 1)) == "#FFFFFF")
+        #expect(TextColour.hex(NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 1)) == "#000000")
+        #expect(TextColour.isLight("#FFFFFF"))
+        #expect(TextColour.isLight("#C2A878"))
+        #expect(!TextColour.isLight("#1A1A1A"))
+        #expect(!TextColour.isLight("#4F6475"))
+    }
+
+    @Test func textBarHelpTexts() {
+        #expect([EditorText.fontFamily, EditorText.fontSize, EditorText.bold, EditorText.italic,
+                 EditorText.alignment, EditorText.textColour, EditorText.resetStyle]
+                == ["Písmo", "Velikost", "Tučně", "Kurzíva", "Zarovnání", "Barva textu", "Výchozí"])
+        #expect(EditorText.otherColour == "Jiná…")
+        #expect(EditorText.missingFont("Garamond") == "Písmo „Garamond“ v tomto Macu chybí")
+    }
+}
