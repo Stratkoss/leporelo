@@ -44,7 +44,8 @@ enum CanvasContent: Equatable {
 /// without a selection they switch spreads; Escape = deselect; right click = context menu.
 /// Every click on a spread also makes its page the current page (`EditorModel.currentPageSide`,
 /// spec 5), drawn with a 2 pt accent outline inset 1 pt; not on the cover.
-/// `showGrid` draws a 5 mm grid on each page. The cover is read-only. Sessions end on mouse up,
+/// `showGrid` draws a 5 mm grid on each page. Without `showGuides` ("Vodítka", off by default)
+/// the page is drawn as it will be cut: clipped to the trim, no bleed band and no guide lines. The cover is read-only. Sessions end on mouse up,
 /// selection change, focus loss, window resign key, window close and app termination.
 struct SpreadCanvasView: NSViewRepresentable {
     let content: CanvasContent?
@@ -58,6 +59,7 @@ struct SpreadCanvasView: NSViewRepresentable {
     let currentPageSide: PageSide?
     let snapSettings: SnapSettings
     let showGrid: Bool
+    let showGuides: Bool
     /// Read so SwiftUI updates the view when a text session starts or ends (e.g. by Undo).
     let isEditingText: Bool
     let model: EditorModel
@@ -75,7 +77,7 @@ struct SpreadCanvasView: NSViewRepresentable {
         view.onChangeLayout = onChangeLayout
         view.update(content: content, album: album, revision: revision, geometry: geometry, package: package,
                     issues: issues, selectedItem: selectedItem, currentPageSide: currentPageSide,
-                    snapSettings: snapSettings, showGrid: showGrid)
+                    snapSettings: snapSettings, showGrid: showGrid, showGuides: showGuides)
     }
 }
 
@@ -179,6 +181,7 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
     private var currentPageSide: PageSide?
     private var snapSettings = SnapSettings(grid: false, objects: true)
     private var showGrid = false
+    private var showGuides = false
     private let imageCache = CanvasImageCache()
 
     /// Badges in view coordinates (rebuilt on update and layout), for drawing and tooltips.
@@ -257,7 +260,7 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
 
     func update(content: CanvasContent?, album: Album, revision: Int, geometry: PageGeometry, package: ProjectPackage,
                 issues: [PreflightIssue], selectedItem: LayoutItem?, currentPageSide: PageSide?,
-                snapSettings: SnapSettings, showGrid: Bool) {
+                snapSettings: SnapSettings, showGrid: Bool, showGuides: Bool) {
         let pageChanged = content?.page.id != self.content?.page.id || content?.isCover != self.content?.isCover
         if pageChanged {
             endGestures()
@@ -274,6 +277,7 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
         self.currentPageSide = currentPageSide
         self.snapSettings = snapSettings
         self.showGrid = showGrid
+        self.showGuides = showGuides
         // Crop mode ends when its frame is no longer the selection or has no photo (undo, Delete).
         if let crop = cropFrameID, !isEditable || selectedItem != .frame(crop) || frame(crop)?.photoID == nil {
             cropFrameID = nil
@@ -318,8 +322,11 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
         let images = imageCache.images(for: page, area: area, album: album, revision: revision, geometry: geometry,
                                        package: package)
         let renderer = SpreadRenderer(album: album, geometry: geometry, images: PlaceholderImageProvider())
-        let options = layout.rendererOptions
+        let options = layout.rendererOptions(showGuides: showGuides)
+        let trim = CanvasLayout.trim(geometry: geometry, isCover: content?.isCover == true)
         ctx.saveGState()
+        // Without guides the page ends at the trim, as printed; the bleed stays background.
+        if !showGuides { ctx.clip(to: layout.viewRect(trim)) }
         ctx.concatenate(layout.rendererTransform)
         if content?.isCover == true {
             renderer.drawCover(drawn, images: images, into: ctx, options: options)
@@ -328,7 +335,7 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
         }
         ctx.restoreGState()
 
-        drawBleedTint(layout, geometry: geometry)
+        if showGuides { drawBleedTint(layout, trim: trim) }
         drawTextBoxes(page, layout)
         if showGrid, isEditable { drawGrid(layout, geometry: geometry) }
         drawCurrentPage(layout, geometry: geometry)
@@ -504,9 +511,7 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
     }
 
     /// The bleed band (visible area minus trim) lightly tinted, so the cut is obvious.
-    private func drawBleedTint(_ layout: CanvasLayout, geometry: PageGeometry) {
-        let trim = content?.isCover == true ? geometry.pageRect(side: .left)
-            : Rect(origin: Point(x: 0, y: 0), size: geometry.spreadSize)
+    private func drawBleedTint(_ layout: CanvasLayout, trim: Rect) {
         let path = NSBezierPath(rect: layout.contentRect)
         path.append(NSBezierPath(rect: layout.viewRect(trim)))
         path.windingRule = .evenOdd

@@ -125,6 +125,7 @@ Nic z tohoto oddílu se při stavbě nedalo ověřit v běžící aplikaci (ovl�
 **Lišta (spec 4).** U každé položky zapiš OK, nebo co se stalo.
 - [ ] Zkusit jinak: jiné doporučené rozložení aktuální stránky; u ručně upravené se nejdřív zeptá; na obálce vypnuté s nápovědou.
 - [ ] Přidat rámeček / Přidat text: na aktuální stránce (jinak na pravé), nová položka je vybraná; na obálce vypnuté.
+- [ ] Vodítka: ve výchozím stavu vypnutá a stránka končí ořezem (bez spadávky a čar), takže je vidět bílá kolem fotek jako v tisku. Zapnutá ukážou ořez, bezpečnou zónu, hřbet a spadávku; po restartu zůstanou, jak byla.
 - [ ] Mřížka: ukáže mřížku 5 mm a přichytává k ní; po restartu aplikace zůstane, jak byla.
 - [ ] Přichytávat: vypnuté = fotka se chytá jen k mřížce (je-li zapnutá); po restartu zůstane.
 - [ ] Okraj: šipky mění po 1 mm od bezpečné zóny profilu (u Canvy 6 mm) do 30 mm; všechny dvoustrany se upraví a jedno ⌘Z to vrátí.

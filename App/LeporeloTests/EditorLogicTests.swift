@@ -127,6 +127,21 @@ struct CanvasLayoutTests {
         #expect(pixel(CGPoint(x: layout.contentRect.minX - 3, y: layout.contentRect.midY)) == (0, 0, 0))
     }
 
+    /// "Vodítka" off (the default) draws the page as printed: no guide lines, but the crop still
+    /// fills the bleed so it matches the print; the trim is the spread, or the one cover page.
+    @Test func guidesToggleOnlyChangesGuideLines() throws {
+        let g = try canvaGeometry()
+        let layout = CanvasLayout(visibleArea: CanvasLayout.visibleArea(geometry: g, isCover: false),
+                                  viewSize: CGSize(width: 913, height: 611), padding: 24)
+        let off = layout.rendererOptions(showGuides: false), on = layout.rendererOptions(showGuides: true)
+        #expect(!off.showGuides)
+        #expect(on.showGuides)
+        #expect(off.includeBleed && on.includeBleed)
+        #expect(off.pixelAlignFrames && on.pixelAlignFrames)
+        #expect(CanvasLayout.trim(geometry: g, isCover: false) == Rect(origin: Point(x: 0, y: 0), size: g.spreadSize))
+        #expect(CanvasLayout.trim(geometry: g, isCover: true) == g.pageRect(side: .left))
+    }
+
     /// Two dark frames sharing an edge (snapped flush) draw without a light seam on the canvas, at
     /// a scale that is no round number and on a Retina backing too: the edge falls inside a device
     /// pixel, so each frame clipped on its own would let the white page show through there.
@@ -163,7 +178,7 @@ struct CanvasLayoutTests {
         ctx.translateBy(x: 0, y: CGFloat(h))
         ctx.scaleBy(x: s, y: -s)
         ctx.concatenate(layout.rendererTransform)
-        renderer.draw(spread, images: ["p": black], into: ctx, options: layout.rendererOptions)
+        renderer.draw(spread, images: ["p": black], into: ctx, options: layout.rendererOptions(showGuides: true))
         let data = try #require(ctx.data).assumingMemoryBound(to: UInt8.self)
         func darkest(x: Int, y: Int) -> UInt8 {
             let i = y * w * 4 + x * 4

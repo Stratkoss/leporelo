@@ -71,9 +71,15 @@ struct CanvasLayout: Equatable {
     }
 
     /// The options the canvas draws with under `rendererTransform`; frames are pixel aligned so
-    /// flush frames show no seam.
-    var rendererOptions: RenderOptions {
-        RenderOptions(showGuides: true, includeBleed: true, pixelsPerMM: scale, pixelAlignFrames: true)
+    /// flush frames show no seam. `showGuides` ("Vodítka") draws the trim, safe zone and spine; the
+    /// bleed is always included so a crop looks as printed.
+    func rendererOptions(showGuides: Bool) -> RenderOptions {
+        RenderOptions(showGuides: showGuides, includeBleed: true, pixelsPerMM: scale, pixelAlignFrames: true)
+    }
+
+    /// The trim (spread mm): the whole spread, or the one cover page.
+    static func trim(geometry: PageGeometry, isCover: Bool) -> Rect {
+        isCover ? geometry.pageRect(side: .left) : Rect(origin: Point(x: 0, y: 0), size: geometry.spreadSize)
     }
 }
 
@@ -649,6 +655,7 @@ enum EditorText {
     static let editCrop = "Upravit výřez"
     static let resetCrop = "Obnovit výřez"
     static let grid = "Mřížka"
+    static let guides = "Vodítka"
     static let snap = "Přichytávat"
     static let fontFamily = "Písmo"
     static let fontSize = "Velikost"

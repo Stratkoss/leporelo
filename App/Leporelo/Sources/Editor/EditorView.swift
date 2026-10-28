@@ -20,8 +20,8 @@ extension FocusedValues {
 /// (`TextToolsBar`, spec 3.2) and a banner for the spread's problems that belong to no frame,
 /// the tray on the right (`PhotoTrayView`), the strip at the bottom (`SpreadStripView`); toolbar:
 /// "Zkusit jinak" (the current page, spec 5), "Přidat rámeček", "Přidat text" (on the current
-/// page, else the right one), "Mřížka", "Přichytávat", "Okraj", "Navrhnout znovu", "Formát",
-/// "Exportovat…" (the window adds "Třídění | Dvoustrany" and "Zpět do třídění"). The grid and
+/// page, else the right one), "Mřížka", "Vodítka", "Přichytávat", "Okraj", "Navrhnout znovu", "Formát",
+/// "Exportovat…" (the window adds "Třídění | Dvoustrany" and "Zpět do třídění"). The grid, guides and
 /// snapping switches are remembered for the app (`@AppStorage`); the margin belongs to the book
 /// (`EditorModel.setMargin`).
 struct EditorView: View {
@@ -54,6 +54,8 @@ struct EditorView: View {
 
     /// "Mřížka": draws the 5 mm grid and snaps to it.
     @AppStorage("editor.showGrid") private var showGrid = false
+    /// "Vodítka": the trim, safe zone, spine and bleed band; off = the page as it will be cut.
+    @AppStorage("editor.showGuides") private var showGuides = false
     /// "Přichytávat": snaps to page edges, margins, centres and the other items.
     @AppStorage("editor.snapObjects") private var snapObjects = true
 
@@ -191,6 +193,7 @@ struct EditorView: View {
                              currentPageSide: content.isCover ? nil : model.currentPageSide,
                              snapSettings: SnapSettings(grid: showGrid, objects: snapObjects),
                              showGrid: showGrid,
+                             showGuides: showGuides,
                              isEditingText: model.isEditingText, model: model,
                              onChangeLayout: openLayoutPicker)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -258,6 +261,9 @@ struct EditorView: View {
 
             Toggle(EditorText.grid, systemImage: "grid", isOn: $showGrid)
                 .help(EditorText.grid)
+
+            Toggle(EditorText.guides, systemImage: "rectangle.dashed", isOn: $showGuides)
+                .help(EditorText.guides)
 
             Toggle(EditorText.snap, systemImage: "square.and.line.vertical.and.square", isOn: $snapObjects)
                 .help(EditorText.snap)
