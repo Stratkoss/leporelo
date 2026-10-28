@@ -702,6 +702,65 @@ final class EditorModel {
         perform([.setText(spreadID: id, textID: textID, text: text)], "Upravit text")
     }
 
+    // MARK: Text style (spec 3.3)
+
+    /// The text the canvas overlay edits (set by SpreadCanvasNSView when the overlay opens/closes).
+    var overlayTextID: String?
+
+    /// The text the text bar acts on: the overlay's text, else the selected text; nil on the cover.
+    /// Both must be texts of the current spread.
+    var activeTextID: String? {
+        guard coverSide == nil, let spread = currentSpread else { return nil }
+        if let overlayTextID {
+            return spread.texts.contains(where: { $0.id == overlayTextID }) ? overlayTextID : nil
+        }
+        if case .text(let id) = selectedItem { return id }
+        return nil
+    }
+
+    /// The effective style of `activeTextID` (nil when none).
+    var activeTextStyle: ResolvedTextStyle? {
+        guard let id = activeTextID, let box = currentSpread?.texts.first(where: { $0.id == id }) else { return nil }
+        return SpreadRenderer.resolvedStyle(for: box, pageWidth: geometry.format.pageWidthMM)
+    }
+
+    /// One undo step "Změnit písmo": applies `change` to the active text's stored style (starting
+    /// from `TextStyle()` when nil). A running text session is stored first and keeps going.
+    func changeTextStyle(_ change: (inout TextStyle) -> Void) {
+        guard let id = activeTextID, let spreadID = currentSpreadID,
+              let box = store.album.spreads.first(where: { $0.id == spreadID })?.texts.first(where: { $0.id == id })
+        else { return }
+        var style = box.style ?? TextStyle()
+        change(&style)
+        setTextStyle(style, of: id, in: spreadID, "Změnit písmo")
+    }
+
+    /// One undo step "Výchozí písmo": style back to nil.
+    func resetTextStyle() {
+        guard let id = activeTextID, let spreadID = currentSpreadID else { return }
+        setTextStyle(nil, of: id, in: spreadID, "Výchozí písmo")
+    }
+
+    /// Stores `style` (sanitised by `AlbumEdit.setTextStyle`) as one step; nothing when it changes
+    /// nothing. A text session on this text is stored first as its own step and keeps running:
+    /// the style write changes the store revision, so the session's next write registers a new
+    /// step instead of amending its old one (which would undo the style with it). Any other
+    /// session is committed.
+    private func setTextStyle(_ style: TextStyle?, of textID: String, in spreadID: String, _ actionName: String) {
+        if let session = textSession, session.spreadID == spreadID, session.textID == textID {
+            textCommitTask?.cancel()
+            textCommitTask = nil
+            storeSessionText()
+            endTransform()
+            endLayoutChange()
+        } else {
+            commitSessions()
+        }
+        let edit = AlbumEdit.setTextStyle(spreadID: spreadID, textID: textID, style: style)
+        guard let updated = try? store.album.applying(edit).album, updated != store.album else { return }
+        perform([edit], actionName)
+    }
+
     /// The spread as the canvas shows it: the stored spread with a running text, crop or layout
     /// session applied.
     func displayedSpread(_ id: String) -> Spread? {

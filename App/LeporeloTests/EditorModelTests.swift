@@ -2059,3 +2059,141 @@ struct EditorLayoutTests {
         #expect(store.album == expected.album)
     }
 }
+
+/// The text bar's model (spec 3.3): the active text, its effective style and style changes as
+/// undo steps.
+@MainActor
+struct EditorTextStyleTests {
+    private func box(_ store: AlbumStore, _ spreadID: String, _ id: String) -> TextBox? {
+        spread(store.album, spreadID)?.texts.first { $0.id == id }
+    }
+
+    /// Lets the run loop end the current event, which closes the undo manager's event group.
+    private func endEvent() {
+        RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+    }
+
+    @Test func activeTextIsSelectedOrOverlayText() throws {
+        let (model, store, _) = try makeModel(try standardAlbum())
+        let journal = try #require(store.album.spreads.first { $0.kind == .journal })
+        model.currentSpreadID = journal.id
+        #expect(model.activeTextID == nil)
+        #expect(model.activeTextStyle == nil)
+
+        model.selectedItem = .frame(journal.frames[0].id)
+        #expect(model.activeTextID == nil)
+        model.selectedItem = .text("title")
+        #expect(model.activeTextID == "title")
+        let title = try #require(box(store, journal.id, "title"))
+        #expect(model.activeTextStyle
+            == SpreadRenderer.resolvedStyle(for: title, pageWidth: model.geometry.format.pageWidthMM))
+
+        // The overlay wins (the canvas deselects when it opens).
+        model.overlayTextID = "body"
+        #expect(model.activeTextID == "body")
+        model.selectedItem = nil
+        #expect(model.activeTextID == "body")
+        model.overlayTextID = "nope"  // not on this spread
+        #expect(model.activeTextID == nil)
+        model.overlayTextID = nil
+        #expect(model.activeTextID == nil)
+    }
+
+    @Test func noActiveTextOnCover() throws {
+        let (model, store, undo) = try makeModel(try standardAlbum())
+        let journal = try #require(store.album.spreads.first { $0.kind == .journal })
+        model.currentSpreadID = journal.id
+        model.selectedItem = .text("title")
+        model.overlayTextID = "body"
+        model.coverSide = .front
+        #expect(model.activeTextID == nil)
+        #expect(model.activeTextStyle == nil)
+
+        let revision = store.revision
+        model.changeTextStyle { $0.bold = true }
+        model.resetTextStyle()
+        #expect(store.revision == revision)
+        #expect(!undo.canUndo)
+    }
+
+    @Test func changeTextStyleIsOneUndoStep() throws {
+        let (model, store, undo) = try makeModel(try standardAlbum())
+        let journal = try #require(store.album.spreads.first { $0.kind == .journal })
+        model.currentSpreadID = journal.id
+        model.selectedItem = .text("title")
+
+        step(undo) { model.changeTextStyle { $0.sizePt = 14 } }
+        #expect(box(store, journal.id, "title")?.style == TextStyle(sizePt: 14))
+        #expect(model.activeTextStyle?.sizePt == 14)
+        #expect(undo.undoActionName == "Změnit písmo")
+
+        // The same value again changes nothing and adds no step.
+        let revision = store.revision
+        model.changeTextStyle { $0.sizePt = 14 }
+        #expect(store.revision == revision)
+        model.undo()
+        #expect(box(store, journal.id, "title")?.style == nil)
+        #expect(!undo.canUndo)
+    }
+
+    @Test func styleChangeWhileEditingKeepsText() throws {
+        let (model, store, _) = try makeModel(try standardAlbum())
+        let undo = UndoManager()  // groups by event, like the window's
+        model.undoManager = undo
+        let journal = try #require(store.album.spreads.first { $0.kind == .journal })
+        model.currentSpreadID = journal.id
+
+        // Double-click: the canvas deselects and opens the overlay.
+        model.beginTextEditing("body", in: journal.id)
+        model.overlayTextID = "body"
+        model.updateText("Ahoj")
+        model.changeTextStyle { $0.bold = true }
+        endEvent()
+        #expect(model.isEditingText)  // typing goes on
+        #expect(box(store, journal.id, "body")?.text == "Ahoj")
+        #expect(box(store, journal.id, "body")?.style?.bold == true)
+        #expect(undo.undoActionName == "Změnit písmo")
+
+        // Typing on after the style change never clobbers the style step.
+        model.updateText("Ahoj!")
+        model.endTextEditing()
+        model.overlayTextID = nil
+        endEvent()
+        #expect(box(store, journal.id, "body")?.text == "Ahoj!")
+        #expect(box(store, journal.id, "body")?.style?.bold == true)
+        model.undo(); endEvent()
+        #expect(box(store, journal.id, "body")?.text == "Ahoj")
+        #expect(box(store, journal.id, "body")?.style?.bold == true)
+
+        model.undo(); endEvent()  // the bold only
+        #expect(box(store, journal.id, "body")?.text == "Ahoj")
+        #expect(box(store, journal.id, "body")?.style == nil)
+        #expect(undo.undoActionName == "Upravit text")
+        model.undo(); endEvent()
+        #expect(box(store, journal.id, "body")?.text == "")
+        #expect(!undo.canUndo)
+    }
+
+    @Test func resetTextStyleStoresNil() throws {
+        let (model, store, undo) = try makeModel(try standardAlbum())
+        let journal = try #require(store.album.spreads.first { $0.kind == .journal })
+        model.currentSpreadID = journal.id
+        model.selectedItem = .text("title")
+        step(undo) {
+            model.changeTextStyle {
+                $0.fontFamily = "Georgia"
+                $0.italic = true
+            }
+        }
+        #expect(box(store, journal.id, "title")?.style == TextStyle(fontFamily: "Georgia", italic: true))
+
+        step(undo) { model.resetTextStyle() }
+        #expect(box(store, journal.id, "title")?.style == nil)
+        #expect(undo.undoActionName == "Výchozí písmo")
+        let revision = store.revision
+        model.resetTextStyle()  // already default: no step
+        #expect(store.revision == revision)
+        model.undo()
+        #expect(box(store, journal.id, "title")?.style == TextStyle(fontFamily: "Georgia", italic: true))
+    }
+}
