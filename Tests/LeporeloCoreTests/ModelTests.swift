@@ -81,6 +81,39 @@ import Foundation
         #expect(back == partial)
     }
 
+    /// Decodes a text box whose `style` is the given JSON object.
+    private static func boxWithStyle(_ style: String) throws -> TextBox {
+        let data = try AlbumCoding.encoder().encode(
+            TextBox(id: "t1", rect: Rect(x: 1, y: 2, width: 3, height: 4), role: .body, text: "x"))
+        var object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        object["style"] = try JSONSerialization.jsonObject(with: Data(style.utf8))
+        let json = try JSONSerialization.data(withJSONObject: object)
+        return try AlbumCoding.decoder().decode(TextBox.self, from: json)
+    }
+
+    @Test func unknownAlignmentFallsBackToDefault() throws {
+        // A newer version may know an alignment this one does not; the book must still open.
+        let box = try Self.boxWithStyle("""
+            {"fontFamily":"Georgia","sizePt":14,"bold":true,"italic":false,"alignment":"justify","colorHex":"#336699"}
+            """)
+        #expect(box.style == TextStyle(fontFamily: "Georgia", sizePt: 14, bold: true, colorHex: "#336699"))
+    }
+
+    @Test func styleWithoutBoldOrItalicDecodesAsPlain() throws {
+        let box = try Self.boxWithStyle(#"{"sizePt":20}"#)
+        #expect(box.style == TextStyle(sizePt: 20))
+    }
+
+    @Test func styleWithUnknownKeyDecodes() throws {
+        let box = try Self.boxWithStyle(#"{"bold":true,"italic":true,"letterSpacing":2}"#)
+        #expect(box.style == TextStyle(bold: true, italic: true))
+    }
+
+    @Test func styleWithWrongTypedFieldsKeepsTheRest() throws {
+        let box = try Self.boxWithStyle(#"{"fontFamily":7,"sizePt":"big","colorHex":false,"italic":true}"#)
+        #expect(box.style == TextStyle(italic: true))
+    }
+
     @Test func nilStyleIsNotEncoded() throws {
         let box = TextBox(id: "t1", rect: Rect(x: 1, y: 2, width: 3, height: 4), role: .caption, text: "x")
         let json = String(decoding: try AlbumCoding.encoder().encode(box), as: UTF8.self)

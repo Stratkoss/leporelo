@@ -54,6 +54,18 @@ public struct TextStyle: Sendable, Codable, Equatable {
         self.colorHex = colorHex
     }
 
+    /// Lenient so a book written by another version still opens: a missing, unknown or
+    /// malformed field falls back to its default instead of failing the whole album.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        fontFamily = try? c.decodeIfPresent(String.self, forKey: .fontFamily)
+        sizePt = (try? c.decodeIfPresent(Double.self, forKey: .sizePt)).flatMap { $0.isFinite ? $0 : nil }
+        bold = (try? c.decodeIfPresent(Bool.self, forKey: .bold)) ?? false
+        italic = (try? c.decodeIfPresent(Bool.self, forKey: .italic)) ?? false
+        alignment = (try? c.decodeIfPresent(String.self, forKey: .alignment)).flatMap(TextAlignment.init)
+        colorHex = try? c.decodeIfPresent(String.self, forKey: .colorHex)
+    }
+
     /// The font sizes a text can have, in points.
     public static let sizeRangePt: ClosedRange<Double> = 6...200
 }
