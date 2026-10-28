@@ -535,6 +535,14 @@ enum SpreadDrag {
     }
 }
 
+// MARK: - Snap style
+
+/// The colour of everything snapping draws (guides, distances, sizes): one purple, the same on
+/// paper and in dark mode; the accent colour stays for the selection and the current page.
+enum SnapStyle {
+    static let purple = NSColor(srgbRed: 0xA0 / 255.0, green: 0x20 / 255.0, blue: 0xF0 / 255.0, alpha: 1)
+}
+
 // MARK: - Texts
 
 /// Texts of the editor (Czech, sentence case, no exclamation marks).
@@ -593,6 +601,11 @@ enum EditorText {
     /// "Čtyři, 4 fotky" (VoiceOver label of a page layout in the picker).
     static func pageLayoutLabel(_ layout: PageLayout) -> String {
         "\(layout.name), \(photoCount(layout.photoCount))"
+    }
+
+    /// "12,5 mm": a distance or size label of snapping, one decimal and a decimal comma.
+    static func millimetres(_ mm: Double) -> String {
+        String(format: "%.1f mm", mm).replacingOccurrences(of: ".", with: ",")
     }
 
     /// "Okraj: 10 mm" (the toolbar's margin stepper).

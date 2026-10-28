@@ -252,6 +252,24 @@ import Foundation
         #expect(result.reasons == [.x: .equalSize])
     }
 
+    @Test func spacingReasonWinsExactTieWithAlignment() {
+        // The same position is an item edge and an equal gap / equal size: the reason is not alignment.
+        let spacing = SnapLine(position: 50, tier: .items, anchor: .min, reason: .equalSpacing)
+        let moved = SnapTargets(x: [SnapLine(position: 50, tier: .items), spacing], y: [])
+        let result = SnapEngine.snap(Rect(x: 50.4, y: 0, width: 20, height: 10), moving: .all, to: moved, threshold: 2)
+        #expect(result.rect.minX == 50)
+        #expect(result.reasons == [.x: .equalSpacing])
+        let reversed = SnapTargets(x: [spacing, SnapLine(position: 50, tier: .items)], y: [])
+        #expect(SnapEngine.snap(Rect(x: 50.4, y: 0, width: 20, height: 10), moving: .all, to: reversed,
+                                threshold: 2).reasons == [.x: .equalSpacing])
+
+        let size = SnapLine(position: 105, tier: .items, anchor: .max, reason: .equalSize)
+        let resized = SnapTargets(x: [SnapLine(position: 105, tier: .items), size], y: [])
+        let r = SnapEngine.snap(Rect(x: 20, y: 0, width: 84, height: 10), moving: .maxX, to: resized, threshold: 3)
+        #expect(r.rect.maxX == 105)
+        #expect(r.reasons == [.x: .equalSize])
+    }
+
     @Test func guidesNotTouchingTheResultAreDropped() {
         let rect = Rect(x: 0, y: 20, width: 100, height: 60)
         let guides = [SnapGuide(axis: .x, position: 5), SnapGuide(axis: .x, position: 50),

@@ -166,8 +166,8 @@ public enum SnapEngine {
 
     /// `rect` with `edges` snapped onto a line within `threshold` (inclusive). The tiers are
     /// searched in order and the first with a line in reach is used; inside it the nearest line
-    /// wins, a tie goes to an edge point (min/max) before the centre, then to the smaller
-    /// position. With `.all` the whole rectangle moves (its size kept) so that its min, centre
+    /// wins, a tie goes to an edge point (min/max) before the centre, then to an equal spacing or
+    /// size line before an alignment line, then to the smaller position. With `.all` the whole rectangle moves (its size kept) so that its min, centre
     /// or max lands exactly on the line; otherwise each edge in `edges` snaps on its own and the
     /// others stay. A line anchored `.min`/`.centre`/`.max` only catches that point, and a line
     /// that would turn a resized rectangle inside out is no target.
@@ -254,7 +254,8 @@ public enum SnapEngine {
 
     /// The best (point, line) pair: the first tier with a line not farther than `threshold`
     /// from a point it may catch (and whose position passes `allowed`); inside that tier the
-    /// smallest distance, then an edge point before the centre, then the smaller position.
+    /// smallest distance, then an edge point before the centre, then an equal spacing or size
+    /// line before an alignment line (so the reason shows the spacing), then the smaller position.
     private static func best(
         of points: [(value: Double, anchor: SnapAnchor)], in lines: [SnapLine], threshold: Double,
         where allowed: (Double) -> Bool = { _ in true }
@@ -271,7 +272,14 @@ public enum SnapEngine {
                     let better: Bool
                     if let current = result, abs(distance - bestDistance) <= tieTolerance {
                         let currentIsEdge = current.point != .centre
-                        better = isEdge != currentIsEdge ? isEdge : line.position < current.line.position
+                        let isSpacing = line.reason != .alignment, currentIsSpacing = current.line.reason != .alignment
+                        if isEdge != currentIsEdge {
+                            better = isEdge
+                        } else if isSpacing != currentIsSpacing {
+                            better = isSpacing
+                        } else {
+                            better = line.position < current.line.position
+                        }
                     } else {
                         better = distance < bestDistance
                     }

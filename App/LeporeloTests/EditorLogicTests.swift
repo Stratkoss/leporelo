@@ -127,6 +127,18 @@ struct CanvasLayoutTests {
         #expect(pixel(CGPoint(x: layout.contentRect.minX - 3, y: layout.contentRect.midY)) == (0, 0, 0))
     }
 
+    /// Items sharing an edge in mm share it on screen too, also at a scale that is no round
+    /// number, so a snapped edge never shows a seam between them.
+    @Test func sameEdgeSameViewX() throws {
+        let g = try canvaGeometry()
+        let layout = CanvasLayout(visibleArea: CanvasLayout.visibleArea(geometry: g, isCover: false),
+                                  viewSize: CGSize(width: 913, height: 611), padding: 24)
+        let a = Rect(x: 37.3, y: 12.1, width: 81.7, height: 55.9)
+        let b = Rect(x: 37.3, y: 140.6, width: 123.45, height: 30.2)
+        #expect(layout.viewRect(a).minX == layout.viewRect(b).minX)
+        #expect(layout.viewRect(a).minX == layout.viewPoint(Point(x: 37.3, y: 0)).x)
+    }
+
     private func solidImage(r: UInt8, g: UInt8, b: UInt8, width: Int, height: Int) -> CGImage? {
         guard let ctx = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
                                   space: CGColorSpace(name: CGColorSpace.sRGB)!,
@@ -603,6 +615,21 @@ struct EditorTextTests {
         #expect(EditorText.redraftMessage(5) == "Zachovám 5 ručně upravených dvoustran. Pokračovat?")
         #expect(EditorText.photoCount(0) == "bez fotek")
         #expect(EditorText.photoCount(3) == "3 fotky")
+    }
+
+    @Test func millimetresFormatsWithCommaAndOneDecimal() {
+        #expect(EditorText.millimetres(12.5) == "12,5 mm")
+        #expect(EditorText.millimetres(4) == "4,0 mm")
+        #expect(EditorText.millimetres(0.04) == "0,0 mm")
+        #expect(EditorText.millimetres(123.456) == "123,5 mm")
+    }
+
+    @Test func snapGuidesArePurple() throws {
+        let c = try #require(SnapStyle.purple.usingColorSpace(.sRGB))
+        #expect(near(c.redComponent, 0xA0 / 255.0))
+        #expect(near(c.greenComponent, 0x20 / 255.0))
+        #expect(near(c.blueComponent, 0xF0 / 255.0))
+        #expect(c.alphaComponent == 1)
     }
 
     @Test func stripAccessibilityLabel() {

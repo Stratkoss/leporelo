@@ -207,6 +207,10 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
     private var layoutDrag: LayoutDragState?
     /// The guides of the last snap during a layout drag (cleared on mouse up).
     private var snapGuides: [SnapGuide] = []
+    /// The distances around the dragged or nudged item and its equal sizes, drawn with the guides.
+    private var measurements: (gaps: [Gap], sizes: [SizeMatch]) = ([], [])
+    /// Clears the distances shortly after the last arrow key is released.
+    private var measurementsClear: Task<Void, Never>?
     /// The photo frame in crop mode (double-click): a drag moves its crop, not the frame.
     private var cropFrameID: String?
     private var layoutArrowSession = false
@@ -226,6 +230,8 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
     static let handleSize: CGFloat = 7
     /// Snapping reaches this far, in points (converted to mm with the layout's scale).
     static let snapThreshold: CGFloat = 8
+    /// The distances of an arrow nudge stay this long after the last key is released.
+    static let nudgeMeasurementsDelay: Duration = .milliseconds(600)
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -335,6 +341,7 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
             path.stroke()
         }
         drawGuides(layout, geometry: geometry)
+        drawMeasurements(layout)
         for badge in badges { drawBadge(badge.rect, severity: badge.severity) }
     }
 
@@ -431,8 +438,67 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
             }
         }
         path.lineWidth = 1
-        NSColor.controlAccentColor.setStroke()
+        SnapStyle.purple.setStroke()
         path.stroke()
+    }
+
+    /// The distances of the running drag or nudge: per gap a 1 point line with 4 point ticks at
+    /// its ends and its length in the middle; an equal size gets its length on the middle of the
+    /// rect's bottom (width) or right (height) edge.
+    private func drawMeasurements(_ layout: CanvasLayout) {
+        guard !measurements.gaps.isEmpty || !measurements.sizes.isEmpty else { return }
+        let tick: CGFloat = 2
+        let path = NSBezierPath()
+        for gap in measurements.gaps {
+            let start: CGPoint, end: CGPoint
+            switch gap.axis {
+            case .x:
+                start = layout.viewPoint(Point(x: gap.from, y: gap.at))
+                end = layout.viewPoint(Point(x: gap.to, y: gap.at))
+                for p in [start, end] {
+                    path.move(to: CGPoint(x: p.x, y: p.y - tick))
+                    path.line(to: CGPoint(x: p.x, y: p.y + tick))
+                }
+            case .y:
+                start = layout.viewPoint(Point(x: gap.at, y: gap.from))
+                end = layout.viewPoint(Point(x: gap.at, y: gap.to))
+                for p in [start, end] {
+                    path.move(to: CGPoint(x: p.x - tick, y: p.y))
+                    path.line(to: CGPoint(x: p.x + tick, y: p.y))
+                }
+            }
+            path.move(to: start)
+            path.line(to: end)
+        }
+        path.lineWidth = 1
+        SnapStyle.purple.setStroke()
+        path.stroke()
+        for gap in measurements.gaps {
+            let mid = gap.from + (gap.to - gap.from) / 2
+            let centre = gap.axis == .x ? Point(x: mid, y: gap.at) : Point(x: gap.at, y: mid)
+            drawMeasurementLabel(EditorText.millimetres(gap.to - gap.from), at: layout.viewPoint(centre))
+        }
+        for size in measurements.sizes {
+            let r = size.rect
+            let centre = size.axis == .x ? Point(x: r.minX + r.size.width / 2, y: r.maxY)
+                : Point(x: r.maxX, y: r.minY + r.size.height / 2)
+            drawMeasurementLabel(EditorText.millimetres(size.length), at: layout.viewPoint(centre))
+        }
+    }
+
+    /// White 10 point digits on a purple rounded rect, centred on `centre`.
+    private func drawMeasurementLabel(_ text: String, at centre: CGPoint) {
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .semibold),
+            .foregroundColor: NSColor.white,
+        ]
+        let label = NSAttributedString(string: text, attributes: attributes)
+        let size = label.size()
+        let box = CGRect(x: centre.x - size.width / 2 - 3, y: centre.y - size.height / 2 - 1.5,
+                         width: size.width + 6, height: size.height + 3)
+        SnapStyle.purple.setFill()
+        NSBezierPath(roundedRect: box, xRadius: 3, yRadius: 3).fill()
+        label.draw(at: CGPoint(x: box.minX + 3, y: box.minY + 1.5))
     }
 
     /// The bleed band (visible area minus trim) lightly tinted, so the cut is obvious.
@@ -648,24 +714,71 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
     }
 
     /// `rect` snapped by `SnapEngine` (targets: the page edges, margins and centres, the other
-    /// frames and texts of the spread, the grid; per `snapSettings`, without the lines inside a
-    /// margin band: `MarginRule.allowedTargets`), threshold 8 points. Sets the guides to draw
-    /// (`mouseDragged` then keeps only those the conformed result touches). No snapping while ⌘
-    /// is held, nor for a ⇧ corner resize (the snapped edges would break the kept ratio).
-    private func snapped(_ rect: Rect, edges: RectEdges, item: LayoutItem, keepAspect: Bool,
-                         flags: NSEvent.ModifierFlags, scale: CGFloat) -> Rect {
+    /// frames and texts of the spread with their equal gaps (`SpacingGuides.spacingLines`) and,
+    /// for a resize, equal sizes (`sizeLines`), the grid; per `snapSettings`, without the lines
+    /// inside a margin band: `MarginRule.allowedTargets`), threshold 8 points. Sets the guides of
+    /// the axes that snapped to an alignment line (`mouseDragged` then keeps only those the
+    /// conformed result touches) and returns the
+    /// reasons of the snap, nil when snapping is off: while ⌘ is held, for a ⇧ corner resize (the
+    /// snapped edges would break the kept ratio) or with both "Přichytávat" and "Mřížka" off.
+    private func snapped(_ rect: Rect, edges: RectEdges, item: LayoutItem, keepAspect: Bool, flags: NSEvent.ModifierFlags,
+                         scale: CGFloat) -> (rect: Rect, reasons: [SnapAxis: SnapReason]?) {
         snapGuides = []
         guard !flags.contains(.command), !keepAspect, snapSettings.grid || snapSettings.objects,
-              let geometry, let model, let page, scale > 0 else { return rect }
-        let others = page.frames.filter { item != .frame($0.id) }.map(\.rect)
-            + page.texts.filter { item != .text($0.id) }.map(\.rect)
-        let targets = MarginRule(geometry: geometry, marginMM: model.marginMM).allowedTargets(
-            SnapEngine.targets(geometry: geometry, marginMM: model.marginMM, area: .spread, others: others,
-                               settings: snapSettings),
-            area: .spread)
+              let geometry, let model, let pageRect = pageRect(containing: rect), scale > 0 else { return (rect, nil) }
+        let others = otherRects(item)
+        var targets = SnapEngine.targets(geometry: geometry, marginMM: model.marginMM, area: .spread, others: others,
+                                         settings: snapSettings)
+        if snapSettings.objects {
+            let spacing = SpacingGuides.spacingLines(for: rect, moving: edges, others: others, page: pageRect)
+            let sizes = SpacingGuides.sizeLines(for: rect, moving: edges, others: others)
+            targets = SnapTargets(x: targets.x + spacing.x + sizes.x, y: targets.y + spacing.y + sizes.y)
+        }
+        targets = MarginRule(geometry: geometry, marginMM: model.marginMM).allowedTargets(targets, area: .spread)
         let result = SnapEngine.snap(rect, moving: edges, to: targets, threshold: Double(Self.snapThreshold / scale))
-        snapGuides = result.guides
-        return result.rect
+        // Only alignment draws a line across the spread; equal gaps and sizes show their distances.
+        snapGuides = result.guides.filter { result.reasons[$0.axis] == .alignment }
+        return (result.rect, result.reasons)
+    }
+
+    /// The stored rects of the spread's frames and texts other than `item`.
+    private func otherRects(_ item: LayoutItem) -> [Rect] {
+        guard let page else { return [] }
+        return page.frames.filter { item != .frame($0.id) }.map(\.rect)
+            + page.texts.filter { item != .text($0.id) }.map(\.rect)
+    }
+
+    /// The trim of the page `rect`'s centre is on.
+    private func pageRect(containing rect: Rect) -> Rect? {
+        guard let geometry,
+              let side = pageSide(at: Point(x: rect.minX + rect.size.width / 2, y: rect.minY + rect.size.height / 2))
+        else { return nil }
+        return geometry.pageRect(side: side)
+    }
+
+    /// Shows the distances around `item` as it now lies (after the margin rule) and, per axis in
+    /// `equalSizes`, the items of the same width or height; cancels a pending clear.
+    private func showMeasurements(_ item: LayoutItem, equalSizes: Set<SnapAxis> = []) {
+        measurementsClear?.cancel()
+        measurementsClear = nil
+        guard let rect = itemRect(item), let pageRect = pageRect(containing: rect) else {
+            measurements = ([], [])
+            return
+        }
+        let others = otherRects(item)
+        let sizes = equalSizes.isEmpty ? []
+            : SpacingGuides.sizeMatches(for: rect, others: others).filter { equalSizes.contains($0.axis) }
+        measurements = (SpacingGuides.gaps(for: rect, others: others, page: pageRect), sizes)
+    }
+
+    /// Removes the guides and distances (mouse up, end of gestures, ⌘ pressed).
+    private func clearSnapMarks() {
+        measurementsClear?.cancel()
+        measurementsClear = nil
+        guard !snapGuides.isEmpty || !measurements.gaps.isEmpty || !measurements.sizes.isEmpty else { return }
+        snapGuides = []
+        measurements = ([], [])
+        needsDisplay = true
     }
 
     override func mouseDragged(with event: NSEvent) {
@@ -683,12 +796,17 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
             let keepAspect = isCorner && event.modifierFlags.contains(.shift)
             let raw = LayoutDrag.rect(from: state.startRect, edges: state.edges, delta: layout.mmDelta(delta),
                                       keepAspect: keepAspect, minSize: MarginRule.minItemMM)
-            let rect = snapped(raw, edges: state.edges, item: state.item, keepAspect: keepAspect,
+            let snap = snapped(raw, edges: state.edges, item: state.item, keepAspect: keepAspect,
                                flags: event.modifierFlags, scale: layout.scale)
             // After an outside commit mid-gesture (e.g. ⌘Z) `updateLayout` starts a new session itself.
-            model.updateLayout(state.item, rect: rect, mode: state.edges == .all ? .move : .resize)
+            model.updateLayout(state.item, rect: snap.rect, mode: state.edges == .all ? .move : .resize)
             // The margin rule may have moved the item off a snap line: draw only the guides it is on.
             if let shown = itemRect(state.item) { snapGuides = SnapEngine.guides(snapGuides, touching: shown) }
+            if let reasons = snap.reasons {
+                showMeasurements(state.item, equalSizes: Set(reasons.filter { $0.value == .equalSize }.keys))
+            } else {
+                clearSnapMarks()
+            }
             needsDisplay = true
             return
         }
@@ -711,12 +829,15 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
     override func mouseUp(with event: NSEvent) {
         if layoutDrag?.began == true { model?.endLayoutChange() }
         layoutDrag = nil
-        if !snapGuides.isEmpty {
-            snapGuides = []
-            needsDisplay = true
-        }
+        clearSnapMarks()
         if drag?.began == true { model?.endTransform() }
         drag = nil
+    }
+
+    /// ⌘ pressed mid-drag turns snapping off: its marks go at once, not on the next move.
+    override func flagsChanged(with event: NSEvent) {
+        if event.modifierFlags.contains(.command) { clearSnapMarks() }
+        super.flagsChanged(with: event)
     }
 
     // MARK: Zoom: scroll wheel and pinch
@@ -851,6 +972,9 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
                 // With the nudge a frame steps between the bleed and the margin line instead of
                 // being pulled back to where it started.
                 model.updateLayout(selected, rect: moved, mode: .move, nudge: nudge)
+                if !event.modifierFlags.contains(.command), snapSettings.grid || snapSettings.objects {
+                    showMeasurements(selected)
+                }
                 needsDisplay = true
                 return
             }
@@ -871,6 +995,12 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
         if layoutArrowSession, Self.arrow(event.keyCode) != nil {
             layoutArrowSession = false
             model?.endLayoutChange()
+            measurementsClear?.cancel()
+            measurementsClear = Task { [weak self] in
+                try? await Task.sleep(for: Self.nudgeMeasurementsDelay)
+                guard !Task.isCancelled else { return }
+                self?.clearSnapMarks()
+            }
             return
         }
         super.keyUp(with: event)
@@ -951,10 +1081,7 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
         layoutDrag = nil
         if layoutArrowSession { model?.endLayoutChange() }
         layoutArrowSession = false
-        if !snapGuides.isEmpty {
-            snapGuides = []
-            needsDisplay = true
-        }
+        clearSnapMarks()
         if drag?.began == true { model?.endTransform() }
         drag = nil
         endScrollSession()
