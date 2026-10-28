@@ -84,6 +84,59 @@ private func makeAlbum() -> Album {
     #expect(edited.spreads[0].frames[1].photoID == "p1")
 }
 
+private let sampleStyle = TextStyle(fontFamily: "Georgia", sizePt: 14, bold: true, alignment: .right,
+                                    colorHex: "#336699")
+
+@Test func setTextStyleAndUndo() throws {
+    var original = makeAlbum()
+    original.spreads[0].manuallyEdited = false
+    let (edited, inverse) = try original.applying(.setTextStyle(spreadID: "s1", textID: "t1", style: sampleStyle))
+    #expect(edited.spreads[0].texts[0].style == sampleStyle)
+    #expect(edited.spreads[0].texts[0].text == "old")
+    #expect(edited.spreads[0].manuallyEdited)
+    let (restored, redo) = try edited.applying(inverse)
+    #expect(restored == original)
+    #expect(restored.spreads[0].texts[0].style == nil && !restored.spreads[0].manuallyEdited)
+    #expect(try restored.applying(redo).album == edited)
+    // Clearing a style is undoable too.
+    let (cleared, clearInverse) = try edited.applying(.setTextStyle(spreadID: "s1", textID: "t1", style: nil))
+    #expect(cleared.spreads[0].texts[0].style == nil)
+    #expect(try cleared.applying(clearInverse).album == edited)
+}
+
+@Test func setTextStyleClampsSize() throws {
+    func stored(_ size: Double) throws -> Double? {
+        let (edited, _) = try makeAlbum().applying(
+            .setTextStyle(spreadID: "s1", textID: "t1", style: TextStyle(sizePt: size, bold: true)))
+        return edited.spreads[0].texts[0].style?.sizePt
+    }
+    #expect(try stored(300) == 200)
+    #expect(try stored(2) == 6)
+    #expect(try stored(12) == 12)
+    #expect(try stored(.nan) == nil)
+    #expect(try stored(.infinity) == nil)
+}
+
+@Test func emptyStyleStoredAsNil() throws {
+    var album = makeAlbum()
+    album.spreads[0].texts[0].style = sampleStyle
+    let (edited, _) = try album.applying(.setTextStyle(spreadID: "s1", textID: "t1", style: TextStyle()))
+    #expect(edited.spreads[0].texts[0].style == nil)
+    // A style that is empty only after the NaN size is dropped counts as empty too.
+    let (nan, _) = try album.applying(.setTextStyle(spreadID: "s1", textID: "t1", style: TextStyle(sizePt: .nan)))
+    #expect(nan.spreads[0].texts[0].style == nil)
+}
+
+@Test func setTextStyleUnknownIDsThrow() {
+    let album = makeAlbum()
+    #expect(throws: AlbumEditError.unknownText) {
+        try album.applying(.setTextStyle(spreadID: "s1", textID: "nope", style: sampleStyle))
+    }
+    #expect(throws: AlbumEditError.unknownSpread) {
+        try album.applying(.setTextStyle(spreadID: "nope", textID: "t1", style: sampleStyle))
+    }
+}
+
 @Test func setFrameTransformClamps() throws {
     let (edited, _) = try makeAlbum().applying(
         .setFrameTransform(spreadID: "s1", frameID: "f1", offset: Point(x: 3, y: -3), zoom: 0.5))

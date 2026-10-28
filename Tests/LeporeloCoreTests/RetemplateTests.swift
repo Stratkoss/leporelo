@@ -98,6 +98,23 @@ import Foundation
         #expect(r.spread.frames.filter { $0.photoID == nil }.count == 1)
     }
 
+    @Test func retemplateCarriesStyle() throws {
+        let ps = [D.photo("a", day: D.june18, minute: 0)]
+        var old = try Self.spread("gallery-1", ps, texts: ["caption": "Minori"])
+        let style = TextStyle(fontFamily: "Georgia", sizePt: 18, italic: true, colorHex: "#112233")
+        old.texts[0].style = style
+        let target = try #require(TemplateCatalog.template(id: "gallery-2"))
+
+        // By slot id.
+        let byID = TemplateLayout.retemplate(old, to: target, geometry: try Self.geometry(), photos: Self.byID(ps))
+        #expect(byID.spread.texts.first { $0.role == .caption }?.style == style)
+        // By role, when the id differs.
+        old.texts[0].id = "legacy-caption"
+        let byRole = TemplateLayout.retemplate(old, to: target, geometry: try Self.geometry(), photos: Self.byID(ps))
+        #expect(byRole.spread.texts.first { $0.role == .caption }?.style == style)
+        #expect(byRole.spread.texts.first { $0.role == .caption }?.text == "Minori")
+    }
+
     @Test func photosMissingFromTheAlbumAreNotPlaced() throws {
         let ps = [D.photo("a", day: D.june18, minute: 0), D.photo("b", day: D.june18, minute: 1)]
         let old = try Self.spread("gallery-2", ps)

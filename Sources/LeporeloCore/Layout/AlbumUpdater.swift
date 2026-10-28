@@ -470,6 +470,7 @@ public enum AlbumUpdater {
                     guard let o = source(oldTexts, catalog[i].texts[t].id, side) else { continue }
                     takenTexts.insert(o)
                     catalog[i].texts[t].text = old.texts[o].text
+                    catalog[i].texts[t].style = old.texts[o].style
                 }
             }
             let catalogFrameIDs = catalog.flatMap { $0.frames.map(\.id) }
@@ -518,7 +519,10 @@ public enum AlbumUpdater {
             spread.frames[i].zoom = o.zoom
         }
         for i in spread.texts.indices {
-            if let o = old.texts.first(where: { $0.id == spread.texts[i].id }) { spread.texts[i].text = o.text }
+            if let o = old.texts.first(where: { $0.id == spread.texts[i].id }) {
+                spread.texts[i].text = o.text
+                spread.texts[i].style = o.style
+            }
         }
         return spread
     }

@@ -54,6 +54,39 @@ import Foundation
         #expect(decoded == album)
     }
 
+    private static let styled = TextStyle(fontFamily: "Georgia", sizePt: 14, bold: true, italic: true,
+                                          alignment: .center, colorHex: "#336699")
+
+    @Test func decodesTextBoxWithoutStyle() throws {
+        // A text box as written before `style` existed: the JSON has no `style` key at all.
+        let data = try AlbumCoding.encoder().encode(
+            TextBox(id: "t1", rect: Rect(x: 1, y: 2, width: 3, height: 4), role: .caption, text: "Ahoj"))
+        var object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        object.removeValue(forKey: "style")
+        let json = try JSONSerialization.data(withJSONObject: object)
+        let box = try AlbumCoding.decoder().decode(TextBox.self, from: json)
+        #expect(box.style == nil)
+        #expect(box.text == "Ahoj")
+    }
+
+    @Test func styleRoundTrips() throws {
+        let box = TextBox(id: "t1", rect: Rect(x: 1, y: 2, width: 3, height: 4), role: .title, text: "x",
+                          style: Self.styled)
+        let data = try AlbumCoding.encoder().encode(box)
+        #expect(try AlbumCoding.decoder().decode(TextBox.self, from: data) == box)
+        // A style with only some fields set decodes back to the same value.
+        let partial = TextBox(id: "t2", rect: Rect(x: 0, y: 0, width: 1, height: 1), role: .body, text: "",
+                              style: TextStyle(bold: true))
+        let back = try AlbumCoding.decoder().decode(TextBox.self, from: try AlbumCoding.encoder().encode(partial))
+        #expect(back == partial)
+    }
+
+    @Test func nilStyleIsNotEncoded() throws {
+        let box = TextBox(id: "t1", rect: Rect(x: 1, y: 2, width: 3, height: 4), role: .caption, text: "x")
+        let json = String(decoding: try AlbumCoding.encoder().encode(box), as: UTF8.self)
+        #expect(!json.contains("\"style\""))
+    }
+
     @Test func photoWithoutSelectionDecidedKeyDecodesAsUndecided() throws {
         // An album.json written before `selectionDecidedByUser` existed.
         var album = Album(

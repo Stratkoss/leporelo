@@ -9,6 +9,8 @@ public enum AlbumEdit: Sendable, Codable, Equatable {
     case swapFramePhotos(spreadID: String, frameA: String, frameB: String)
     case setFrameTransform(spreadID: String, frameID: String, offset: Point, zoom: Double)
     case setText(spreadID: String, textID: String, text: String)
+    /// Sets (or with nil clears) a text's own style; see `Album.sanitizedTextStyle`.
+    case setTextStyle(spreadID: String, textID: String, style: TextStyle?)
     case moveSpread(from: Int, to: Int)
     case insertSpread(Spread, at: Int)
     case deleteSpread(id: String)
@@ -32,6 +34,17 @@ extension Album {
     /// then clamped to 1...`maxFrameZoom`.
     static func sanitizedZoom(_ zoom: Double) -> Double {
         zoom.isFinite ? min(maxFrameZoom, max(1, zoom)) : 1
+    }
+
+    /// A text style as stored: nil or a style equal to the default -> nil, size clamped to
+    /// `TextStyle.sizeRangePt` (NaN or infinite -> nil, JSON cannot encode them).
+    static func sanitizedTextStyle(_ style: TextStyle?) -> TextStyle? {
+        guard var style else { return nil }
+        if let size = style.sizePt {
+            style.sizePt = size.isFinite
+                ? min(TextStyle.sizeRangePt.upperBound, max(TextStyle.sizeRangePt.lowerBound, size)) : nil
+        }
+        return style == TextStyle() ? nil : style
     }
 
     /// Offset component as stored: NaN or infinite -> 0, then clamped to -1...1.
@@ -110,6 +123,15 @@ extension Album {
                     throw AlbumEditError.unknownText
                 }
                 spread.texts[i].text = text
+            }
+            return (album, inverse)
+
+        case let .setTextStyle(spreadID, textID, style):
+            let inverse = try mutateSpread(spreadID) { spread in
+                guard let i = spread.texts.firstIndex(where: { $0.id == textID }) else {
+                    throw AlbumEditError.unknownText
+                }
+                spread.texts[i].style = Self.sanitizedTextStyle(style)
             }
             return (album, inverse)
 

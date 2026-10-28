@@ -592,6 +592,37 @@ import Foundation
         }
     }
 
+    @Test func changeFormatCarriesTextStyle() throws {
+        let style = TextStyle(fontFamily: "Georgia", sizePt: 22, italic: true, colorHex: "#445566")
+        // A template spread is instantiated afresh and takes the text and its style over by id.
+        let (p, f) = try D.canva()
+        let square = try #require(p.formats.first { $0.id == "square-21" })
+        var legacy = Self.legacyDraft([D.day(Self.june18, D.dayPhotos("a", Self.june18, count: 8))],
+                                      profile: p, format: f)
+        let withText = try #require(legacy.spreads.firstIndex { !$0.texts.isEmpty })
+        legacy.spreads[withText].texts[0].style = style
+        let id = legacy.spreads[withText].id
+        let b = AlbumUpdater.changeFormat(album: legacy, to: square, profile: p)
+        #expect(b.spreads.first { $0.id == id }?.texts[0].style == style)
+
+        // A page with a layout id is rebuilt from the catalog and keeps the style by text id.
+        let (p2, small) = try D.canva(Self.lax, formatID: "landscape-8x6in")
+        let a4 = try #require(p2.formats.first { $0.id == "landscape-a4" })
+        var a = D.draft([D.day(Self.june18, D.dayPhotos("a", Self.june18, count: 4))], profile: p2, format: small)
+        var spread = PageSpread.compose(left: try #require(PageLayoutCatalog.layout(id: "opener-2l")),
+                                        right: try #require(PageLayoutCatalog.layout(id: "framed-1")),
+                                        kind: .gallery, dayKey: Self.june18, id: "styled",
+                                        geometry: Self.geometry(p2, small), marginMM: a.marginMM)
+        #expect(!spread.texts.isEmpty)
+        for i in spread.texts.indices { spread.texts[i].style = style }
+        spread.pageLayouts = ["opener-2l", "framed-1"]
+        a.spreads.insert(spread, at: a.spreads.count - 1)
+        let c = AlbumUpdater.changeFormat(album: a, to: a4, profile: p2)
+        let new = try #require(c.spreads.first { $0.id == "styled" })
+        #expect(new.texts.map(\.id) == spread.texts.map(\.id))
+        #expect(new.texts.allSatisfy { $0.style == style })
+    }
+
     // MARK: - settingMargin
 
     @Test func settingMarginConformsAllSpreadsAndCover() throws {

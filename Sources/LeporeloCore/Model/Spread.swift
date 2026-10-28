@@ -26,17 +26,52 @@ public enum TextRole: String, Sendable, Codable, Equatable {
     case date, title, body, caption, pageNumber
 }
 
+/// Horizontal alignment of a text inside its box.
+public enum TextAlignment: String, Sendable, Codable, Equatable {
+    case left, center, right
+}
+
+/// A text's own look. Every nil (or false) field falls back to the default of the text's role.
+public struct TextStyle: Sendable, Codable, Equatable {
+    /// nil = the role's default family.
+    public var fontFamily: String?
+    /// nil = the role's default size; stored clamped to `sizeRangePt`.
+    public var sizePt: Double?
+    public var bold: Bool
+    public var italic: Bool
+    /// nil = the role's default (a page number sits right on the right page).
+    public var alignment: TextAlignment?
+    /// "#RRGGBB" in sRGB; nil = the default near-black.
+    public var colorHex: String?
+
+    public init(fontFamily: String? = nil, sizePt: Double? = nil, bold: Bool = false, italic: Bool = false,
+                alignment: TextAlignment? = nil, colorHex: String? = nil) {
+        self.fontFamily = fontFamily
+        self.sizePt = sizePt
+        self.bold = bold
+        self.italic = italic
+        self.alignment = alignment
+        self.colorHex = colorHex
+    }
+
+    /// The font sizes a text can have, in points.
+    public static let sizeRangePt: ClosedRange<Double> = 6...200
+}
+
 public struct TextBox: Sendable, Codable, Equatable {
     public var id: String
     public var rect: Rect
     public var role: TextRole
     public var text: String
+    /// The text's own look; nil = the defaults of its role.
+    public var style: TextStyle?
 
-    public init(id: String, rect: Rect, role: TextRole, text: String) {
+    public init(id: String, rect: Rect, role: TextRole, text: String, style: TextStyle? = nil) {
         self.id = id
         self.rect = rect
         self.role = role
         self.text = text
+        self.style = style
     }
 }
 

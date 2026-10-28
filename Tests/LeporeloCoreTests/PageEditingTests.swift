@@ -169,6 +169,20 @@ import Foundation
         #expect(try Self.apply("landscape-2", to: blankTexts, ps).droppedTexts.isEmpty)
     }
 
+    @Test func pageLayoutChangeCarriesStyle() throws {
+        let ps = Self.photos("a", [true, true])
+        var s = try Self.spread("opener-2l", ps)
+        let style = TextStyle(fontFamily: "Georgia", sizePt: 30, bold: true, alignment: .center)
+        for i in s.texts.indices {
+            s.texts[i].text = "text \(s.texts[i].role)"
+            s.texts[i].style = style
+        }
+        let r = try Self.apply("opener-3", to: s, ps)
+        #expect(!r.spread.texts.isEmpty)
+        #expect(r.spread.texts.map(\.text) == s.texts.map(\.text))
+        #expect(r.spread.texts.allSatisfy { $0.style == style })
+    }
+
     @Test func applyingKeepsSquareOutOfTheWrongOrientation() throws {
         // A square is the best photo; the ▯ must still get the only ▯ frame.
         let portrait = T.photo("p", day: Self.day, minute: 0, landscape: false, aesthetic: 0.1)

@@ -146,6 +146,7 @@ public enum PageEditing {
                     used.insert(match)
                     filled.insert(i)
                     texts[i].text = oldTexts[match].text
+                    texts[i].style = oldTexts[match].style
                 }
             }
         }

@@ -291,6 +291,7 @@ extension TemplateLayout {
                     used.insert(match)
                     filled.insert(i)
                     result.texts[i].text = spread.texts[match].text
+                    result.texts[i].style = spread.texts[match].style
                 }
             }
         }

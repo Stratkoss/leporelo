@@ -312,6 +312,7 @@ final class AlbumStore {
         case .swapFramePhotos: "Prohodit fotky"
         case .setFrameTransform: "Posunout fotku"
         case .setText: "Upravit text"
+        case .setTextStyle: "Změnit písmo"
         case .moveSpread: "Přesunout dvoustranu"
         case .insertSpread: "Přidat dvoustranu"
         case .deleteSpread: "Smazat dvoustranu"
