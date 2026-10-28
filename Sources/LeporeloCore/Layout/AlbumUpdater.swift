@@ -330,7 +330,8 @@ public enum AlbumUpdater {
                 }
                 return rule.conform(scaled, area: .spread)
             }
-            return reinstantiated(old, geometry: geometry, marginMM: album.marginMM) ?? old
+            return reinstantiated(old, geometry: geometry, marginMM: album.marginMM)
+                ?? rule.conform(old, area: .spread)
         }
         if let old = album.cover {
             let oldFrame = old.front.frames.first

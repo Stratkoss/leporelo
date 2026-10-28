@@ -656,6 +656,8 @@ enum EditorText {
     static let resetCrop = "Obnovit výřez"
     static let grid = "Mřížka"
     static let guides = "Vodítka"
+    static let marginIntrusion = "Některé fotky sahají až ke kraji stránky"
+    static let fitToMargin = "Srovnat do okraje"
     static let snap = "Přichytávat"
     static let fontFamily = "Písmo"
     static let fontSize = "Velikost"

@@ -1654,6 +1654,26 @@ struct EditorLayoutTests {
         #expect(undo.undoActionName == "Změnit okraj")
     }
 
+    /// „Srovnat do okraje“ is offered only while a frame intrudes and fixes the book in one step.
+    @Test func fitToMarginFixesIntrudingFramesInOneStep() throws {
+        var album = try standardAlbum()
+        let s = try #require(album.spreads.firstIndex { !$0.frames.isEmpty })
+        album.spreads[s].customLayout = true
+        album.spreads[s].frames[0].rect = Rect(x: 0, y: 30, width: 100, height: 80)
+        let (model, store, undo) = try makeModel(album)
+        let before = store.album
+        #expect(model.hasFrameIntrudingMargin)
+
+        step(undo) { model.fitToMargin() }
+        #expect(!model.hasFrameIntrudingMargin)
+        #expect(store.album.marginMM == before.marginMM)
+        #expect(store.album.spreads[s].frames[0].rect == Rect(x: 6, y: 30, width: 94, height: 80))
+        #expect(undo.undoActionName == "Změnit okraj")
+        undo.undo()
+        #expect(store.album == before)
+        #expect(model.hasFrameIntrudingMargin)
+    }
+
     @Test func newSpreadsAndTemplatesUseTheAlbumMargin() throws {
         var album = try standardAlbum()
         album.marginMM = 25

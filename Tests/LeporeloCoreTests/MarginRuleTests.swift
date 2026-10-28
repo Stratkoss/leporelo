@@ -280,8 +280,11 @@ import Foundation
         // In the band just across the spine: back to the frame's own page.
         #expect(rule.conformFrame(Self.frame(x0: 200, x1: 299), area: .spread).maxX == 291)
         #expect(rule.conformFrame(Self.frame(x0: 295, x1: 400), area: .spread).minX == 303)
-        // Two halves of a page meeting at the spine keep a gap of twice the margin.
+        // A sliver left of the spine stays on the left page.
         #expect(rule.conformFrame(Self.frame(x0: 293, x1: 297), area: .spread).maxX <= 291)
+        // Two halves meeting at the spine keep a gap of twice the margin.
+        #expect(rule.conformFrame(Self.frame(x0: 100, x1: 297), area: .spread).maxX == 291)
+        #expect(rule.conformFrame(Self.frame(x0: 297, x1: 500), area: .spread).minX == 303)
     }
 
     @Test func frameAcrossSpineStaysAllowed() throws {

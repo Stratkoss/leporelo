@@ -872,7 +872,7 @@ final class EditorModel {
     /// `conformFrame` for `.resize`; a text by `conformMovedText` for `.move` (it only shifts
     /// unless larger than the margin box) or `conformText` for `.resize` (the dragged edge is
     /// clamped, the box does not shift). `nudge` is the arrow-key step that produced `rect`: a
-    /// moved frame then steps between the bleed and the margin line instead of being pulled back
+    /// moved frame then steps between the margin lines instead of being pulled back
     /// (`conformMovedFrame(_:area:nudge:)`); nil for a mouse drag. Without a running session for
     /// `item` it starts one on the current spread first (committing any other session). A
     /// non-finite rectangle is ignored.
@@ -992,9 +992,15 @@ final class EditorModel {
         store.replace(album: updated, actionName: "Změnit okraj", undoManager: undoManager)
     }
 
+    /// „Srovnat do okraje“: re-conforms the whole book to its current margin (`setMargin` at the
+    /// same value), one step „Změnit okraj“. Nothing when no frame intrudes.
+    func fitToMargin() {
+        setMargin(store.album.marginMM)
+    }
+
     /// True when a frame of a spread or of the cover intrudes the book's margin
-    /// (`MarginRule.frameIntrudesMargin`).
-    private var hasFrameIntrudingMargin: Bool {
+    /// (`MarginRule.frameIntrudesMargin`), e.g. a photo to the page edge in an older book.
+    var hasFrameIntrudingMargin: Bool {
         let rule = marginRule
         let spreads = store.album.spreads.contains { spread in
             spread.frames.contains { rule.frameIntrudesMargin($0.rect, area: .spread) }

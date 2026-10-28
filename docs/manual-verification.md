@@ -129,7 +129,7 @@ Nic z tohoto oddílu se při stavbě nedalo ověřit v běžící aplikaci (ovl�
 - [ ] Mřížka: ukáže mřížku 5 mm a přichytává k ní; po restartu aplikace zůstane, jak byla.
 - [ ] Přichytávat: vypnuté = fotka se chytá jen k mřížce (je-li zapnutá); po restartu zůstane.
 - [ ] Okraj: šipky mění po 1 mm od bezpečné zóny profilu (u Canvy 6 mm) do 30 mm; všechny dvoustrany se upraví a jedno ⌘Z to vrátí.
-- [ ] Žádná fotka se nedotkne kraje stránky ani hřbetu, všude je aspoň okraj (výchozí 6 mm), i na obálce. Starou knihu opraví nastavení okraje (i na stejnou hodnotu).
+- [ ] Žádná fotka se nedotkne kraje stránky ani hřbetu, všude je aspoň okraj (výchozí 6 mm), i na obálce. U staré knihy se nad plátnem ukáže „Některé fotky sahají až ke kraji stránky“ a „Srovnat do okraje“ ji opraví (jedno ⌘Z vrátí); pak lišta zmizí.
 - [ ] Zúžené okno: položky, které se nevejdou, jsou v nabídce » s čitelným názvem. Hlavně zkus „Okraj“: dá se z přetékající nabídky vůbec změnit? (Podezření z kódu: krokovač v nabídce nefunguje.)
 - [ ] Zpět do třídění, Navrhnout znovu (dialog s počtem zachovaných dvoustran), Formát (fajfka u aktuálního, změna s potvrzením), Exportovat… (vypnuté bez dvoustran), Třídění / Dvoustrany.
 

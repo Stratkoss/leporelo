@@ -56,7 +56,7 @@ struct EditorView: View {
     @AppStorage("editor.showGrid") private var showGrid = false
     /// "Vodítka": the trim, safe zone, spine and bleed band; off = the page as it will be cut.
     @AppStorage("editor.showGuides") private var showGuides = false
-    /// "Přichytávat": snaps to page edges, margins, centres and the other items.
+    /// "Přichytávat": snaps to the margin line, page centres and the other items.
     @AppStorage("editor.snapObjects") private var snapObjects = true
 
     var body: some View {
@@ -65,6 +65,7 @@ struct EditorView: View {
                 VStack(spacing: 0) {
                     if canvasContent != nil { TextToolsBar(model: model) }
                     issueBanner
+                    marginBanner
                     canvas
                     Text(model.coverSide == nil ? EditorText.canvasHint : EditorText.coverReadOnly)
                         .font(.caption)
@@ -201,6 +202,22 @@ struct EditorView: View {
             ContentUnavailableView("Album zatím nemá dvoustrany", systemImage: "book.pages",
                                    description: Text("Vraťte se do třídění a navrhněte album."))
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    /// „Některé fotky sahají až ke kraji stránky“ with „Srovnat do okraje“: an older book with photos
+    /// to the page edge or spine; one click re-conforms it (`EditorModel.fitToMargin`).
+    @ViewBuilder private var marginBanner: some View {
+        if model.hasFrameIntrudingMargin {
+            HStack {
+                Label(EditorText.marginIntrusion, systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                Spacer()
+                Button(EditorText.fitToMargin) { model.fitToMargin() }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(.bar)
         }
     }
 

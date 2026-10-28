@@ -267,7 +267,7 @@ public enum AlbumDrafter {
     public static let coverFrontTemplateID = "cover-front"
 
     /// The cover for `format`, built directly from the page size (one page, origin 0,0).
-    /// Front: the photo fills the page (bleed is added by the exporter) and the title sits near the
+    /// Front: the photo fills the page inside the margin and the title sits near the
     /// top inside the safe zone. Back: blank. Used by `draft` and by anything that rebuilds the cover.
     /// The result is conformed to `marginMM` (`MarginRule.conform`, area `.cover`).
     public static func cover(title: String, photoID: PhotoID?, format: BookFormat,
