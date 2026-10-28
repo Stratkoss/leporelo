@@ -27,7 +27,7 @@ Přepínač „Přichytávat“ zapíná první a druhé patro, „Mřížka“ 
 
 **Odskok o pixely (moje volba):** builder navíc ověří, že dvě položky se stejnou souřadnicí hrany se na plátně i v PDF kreslí na stejném pixelu (zaokrouhlení v `CanvasLayout.viewRect`, spadávka u hrany stránky). Pokud ne, opraví to. ⌘ při tažení přichytávání vypne jako dnes. ⇧ na rohu drží poměr stran a nepřichytává jako dnes.
 
-Dosah zůstává 8 bodů na obrazovce. Pevná mezera 4 mm od hran ostatních položek (`SnapSettings.gapMM`) zůstává jako cíl prvního patra.
+Dosah zůstává 8 bodů na obrazovce. Pevná mezera 4 mm od hran ostatních položek (`SnapSettings.gapMM`) zůstává jako cíl druhého patra (stránka).
 
 Přichycená poloha je přesně na cíli, bez zaokrouhlení. Pravidlo okraje (`MarginRule`) má dál poslední slovo: cíle v zakázaném pásu se vůbec nenabízejí (`allowedTargets`) a když pravidlo okraje položku posune, vodítko, na kterém už neleží, se nekreslí.
 
