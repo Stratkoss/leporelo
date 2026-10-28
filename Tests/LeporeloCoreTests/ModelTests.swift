@@ -162,7 +162,7 @@ import Foundation
         #expect(!text.contains("marginMM") && !text.contains("customLayout"))
 
         let decoded = try AlbumCoding.decoder().decode(Album.self, from: legacy)
-        #expect(decoded.marginMM == 10)
+        #expect(decoded.marginMM == Album.defaultMarginMM && decoded.marginMM == 6)
         #expect(decoded.spreads[0].customLayout == false)
 
         var changed = decoded

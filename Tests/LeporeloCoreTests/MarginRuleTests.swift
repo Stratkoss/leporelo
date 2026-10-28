@@ -12,18 +12,23 @@ import Foundation
         MarginRule(geometry: try geometry(), marginMM: margin)
     }
 
+    /// The rule with bleed allowed: an edge ON a page edge is fine (the behaviour kept switchable).
+    static func bleedRule(margin: Double = 10) throws -> MarginRule {
+        MarginRule(geometry: try geometry(), marginMM: margin, allowsBleed: true)
+    }
+
     static func frame(x0: Double, x1: Double, y0: Double = 50, y1: Double = 150) -> Rect {
         Rect(x: x0, y: y0, width: x1 - x0, height: y1 - y0)
     }
 
     @Test func frameEdgeInBandSnapsToNearerSide() throws {
-        let rule = try Self.rule()
+        let rule = try Self.bleedRule()
         #expect(rule.conformFrame(Self.frame(x0: 4, x1: 100), area: .spread).minX == 0)
         #expect(rule.conformFrame(Self.frame(x0: 7, x1: 100), area: .spread).minX == 10)
     }
 
     @Test func frameOnPageEdgeAndSpineStays() throws {
-        let rule = try Self.rule()
+        let rule = try Self.bleedRule()
         let right = Rect(x: 297, y: 0, width: 297, height: 210)
         let left = Rect(x: 0, y: 0, width: 297, height: 210)
         #expect(rule.conformFrame(right, area: .spread) == right)
@@ -31,7 +36,7 @@ import Foundation
     }
 
     @Test func frameNearSpineSnaps() throws {
-        let rule = try Self.rule()
+        let rule = try Self.bleedRule()
         #expect(rule.conformFrame(Self.frame(x0: 200, x1: 290), area: .spread).maxX == 287)
         #expect(rule.conformFrame(Self.frame(x0: 200, x1: 295), area: .spread).maxX == 297)
         #expect(rule.conformFrame(Self.frame(x0: 300, x1: 400), area: .spread).minX == 297)
@@ -58,11 +63,11 @@ import Foundation
     // MARK: Moves keep the size
 
     @Test func movedFrameKeepsSizeAndLeavesBand() throws {
-        let rule = try Self.rule()
+        let rule = try Self.bleedRule()
         // Both edges 7 mm from the trim (in the band): the whole frame moves to the margin line.
         #expect(rule.conformMovedFrame(Rect(x: 7, y: 7, width: 100, height: 80), area: .spread)
                 == Rect(x: 10, y: 10, width: 100, height: 80))
-        let wide = try Self.rule(margin: 20)
+        let wide = try Self.bleedRule(margin: 20)
         #expect(wide.conformMovedFrame(Rect(x: 14, y: 14, width: 100, height: 80), area: .spread)
                 == Rect(x: 20, y: 20, width: 100, height: 80))
         // Already conforming: unchanged.
@@ -71,7 +76,7 @@ import Foundation
     }
 
     @Test func movedFrameSnapsToBleedEdgeWhenCloser() throws {
-        let rule = try Self.rule()
+        let rule = try Self.bleedRule()
         #expect(rule.conformMovedFrame(Rect(x: 3, y: 3, width: 100, height: 80), area: .spread)
                 == Rect(x: 0, y: 0, width: 100, height: 80))
         // Outside the area: clamped in without resizing.
@@ -80,7 +85,7 @@ import Foundation
     }
 
     @Test func movedFrameNearSpineShiftsWholly() throws {
-        let rule = try Self.rule()
+        let rule = try Self.bleedRule()
         // maxX 293 is 4 mm before the spine: onto the spine.
         #expect(rule.conformMovedFrame(Self.frame(x0: 201, x1: 293), area: .spread) == Self.frame(x0: 205, x1: 297))
         // maxX 291 is 6 mm before the spine: back to the margin line.
@@ -92,7 +97,7 @@ import Foundation
     }
 
     @Test func movedFrameTooWideFallsBack() throws {
-        let rule = try Self.rule()
+        let rule = try Self.bleedRule()
         // 290 mm wide on a 297 mm page: no shift clears both bands.
         let tight = Rect(x: 3, y: 50, width: 290, height: 100)
         #expect(rule.conformMovedFrame(tight, area: .spread) == rule.conformFrame(tight, area: .spread))
@@ -116,7 +121,7 @@ import Foundation
     }
 
     @Test func arrowFromTheBleedEdgeStepsToTheMarginLine() throws {
-        let rule = try Self.rule()
+        let rule = try Self.bleedRule()
         let bleed = Rect(x: 0, y: 50, width: 100, height: 100)
         #expect(Self.nudged(bleed, dx: 1, rule: rule) == Rect(x: 10, y: 50, width: 100, height: 100))
         #expect(Self.nudged(bleed, dx: 5, rule: rule) == Rect(x: 10, y: 50, width: 100, height: 100))
@@ -130,7 +135,7 @@ import Foundation
     }
 
     @Test func arrowFromTheMarginLineStepsToTheBleedEdge() throws {
-        let rule = try Self.rule()
+        let rule = try Self.bleedRule()
         // ⇧→ from the right margin line before the spine: a tie (5 mm either way) used to fall back.
         let atLine = Rect(x: 187, y: 50, width: 100, height: 100)
         #expect(Self.nudged(atLine, dx: 5, rule: rule).maxX == 297)
@@ -143,7 +148,7 @@ import Foundation
     }
 
     @Test func arrowStepsBetweenBleedAndMarginOnTheYAxis() throws {
-        let rule = try Self.rule()
+        let rule = try Self.bleedRule()
         let top = Rect(x: 50, y: 0, width: 100, height: 100)
         #expect(Self.nudged(top, dy: 1, rule: rule).minY == 10)
         #expect(Self.nudged(top, dy: 5, rule: rule).minY == 10)
@@ -159,7 +164,7 @@ import Foundation
     }
 
     @Test func arrowAwayFromTheMarginMovesByTheStep() throws {
-        let rule = try Self.rule()
+        let rule = try Self.bleedRule()
         let free = Rect(x: 50, y: 50, width: 100, height: 100)
         #expect(Self.nudged(free, dx: 1, rule: rule) == Rect(x: 51, y: 50, width: 100, height: 100))
         #expect(Self.nudged(free, dy: -5, rule: rule) == Rect(x: 50, y: 45, width: 100, height: 100))
@@ -196,7 +201,7 @@ import Foundation
     }
 
     @Test func preflightHelpersSeeTheBand() throws {
-        let rule = try Self.rule()
+        let rule = try Self.bleedRule()
         #expect(rule.frameIntrudesMargin(Self.frame(x0: 4, x1: 100), area: .spread))
         #expect(rule.frameIntrudesMargin(Self.frame(x0: 200, x1: 292), area: .spread))
         #expect(!rule.frameIntrudesMargin(Self.frame(x0: 0, x1: 100), area: .spread))
@@ -229,7 +234,7 @@ import Foundation
     }
 
     @Test func conformChangesOnlyRectsAndKeepsEverythingElse() throws {
-        let rule = try Self.rule()
+        let rule = try Self.bleedRule()
         let spread = Spread(
             id: "s", kind: .gallery, templateID: "t", dayKey: nil,
             frames: [Frame(id: "f", rect: Self.frame(x0: 4, x1: 100), photoID: "p",
@@ -243,6 +248,126 @@ import Foundation
         expected.frames[0].rect = result.frames[0].rect
         expected.texts[0].rect = result.texts[0].rect
         #expect(result == expected)
+    }
+
+    // MARK: No bleed (the default): every frame edge keeps the margin from every page edge
+
+    @Test func defaultMarginIsSixMillimetres() {
+        #expect(Album.defaultMarginMM == 6)
+    }
+
+    @Test func ruleDisallowsBleedByDefault() throws {
+        #expect(try !Self.rule().allowsBleed)
+        #expect(try Self.bleedRule().allowsBleed)
+    }
+
+    @Test func edgeOnTrimMovesToMarginLine() throws {
+        let rule = try Self.rule(margin: 6)
+        #expect(rule.conformFrame(Self.frame(x0: 0, x1: 100), area: .spread) == Self.frame(x0: 6, x1: 100))
+        // Closer than half the margin no longer means the trim: also the margin line.
+        #expect(rule.conformFrame(Self.frame(x0: 2, x1: 100, y0: 0, y1: 210), area: .spread)
+                == Self.frame(x0: 6, x1: 100, y0: 6, y1: 204))
+        #expect(rule.conformFrame(Self.frame(x0: 400, x1: 594), area: .spread).maxX == 588)
+        // A whole page becomes the page inset by the margin.
+        #expect(rule.conformFrame(Rect(x: 0, y: 0, width: 297, height: 210), area: .spread)
+                == Rect(x: 6, y: 6, width: 285, height: 198))
+    }
+
+    @Test func edgeNearSpineGoesToItsSideOfTheSpine() throws {
+        let rule = try Self.rule(margin: 6)
+        #expect(rule.conformFrame(Self.frame(x0: 200, x1: 297), area: .spread) == Self.frame(x0: 200, x1: 291))
+        #expect(rule.conformFrame(Self.frame(x0: 297, x1: 400), area: .spread) == Self.frame(x0: 303, x1: 400))
+        // In the band just across the spine: back to the frame's own page.
+        #expect(rule.conformFrame(Self.frame(x0: 200, x1: 299), area: .spread).maxX == 291)
+        #expect(rule.conformFrame(Self.frame(x0: 295, x1: 400), area: .spread).minX == 303)
+        // Two halves of a page meeting at the spine keep a gap of twice the margin.
+        #expect(rule.conformFrame(Self.frame(x0: 293, x1: 297), area: .spread).maxX <= 291)
+    }
+
+    @Test func frameAcrossSpineStaysAllowed() throws {
+        let rule = try Self.rule(margin: 6)
+        let across = Self.frame(x0: 200, x1: 400)
+        #expect(rule.conformFrame(across, area: .spread) == across)
+        #expect(rule.conformMovedFrame(across, area: .spread) == across)
+        #expect(!rule.frameIntrudesMargin(across, area: .spread))
+    }
+
+    @Test func tooSmallFrameStartsAtTheInnerMarginLine() throws {
+        let rule = try Self.rule(margin: 30)
+        let corner = rule.conformFrame(Rect(x: 2, y: 2, width: 12, height: 12), area: .spread)
+        #expect(corner == Rect(x: 30, y: 30, width: 10, height: 10))
+        // Centre left of the spine: ends at the margin line before it.
+        let spine = rule.conformFrame(Self.frame(x0: 290, x1: 296), area: .spread)
+        #expect(spine.minX == 257 && spine.maxX == 267)
+        // Centre right of the spine: starts at the margin line after it.
+        let right = rule.conformFrame(Self.frame(x0: 298, x1: 304), area: .spread)
+        #expect(right.minX == 327 && right.maxX == 337)
+    }
+
+    @Test func movedFrameKeepsSizeAndStaysOffTheEdge() throws {
+        let rule = try Self.rule(margin: 6)
+        #expect(rule.conformMovedFrame(Rect(x: -2, y: 50, width: 100, height: 100), area: .spread)
+                == Rect(x: 6, y: 50, width: 100, height: 100))
+        #expect(rule.conformMovedFrame(Rect(x: 2, y: 112, width: 100, height: 100), area: .spread)
+                == Rect(x: 6, y: 104, width: 100, height: 100))
+        // Ending exactly on the spine: back to the margin line before it.
+        #expect(rule.conformMovedFrame(Self.frame(x0: 197, x1: 297), area: .spread) == Self.frame(x0: 191, x1: 291))
+        // Starting exactly on the spine: on to the margin line after it.
+        #expect(rule.conformMovedFrame(Self.frame(x0: 297, x1: 397), area: .spread) == Self.frame(x0: 303, x1: 403))
+    }
+
+    @Test func nudgeStepsBetweenMarginLinesNotEdges() throws {
+        let rule = try Self.rule(margin: 6)
+        // At the left margin line, ← has nowhere to go: the trim is no stop.
+        let left = Rect(x: 6, y: 50, width: 100, height: 100)
+        #expect(Self.nudged(left, dx: -1, rule: rule) == left)
+        #expect(Self.nudged(left, dx: -5, rule: rule) == left)
+        // An old bleed frame steps in to the margin line.
+        #expect(Self.nudged(Rect(x: 0, y: 50, width: 100, height: 100), dx: 1, rule: rule) == left)
+        // Toward the spine: to the margin line before it, then past the spine to the line after it.
+        let near = Rect(x: 187, y: 50, width: 100, height: 100)
+        let atLine = Self.nudged(near, dx: 5, rule: rule)
+        #expect(atLine.maxX == 291)
+        let past = Self.nudged(atLine, dx: 1, rule: rule)
+        #expect(past.maxX == 303 && past.size.width == 100)
+        for v in [atLine.minX, atLine.maxX, past.minX, past.maxX] { #expect(v != 297) }
+        // Y: the top and bottom trims are no stops either.
+        let top = Rect(x: 50, y: 6, width: 100, height: 100)
+        #expect(Self.nudged(top, dy: -1, rule: rule) == top)
+        let bottom = Rect(x: 50, y: 104, width: 100, height: 100)  // maxY 204
+        #expect(Self.nudged(bottom, dy: 1, rule: rule) == bottom)
+    }
+
+    @Test func onEdgeIntrudes() throws {
+        let rule = try Self.rule(margin: 6)
+        #expect(rule.frameIntrudesMargin(Self.frame(x0: 0, x1: 100), area: .spread))
+        #expect(rule.frameIntrudesMargin(Self.frame(x0: 200, x1: 297), area: .spread))
+        #expect(rule.frameIntrudesMargin(Self.frame(x0: 10, x1: 100, y0: 50, y1: 210), area: .spread))
+        #expect(rule.frameIntrudesMargin(Rect(x: 0, y: 0, width: 297, height: 210), area: .cover))
+        #expect(!rule.frameIntrudesMargin(Self.frame(x0: 6, x1: 291), area: .spread))
+        #expect(!rule.frameIntrudesMargin(Self.frame(x0: 303, x1: 588, y0: 6, y1: 204), area: .spread))
+    }
+
+    @Test func allowedTargetsDropTrimAndSpine() throws {
+        let rule = try Self.rule(margin: 6)
+        func lines(_ vs: [Double]) -> [SnapLine] { vs.map { SnapLine(position: $0, tier: .page) } }
+        let raw = SnapTargets(x: lines([0, 3, 6, 150, 291, 294, 297, 300, 303, 588, 594]),
+                              y: lines([0, 6, 105, 204, 210]))
+        let allowed = rule.allowedTargets(raw, area: .spread)
+        #expect(allowed.x.map(\.position) == [6, 150, 291, 303, 588])
+        #expect(allowed.y.map(\.position) == [6, 105, 204])
+        let cover = rule.allowedTargets(SnapTargets(x: lines([0, 6, 291, 297]), y: []), area: .cover)
+        #expect(cover.x.map(\.position) == [6, 291])
+    }
+
+    @Test func coverPhotoIsInset() throws {
+        let g = try Self.geometry()
+        let cover = AlbumDrafter.cover(title: "Itálie", photoID: "p", format: g.format, profile: g.profile,
+                                       marginMM: 6)
+        #expect(cover.front.frames[0].rect == Rect(x: 0, y: 0, width: 297, height: 210).insetBy(6))
+        // The default margin is the same 6 mm.
+        let byDefault = AlbumDrafter.cover(title: "Itálie", photoID: "p", format: g.format, profile: g.profile)
+        #expect(byDefault.front.frames[0].rect == cover.front.frames[0].rect)
     }
 
     @Test func marginIsClampedToSafeZoneAndMaximum() throws {

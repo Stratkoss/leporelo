@@ -496,7 +496,8 @@ import Foundation
         let square = try #require(p.formats.first { $0.id == "square-21" })
         let cover = AlbumDrafter.cover(title: "Léto", photoID: "x", format: square, profile: p)
         let page = Rect(x: 0, y: 0, width: square.pageWidthMM, height: square.pageHeightMM)
-        #expect(cover.front.frames.map(\.rect) == [page])
+        // The photo fills the page up to the default margin: it never reaches the page edge.
+        #expect(cover.front.frames.map(\.rect) == [page.insetBy(Album.defaultMarginMM)])
         #expect(cover.front.frames.map(\.photoID) == ["x"])
         let safe = page.insetBy(p.safeMM)
         #expect(cover.front.texts.allSatisfy { safe.contains($0.rect) })

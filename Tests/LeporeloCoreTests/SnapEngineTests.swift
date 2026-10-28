@@ -125,11 +125,12 @@ import Foundation
         let raw = SnapTargets(x: Self.lines([0, 4, 5, 10, 150, 287, 292, 297, 302, 307, 590, 594]),
                               y: Self.lines([0, 5, 10, 105, 200, 205, 210]))
         let allowed = rule.allowedTargets(raw, area: .spread)
-        #expect(allowed.xs == [0, 10, 150, 287, 297, 307, 594])
-        #expect(allowed.ys == [0, 10, 105, 200, 210])
-        // The cover has no spine: 287 is its margin line, 292 lies in the band before its edge.
+        // No bleed: the trims and the spine are no targets either.
+        #expect(allowed.xs == [10, 150, 287, 307])
+        #expect(allowed.ys == [10, 105, 200])
+        // The cover has no spine: 287 is its margin line, 292 and its edge 297 lie in the band.
         let cover = rule.allowedTargets(SnapTargets(x: Self.lines([5, 287, 292, 297]), y: []), area: .cover)
-        #expect(cover.xs == [287, 297])
+        #expect(cover.xs == [287])
         // The real grid at margin 10: no grid line at 5 mm from any page edge survives.
         let grid = rule.allowedTargets(try Self.targets(grid: true, objects: false), area: .spread)
         for v in [5.0, 292, 302, 589] { #expect(!grid.xs.contains(v)) }

@@ -63,8 +63,8 @@ import Testing
         let t = TemplateCatalog.template(id: "gallery-1")!
         let s = TemplateLayout.instantiate(t, geometry: g, dayKey: nil, id: "s1")
         let main = s.frames.first!
-        #expect(main.rect.minX >= 297)
-        #expect(main.rect.maxX == 594 && main.rect.maxY == 210 && main.rect.minY == 0)
+        // The full right page, inset by the default 6 mm margin: no photo reaches the page edge.
+        #expect(main.rect == Rect(x: 303, y: 6, width: 285, height: 198))
         #expect(main.photoID == nil && main.zoom == 1 && main.offset == Point(x: 0, y: 0))
         #expect(s.id == "s1" && s.templateID == "gallery-1" && s.kind == .gallery && !s.manuallyEdited)
         #expect(s.frames.map(\.id) == t.frames.map(\.id))
@@ -96,11 +96,12 @@ import Testing
         }
     }
 
-    /// True when no edge of `rect` lies strictly inside the band (0, margin) from a page edge.
+    /// True when every edge of `rect` lies at least `margin` from every page edge (no bleed: an
+    /// edge on a page edge is in the band too).
     static func hasNoEdgeInBand(_ rect: Rect, edgesX: [Double], height: Double, margin: Double) -> Bool {
         let eps = 1e-6
         func inBand(_ v: Double, _ edges: [Double]) -> Bool {
-            edges.contains { abs(v - $0) > eps && abs(v - $0) < margin - eps }
+            edges.contains { abs(v - $0) < margin - eps }
         }
         return ![rect.minX, rect.maxX].contains { inBand($0, edgesX) }
             && ![rect.minY, rect.maxY].contains { inBand($0, [0, height]) }
@@ -120,8 +121,33 @@ import Testing
         let gallery = TemplateLayout.instantiate(try #require(TemplateCatalog.template(id: "gallery-1")),
                                                  geometry: g, dayKey: nil, id: "s", marginMM: 10)
         let frame = try #require(gallery.frames.first).rect
-        #expect(abs(frame.minX - 203.2) < 1e-9 && abs(frame.maxX - 406.4) < 1e-9)
-        #expect(frame.minY == 0 && abs(frame.maxY - 152.4) < 1e-9)
+        // The full right page inset by the margin.
+        #expect(abs(frame.minX - 213.2) < 1e-9 && abs(frame.maxX - 396.4) < 1e-9)
+        #expect(frame.minY == 10 && abs(frame.maxY - 142.4) < 1e-9)
+    }
+
+    /// No bleed: every catalog template, instantiated at any margin and on every format, keeps
+    /// its frames off the page edges, apart from each other and at least `minItemMM` in size.
+    @Test func instantiatedFramesStayOffTheEdgesAndApart() throws {
+        let p = try ProfileCatalog.format(profileID: "canva-photobook", formatID: "landscape-a4").0
+        for format in p.formats {
+            let g = PageGeometry(format: format, profile: p)
+            for margin in [6.0, 10, 14, 30] {
+                let rule = MarginRule(geometry: g, marginMM: margin)
+                for t in TemplateCatalog.all {
+                    let s = TemplateLayout.instantiate(t, geometry: g, dayKey: nil, id: "s", marginMM: margin)
+                    let name = "\(format.id) \(t.id) \(margin)"
+                    for (i, f) in s.frames.enumerated() {
+                        #expect(!rule.frameIntrudesMargin(f.rect, area: .spread), "\(name) \(f.id)")
+                        #expect(f.rect.size.width >= MarginRule.minItemMM - 1e-9
+                                && f.rect.size.height >= MarginRule.minItemMM - 1e-9, "\(name) \(f.id)")
+                        for other in s.frames[(i + 1)...] {
+                            #expect(!f.rect.intersects(other.rect), "\(name) \(f.id) \(other.id)")
+                        }
+                    }
+                }
+            }
+        }
     }
 
     @Test func instantiateDefaultMarginIsTheAlbumDefault() throws {

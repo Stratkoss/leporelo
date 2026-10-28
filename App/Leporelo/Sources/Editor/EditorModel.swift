@@ -978,14 +978,31 @@ final class EditorModel {
     /// "Okraj": sets the book's page margin (`AlbumUpdater.settingMargin`: clamped to the profile's
     /// safe zone ... `MarginRule.maxMarginMM`, template spreads re-laid from their template, custom
     /// layouts and the cover conformed) as one step
-    /// "Změnit okraj". Nothing when the clamped value equals the current margin.
+    /// "Změnit okraj". Nothing when the clamped value equals the current margin, unless a frame of
+    /// a spread or the cover intrudes the margin (an older book, e.g. with photos to the page
+    /// edge): then the same value re-conforms the book.
     func setMargin(_ mm: Double) {
         commitSessions()
         let g = geometry
-        guard mm.isFinite, MarginRule.clampedMargin(mm, profile: g.profile) != store.album.marginMM else { return }
+        guard mm.isFinite else { return }
+        guard MarginRule.clampedMargin(mm, profile: g.profile) != store.album.marginMM || hasFrameIntrudingMargin
+        else { return }
         let updated = AlbumUpdater.settingMargin(mm, in: store.album, profile: g.profile, format: g.format)
         startStepAfterSessionCommit()
         store.replace(album: updated, actionName: "Změnit okraj", undoManager: undoManager)
+    }
+
+    /// True when a frame of a spread or of the cover intrudes the book's margin
+    /// (`MarginRule.frameIntrudesMargin`).
+    private var hasFrameIntrudingMargin: Bool {
+        let rule = marginRule
+        let spreads = store.album.spreads.contains { spread in
+            spread.frames.contains { rule.frameIntrudesMargin($0.rect, area: .spread) }
+        }
+        guard !spreads, let cover = store.album.cover else { return spreads }
+        return [cover.front, cover.back].contains { side in
+            side.frames.contains { rule.frameIntrudesMargin($0.rect, area: .cover) }
+        }
     }
 
     /// The rectangle of a frame or text of `spread`; nil when it has no such item.

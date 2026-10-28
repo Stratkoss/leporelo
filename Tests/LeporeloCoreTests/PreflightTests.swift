@@ -44,7 +44,8 @@ import Foundation
               createdAt: Date(timeIntervalSince1970: 0))
     }
 
-    static func cover(photo: PhotoID? = "p1", frameRect: Rect = Rect(x: 0, y: 0, width: 297, height: 210),
+    /// The front cover as built today: the photo is the page inset by the default 6 mm margin.
+    static func cover(photo: PhotoID? = "p1", frameRect: Rect = Rect(x: 6, y: 6, width: 285, height: 198),
                       texts: [TextBox] = []) -> Cover {
         let front = Spread(id: "cover-front", kind: .intro, templateID: "cover-front", dayKey: nil,
                            frames: [frame("photo1", frameRect, photo: photo)], texts: texts, manuallyEdited: false)
@@ -66,6 +67,12 @@ import Foundation
 
     static func body(_ text: String) -> TextBox {
         TextBox(id: "body", rect: Rect(x: 20, y: 130, width: 100, height: 40), role: .body, text: text)
+    }
+
+    /// `issues` without the margin warnings: for checks of frames on a page edge (DPI with bleed,
+    /// faces in the bleed), which also intrude the margin (see `bleedFrameWarnsFrameOnTheMarginLineDoesNot`).
+    static func withoutMargin(_ issues: [PreflightIssue]) -> [PreflightIssue] {
+        issues.filter { !$0.id.hasPrefix("margin:") }
     }
 
     /// Issues of spread `s1` of an album whose second spread `s2` is a clean filler.
@@ -110,8 +117,8 @@ import Foundation
         let small = Self.photo("p1", w: 2048, h: 1536)
         // 2048x1536 over a page-wide frame of 297 mm inside the page vertically (no bleed on x? it touches
         // both x edges, so bleed applies there): 297 + 6 = 303 mm -> 171 DPI -> warning.
-        let w = try Self.issuesOfS1(Self.spread(frames: [Self.frame(Rect(x: 0, y: 0, width: 297, height: 210))]),
-                                    photos: [small])
+        let w = Self.withoutMargin(try Self.issuesOfS1(
+            Self.spread(frames: [Self.frame(Rect(x: 0, y: 0, width: 297, height: 210))]), photos: [small]))
         #expect(w.count == 1)
         #expect(w[0].severity == .warning)
         #expect(w[0].message == "Fotka má jen 171 DPI, pro tisk je potřeba 220")
@@ -123,8 +130,8 @@ import Foundation
         #expect(inner[0].severity == .warning)
 
         // Over the whole spread (594 mm): 88 DPI -> error.
-        let e = try Self.issuesOfS1(Self.spread(frames: [Self.frame(Rect(x: 0, y: 20, width: 594, height: 170))]),
-                                    photos: [small])
+        let e = Self.withoutMargin(try Self.issuesOfS1(
+            Self.spread(frames: [Self.frame(Rect(x: 0, y: 20, width: 594, height: 170))]), photos: [small]))
         #expect(e.count == 1)
         #expect(e[0].severity == .error)
         #expect(e[0].message == "Fotka má jen 86 DPI, pro tisk je potřeba 220")
@@ -171,23 +178,23 @@ import Foundation
         // bleed (the image is cover-fitted into the bleed-extended frame).
         let page = Rect(x: 0, y: 0, width: 297, height: 210)
         let p = Self.photo("p1", faces: [Rect(x: 0.0, y: 0.0, width: 0.05, height: 0.05)])
-        let w = try Self.issuesOfS1(Self.spread(frames: [Self.frame(page)]), photos: [p])
+        let w = Self.withoutMargin(try Self.issuesOfS1(Self.spread(frames: [Self.frame(page)]), photos: [p]))
         #expect(w.count == 1)
         #expect(w[0].severity == .warning && w[0].frameID == "f1")
         #expect(w[0].message.contains("bličej"))
         let ok = Self.photo("p1", faces: [Rect(x: 0.45, y: 0.4, width: 0.1, height: 0.1)])
-        #expect(try Self.issuesOfS1(Self.spread(frames: [Self.frame(page)]), photos: [ok]).isEmpty)
+        #expect(Self.withoutMargin(try Self.issuesOfS1(Self.spread(frames: [Self.frame(page)]), photos: [ok])).isEmpty)
     }
 
     @Test func faceNearSpineWarns() throws {
         // Frame on the right page starting at the spine; the face at the left edge of the image.
         let r = Rect(x: 297, y: 20, width: 200, height: 150)
         let p = Self.photo("p1", faces: [Rect(x: 0.0, y: 0.4, width: 0.05, height: 0.1)])
-        let w = try Self.issuesOfS1(Self.spread(frames: [Self.frame(r)]), photos: [p])
+        let w = Self.withoutMargin(try Self.issuesOfS1(Self.spread(frames: [Self.frame(r)]), photos: [p]))
         #expect(w.count == 1)
         #expect(w[0].message.contains("hřbet"))
         let q = Self.photo("p1", faces: [Rect(x: 0.1, y: 0.4, width: 0.05, height: 0.1)])
-        #expect(try Self.issuesOfS1(Self.spread(frames: [Self.frame(r)]), photos: [q]).isEmpty)
+        #expect(Self.withoutMargin(try Self.issuesOfS1(Self.spread(frames: [Self.frame(r)]), photos: [q])).isEmpty)
     }
 
     @Test func textOutsideSafeZoneWarns() throws {
@@ -217,12 +224,13 @@ import Foundation
         #expect(empty.filter { $0.spreadID == "s1" }.map(\.id) == ["emptyFrame:s1:f1", "margin:s1:f1"])
     }
 
-    @Test func bleedFrameAndFrameOnTheMarginLineDoNotWarn() throws {
+    /// No photo reaches the page edge: a frame on a page edge warns, one on the margin line does not.
+    @Test func bleedFrameWarnsFrameOnTheMarginLineDoesNot() throws {
         let bleed = Self.frame("f1", Rect(x: 0, y: 0, width: 297, height: 210))
-        let atLine = Self.frame("f2", Rect(x: 307, y: 10, width: 277, height: 190))
+        let atLine = Self.frame("f2", Rect(x: 303, y: 6, width: 285, height: 198))
         let w = try Self.issuesOfS1(Self.spread(frames: [bleed, atLine]), photos: [Self.photo("p1")])
-        #expect(!w.contains { $0.id.hasPrefix("margin:") })
-        // The book's margin counts: x 312 is fine at 10 mm and in the band at 20 mm.
+        #expect(w.filter { $0.id.hasPrefix("margin:") }.map(\.id) == ["margin:s1:f1"])
+        // The book's margin counts: x 312 is fine at 6 mm and in the band at 20 mm.
         var a = Self.album(spreads: [Self.spread(frames: [Self.frame("f1", Rect(x: 312, y: 20, width: 200, height: 150))])],
                            cover: Self.cover())
         #expect(!(try Self.check(a)).contains { $0.id == "margin:s1:f1" })
@@ -231,10 +239,13 @@ import Foundation
     }
 
     @Test func textOutsideTheMarginBoxWarns() throws {
+        // A 10 mm margin: wider than the 6 mm safe zone, so x 8 is safe but inside the margin.
         let inBand = TextBox(id: "t1", rect: Rect(x: 8, y: 20, width: 100, height: 20), role: .caption, text: "x")
         let fine = TextBox(id: "t2", rect: Rect(x: 10, y: 20, width: 100, height: 20), role: .caption, text: "x")
         let empty = TextBox(id: "t3", rect: Rect(x: 8, y: 50, width: 100, height: 20), role: .caption, text: " ")
-        let w = try Self.issuesOfS1(Self.spread(texts: [inBand, fine, empty]))
+        var a = Self.album(spreads: [Self.spread(texts: [inBand, fine, empty]), Self.spread("s2")], cover: Self.cover())
+        a.marginMM = 10
+        let w = try Self.check(a).filter { $0.spreadID == "s1" }
         #expect(w.map(\.id) == ["margin:s1:t1"])
         #expect(w[0].message == "Text zasahuje do okraje" && w[0].textID == "t1" && w[0].severity == .warning)
     }
@@ -485,7 +496,8 @@ import Foundation
 
     @Test func duplicateComesAfterOtherIssuesOfTheFrame() throws {
         let small = Self.photo("p1", w: 2048, h: 1536)
-        let big = Rect(x: 0, y: 0, width: 297, height: 210)
+        // The whole page inside the default 6 mm margin: low DPI, no margin warning.
+        let big = Rect(x: 6, y: 6, width: 285, height: 198)
         let a = Self.album(spreads: [Self.spread("s1", frames: [Self.frame("f1", big)]),
                                      Self.spread("s2", frames: [Self.frame("f1", big)])],
                            photos: [small], cover: Self.cover())

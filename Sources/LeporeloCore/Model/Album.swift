@@ -8,7 +8,7 @@ public enum SourceQuery: Sendable, Codable, Equatable {
 public struct Album: Sendable, Codable, Equatable {
     public static let currentFormatVersion = 1
     /// The page margin (mm) a new or older album gets.
-    public static let defaultMarginMM = 10.0
+    public static let defaultMarginMM = 6.0
 
     public var formatVersion: Int
     public var id: String

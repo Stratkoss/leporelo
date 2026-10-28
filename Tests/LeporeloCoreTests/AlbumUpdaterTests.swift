@@ -533,7 +533,7 @@ import Foundation
             }
         }
         let cover = try #require(b.cover)
-        #expect(cover.front.frames.map(\.rect) == [Rect(x: 0, y: 0, width: 210, height: 210)])
+        #expect(cover.front.frames.map(\.rect) == [Rect(x: 0, y: 0, width: 210, height: 210).insetBy(a.marginMM)])
         #expect(cover.front.frames.map(\.photoID) == a.cover?.front.frames.map(\.photoID))
         #expect(D.text(cover.front, .title) == "Amalfi 2026")
         // Round trip back restores the original layout.
@@ -559,7 +559,7 @@ import Foundation
         #expect(new.templateID == old.templateID && new.id == old.id)
         let sx = 420.0 / 594.0, sy = 210.0 / 210.0
         let expected = Rect(x: 320 * sx, y: 40 * sy, width: 100 * sx, height: 100 * sy)
-        #expect(new.frames[0].rect == MarginRule(geometry: PageGeometry(format: square, profile: p), marginMM: 10)
+        #expect(new.frames[0].rect == MarginRule(geometry: PageGeometry(format: square, profile: p), marginMM: a.marginMM)
             .conformFrame(expected, area: .spread))
         // This rect needs no conform, so it is exactly the proportional one.
         #expect(abs(new.frames[0].rect.minX - expected.minX) < 1e-9)
@@ -656,7 +656,7 @@ import Foundation
         #expect(AlbumUpdater.settingMargin(99, in: a, profile: p, format: f).marginMM == 30)
     }
 
-    /// The stepper does not ratchet: 10 -> 20 -> 10 gives every template spread its template
+    /// The stepper does not ratchet: 6 -> 20 -> 6 gives every template spread its template
     /// rects back, with photos, crops and texts intact.
     @Test func settingMarginBackRestoresTemplateLayouts() throws {
         let (p, f) = try D.canva()
@@ -670,8 +670,9 @@ import Foundation
 
         let wide = AlbumUpdater.settingMargin(20, in: a, profile: p, format: f)
         #expect(wide.spreads[s].frames.map(\.rect) != a.spreads[s].frames.map(\.rect))
-        let back = AlbumUpdater.settingMargin(10, in: wide, profile: p, format: f)
-        #expect(back.marginMM == 10)
+        #expect(a.marginMM == 6)
+        let back = AlbumUpdater.settingMargin(6, in: wide, profile: p, format: f)
+        #expect(back.marginMM == 6)
         #expect(back.spreads == a.spreads)
         #expect(back.spreads[s].frames[0].zoom == 1.7 && back.spreads[s].texts[0].text == "Ahoj")
         let g = Self.geometry(p, f)
@@ -736,7 +737,7 @@ import Foundation
         let days = [D.day(Self.june18, D.mixedPhotos("a", Self.june18, count: 12), places: ["Ravello"]),
                     D.day(Self.june19, D.dayPhotos("b", Self.june19, count: 5))]
         var a = D.draft(days, profile: p, format: f)
-        #expect(a.marginMM == 10)
+        #expect(a.marginMM == 6)
         let s = try #require(a.spreads.firstIndex { $0.templateID == PageSpread.templateID && $0.frames.count >= 2 })
         a.spreads[s].frames[1].offset = Point(x: 0.4, y: -0.3)
         a.spreads[s].frames[1].zoom = 1.6
@@ -762,7 +763,7 @@ import Foundation
         let journal = try #require(a.spreads.firstIndex { $0.kind == .journal })
         #expect(wide.spreads[journal].texts.map(\.rect) != a.spreads[journal].texts.map(\.rect))
 
-        let back = AlbumUpdater.settingMargin(10, in: wide, profile: p, format: f)
+        let back = AlbumUpdater.settingMargin(6, in: wide, profile: p, format: f)
         #expect(back.spreads == a.spreads)
     }
 
@@ -801,8 +802,8 @@ import Foundation
         #expect(new.frames.map(\.offset) == spread.frames.map(\.offset))
         #expect(new.frames.map(\.zoom) == spread.frames.map(\.zoom))
         let ga4 = Self.geometry(p, a4)
-        let rule = MarginRule(geometry: ga4, marginMM: 10)
-        let left = PageSpread.pageItems(grid, side: .left, geometry: ga4, marginMM: 10)
+        let rule = MarginRule(geometry: ga4, marginMM: a.marginMM)
+        let left = PageSpread.pageItems(grid, side: .left, geometry: ga4, marginMM: a.marginMM)
         #expect(new.frames.filter { $0.id.hasPrefix("L.") }.map(\.rect)
             == left.frames.map { rule.conformFrame($0.rect, area: .spread) })
         let sx = a4.pageWidthMM / small.pageWidthMM, sy = a4.pageHeightMM / small.pageHeightMM
@@ -820,7 +821,7 @@ import Foundation
         let fresh = PageSpread.compose(left: try #require(PageLayoutCatalog.layout(id: other.pageLayouts[0]!)),
                                        right: try #require(PageLayoutCatalog.layout(id: other.pageLayouts[1]!)),
                                        kind: other.kind, dayKey: other.dayKey, id: other.id, geometry: ga4,
-                                       marginMM: 10)
+                                       marginMM: a.marginMM)
         #expect(other.frames.map(\.rect) == fresh.frames.map(\.rect))
         #expect(other.texts.map(\.rect) == fresh.texts.map(\.rect))
     }

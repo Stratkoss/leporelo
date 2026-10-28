@@ -33,7 +33,8 @@ import Testing
     @Test func fullCoversRightPage() throws {
         let s = try Self.compose("full", "full")
         let r = try #require(s.frames.first { $0.id == "R.photo1" }).rect
-        #expect(r == Rect(x: 203.2, y: 0, width: 203.2, height: 152.4))
+        // The whole page inset by the margin: no photo reaches the page edge.
+        #expect(r == Rect(x: 203.2 + 10, y: 10, width: 203.2 - 20, height: 152.4 - 20))
         #expect(s.templateID == "pages" && s.pageLayouts == ["full", "full"])
         #expect(s.frames.map(\.id) == ["L.photo1", "R.photo1"])
     }
@@ -43,8 +44,9 @@ import Testing
         func rect(_ id: String) throws -> Rect { try #require(s.frames.first { $0.id == id }).rect }
         for id in ["L.photo1", "L.photo2", "L.photo3", "L.photo4"] {
             let r = try rect(id)
-            #expect(abs(r.size.width - (203.2 - 3) / 2) < 0.001, "\(id)")
-            #expect(abs(r.size.height - (152.4 - 3) / 2) < 0.001, "\(id)")
+            // A grid cell less the margin on its outer side; the gutters stay 3 mm.
+            #expect(abs(r.size.width - ((203.2 - 3) / 2 - Self.margin)) < 0.001, "\(id)")
+            #expect(abs(r.size.height - ((152.4 - 3) / 2 - Self.margin)) < 0.001, "\(id)")
         }
         #expect(abs(try rect("L.photo2").minX - rect("L.photo1").maxX - 3) < 0.001)
         #expect(abs(try rect("L.photo3").minY - rect("L.photo1").maxY - 3) < 0.001)
@@ -104,6 +106,30 @@ import Testing
                     let s = PageSpread.compose(left: pair.0, right: pair.1, kind: .gallery, dayKey: nil, id: "s",
                                                geometry: g, marginMM: margin)
                     #expect(rule.conform(s, area: .spread) == s, "\(pair.0.id) \(pair.1.id) \(margin)")
+                }
+            }
+        }
+    }
+
+    /// No bleed: every catalog layout, composed at any margin, keeps its frames off the page edges,
+    /// apart from each other and at least `minItemMM` in size.
+    @Test func composedFramesStayOffTheEdgesAndApart() throws {
+        let g = try Self.geometry()
+        for margin in [6.0, 10, 14, 30] {
+            let rule = MarginRule(geometry: g, marginMM: margin)
+            for l in PageLayoutCatalog.all {
+                for pair in [(l, l), (l, try Self.layout("full")), (try Self.layout("grid-4"), l)] {
+                    let s = PageSpread.compose(left: pair.0, right: pair.1, kind: .gallery, dayKey: nil, id: "s",
+                                               geometry: g, marginMM: margin)
+                    let name = "\(pair.0.id) \(pair.1.id) \(margin)"
+                    for (i, f) in s.frames.enumerated() {
+                        #expect(!rule.frameIntrudesMargin(f.rect, area: .spread), "\(name) \(f.id)")
+                        #expect(f.rect.size.width >= MarginRule.minItemMM - 1e-9
+                                && f.rect.size.height >= MarginRule.minItemMM - 1e-9, "\(name) \(f.id)")
+                        for other in s.frames[(i + 1)...] {
+                            #expect(!f.rect.intersects(other.rect), "\(name) \(f.id) \(other.id)")
+                        }
+                    }
                 }
             }
         }

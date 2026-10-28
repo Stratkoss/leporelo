@@ -1343,13 +1343,14 @@ struct EditorLayoutTests {
     }
 
     /// Arrow keys (incremental `.move` updates with their nudge, in one session) step a frame
-    /// from the margin line to the bleed and back, never shrinking it; outward at the trim it
-    /// stays. (Replaces the old ruling where 1 mm ← from the margin line was pulled back.)
-    @Test func arrowNudgeStepsBetweenMarginAndBleed() throws {
+    /// between margin lines, never shrinking it and never onto a page edge (no bleed, margin 6):
+    /// outward at the margin line by the trim it stays, toward the spine it jumps past it.
+    @Test func arrowNudgeStepsBetweenMarginLines() throws {
         let (model, store, undo) = try makeModel(try standardAlbum())
         let gallery = try #require(store.album.spreads.first { $0.templateID == "gallery-2" })
         model.currentSpreadID = gallery.id
-        let start = Rect(x: 10, y: 40, width: 120, height: 90)
+        #expect(model.marginMM == 6)
+        let start = Rect(x: 6, y: 40, width: 120, height: 90)
         step(undo) {
             model.beginLayoutChange(.frame("photo1"))
             model.updateLayout(.frame("photo1"), rect: start, mode: .move)
@@ -1365,38 +1366,40 @@ struct EditorLayoutTests {
         }
         try step(undo) {
             model.beginLayoutChange(.frame("photo1"))
-            let out = try press(-1)    // margin line -> bleed
-            let beyond = try press(-1) // nothing beyond the trim
-            let back = try press(1)    // bleed -> margin line
+            let out = try press(-1)    // the trim is no stop: stays on the margin line
+            let beyond = try press(-5)
+            let inward = try press(1)
             let further = try press(5)
-            #expect(out == Rect(x: 0, y: 40, width: 120, height: 90))
-            #expect(beyond == Rect(x: 0, y: 40, width: 120, height: 90))
-            #expect(back == start)
-            #expect(further == Rect(x: 15, y: 40, width: 120, height: 90))
+            #expect(out == start)
+            #expect(beyond == start)
+            #expect(inward == Rect(x: 7, y: 40, width: 120, height: 90))
+            #expect(further == Rect(x: 12, y: 40, width: 120, height: 90))
             model.endLayoutChange()
         }
         #expect(spread(store.album, gallery.id)?.frames.first { $0.id == "photo1" }?.rect
-                == Rect(x: 15, y: 40, width: 120, height: 90))
+                == Rect(x: 12, y: 40, width: 120, height: 90))
 
-        // ⇧→ from the right margin line before the spine reaches the spine (it used to tie and
-        // fall back); ⇧↓ from the bottom margin line reaches the bottom trim.
-        let right = Rect(x: 167, y: 110, width: 120, height: 90)  // maxX 287, maxY 200
+        // ⇧→ from the right margin line before the spine jumps past the spine to the margin line
+        // after it (never onto the spine); ⇧↓ from the bottom margin line stays.
+        let right = Rect(x: 171, y: 114, width: 120, height: 90)  // maxX 291, maxY 204
         try step(undo) {
             model.beginLayoutChange(.frame("photo1"))
             model.updateLayout(.frame("photo1"), rect: right, mode: .move)
-            let toSpine = try press(5)
+            let pastSpine = try press(5)
             let toBottom = try press(0, 5)
-            #expect(toSpine.maxX == 297)
-            #expect(toBottom.maxY == 210)
+            #expect(pastSpine.maxX == 303 && pastSpine.size.width == 120)
+            #expect(toBottom.maxY == 204)
             model.endLayoutChange()
         }
-        // A mouse drag (no nudge) is unchanged: 1 mm into the band goes back to the nearer side.
-        try step(undo) {
-            model.beginLayoutChange(.frame("photo1"))
-            model.updateLayout(.frame("photo1"), rect: Rect(x: 9, y: 40, width: 120, height: 90), mode: .move)
-            let dragged = try #require(model.displayedSpread(gallery.id)?.frames.first { $0.id == "photo1" }?.rect)
-            #expect(dragged == start)
-            model.endLayoutChange()
+        // A mouse drag (no nudge) into the band goes to the margin line, even right by the trim.
+        for x in [5.0, 1] {
+            try step(undo) {
+                model.beginLayoutChange(.frame("photo1"))
+                model.updateLayout(.frame("photo1"), rect: Rect(x: x, y: 40, width: 120, height: 90), mode: .move)
+                let dragged = try #require(model.displayedSpread(gallery.id)?.frames.first { $0.id == "photo1" }?.rect)
+                #expect(dragged == start)
+                model.endLayoutChange()
+            }
         }
     }
 
@@ -1514,7 +1517,7 @@ struct EditorLayoutTests {
         let page = model.geometry.pageRect(side: .left)
         let box = try #require(spread(store.album, gallery.id)?.texts.first { $0.id == "text-1" })
         #expect(box.role == .caption && box.text == "")
-        #expect(box.rect == Rect(x: page.minX + (page.size.width - 60) / 2, y: page.size.height - 10 - 12,
+        #expect(box.rect == Rect(x: page.minX + (page.size.width - 60) / 2, y: page.size.height - model.marginMM - 12,
                                  width: 60, height: 12))
         #expect(model.selectedItem == .text("text-1"))
         #expect(model.selectedFrameID == nil)
@@ -1583,7 +1586,7 @@ struct EditorLayoutTests {
         let (model, store, undo) = try makeModel(try standardAlbum())
         let before = store.album
         let g = model.geometry
-        #expect(model.marginMM == 10)
+        #expect(model.marginMM == 6)
 
         step(undo) { model.setMargin(20) }
         #expect(model.marginMM == 20)
@@ -1593,8 +1596,9 @@ struct EditorLayoutTests {
         for frame in store.album.spreads.flatMap(\.frames) {
             for (v, edges) in [(frame.rect.minX, [0, w, 2 * w]), (frame.rect.maxX, [0, w, 2 * w]),
                                (frame.rect.minY, [0, h]), (frame.rect.maxY, [0, h])] {
+                // No bleed: every edge at least the margin from every page edge.
                 let d = edges.map { abs($0 - v) }.min() ?? 0
-                #expect(d < 1e-6 || d >= 20 - 1e-6)
+                #expect(d >= 20 - 1e-6)
             }
         }
 
@@ -1612,6 +1616,42 @@ struct EditorLayoutTests {
 
         undo.undo(); undo.undo(); undo.undo()
         #expect(store.album == before)
+    }
+
+    /// An older book with a photo to the page edge: choosing the same margin again fixes it in one
+    /// step "Změnit okraj".
+    @Test func setMarginReconformsBleedFramesAtSameMargin() throws {
+        var album = try standardAlbum()
+        #expect(album.marginMM == 6)
+        let s = try #require(album.spreads.firstIndex { !$0.frames.isEmpty })
+        album.spreads[s].customLayout = true
+        album.spreads[s].frames[0].rect = Rect(x: 0, y: 30, width: 100, height: 80)
+        let (model, store, undo) = try makeModel(album)
+        let before = store.album
+        let revision = store.revision
+
+        step(undo) { model.setMargin(6) }
+        #expect(store.revision == revision + 1)
+        #expect(undo.undoActionName == "Změnit okraj")
+        #expect(store.album.spreads[s].frames[0].rect == Rect(x: 6, y: 30, width: 94, height: 80))
+        #expect(store.album.spreads[s].frames[0].photoID == before.spreads[s].frames[0].photoID)
+        // Now nothing intrudes: the same value again changes nothing.
+        model.setMargin(6)
+        #expect(store.revision == revision + 1)
+        undo.undo()
+        #expect(store.album == before)
+    }
+
+    /// A cover photo to the page edge (a book made before the rule) is fixed the same way.
+    @Test func setMarginReconformsBleedCoverAtSameMargin() throws {
+        var album = try standardAlbum()
+        let g = try laxGeometry()
+        let page = Rect(x: 0, y: 0, width: g.format.pageWidthMM, height: g.format.pageHeightMM)
+        album.cover?.front.frames[0].rect = page
+        let (model, store, undo) = try makeModel(album)
+        step(undo) { model.setMargin(6) }
+        #expect(store.album.cover?.front.frames[0].rect == page.insetBy(6))
+        #expect(undo.undoActionName == "Změnit okraj")
     }
 
     @Test func newSpreadsAndTemplatesUseTheAlbumMargin() throws {
