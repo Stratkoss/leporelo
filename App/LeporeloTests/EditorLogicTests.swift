@@ -383,6 +383,14 @@ struct LayoutHandleTests {
 // MARK: - Scroll gestures
 
 struct ScrollZoomTests {
+    /// Zoom only in crop mode (double-click), and only over the photo being cropped.
+    @Test func zoomsOnlyThePhotoInCropMode() {
+        #expect(ScrollZoom.target(cropFrameID: nil, frameUnderPointer: "a") == nil)
+        #expect(ScrollZoom.target(cropFrameID: "a", frameUnderPointer: "a") == "a")
+        #expect(ScrollZoom.target(cropFrameID: "a", frameUnderPointer: "b") == nil)
+        #expect(ScrollZoom.target(cropFrameID: "a", frameUnderPointer: nil) == nil)
+    }
+
     @Test func phasedGesturesBeginUpdateAndEnd() {
         #expect(ScrollZoom.step(phase: .began, momentumPhase: [], inSession: false)
                 == .init(begin: true, update: true, end: false, idleEnd: false))

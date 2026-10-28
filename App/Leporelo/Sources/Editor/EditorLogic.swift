@@ -216,7 +216,7 @@ enum LayoutDrag {
     }
 }
 
-/// How a scroll-wheel event drives a crop session (zoom over a frame). Trackpads deliver phases
+/// How a scroll-wheel event drives a crop session (zoom over the photo in crop mode). Trackpads deliver phases
 /// (began, changed, ended); their momentum events are ignored. A classic mouse wheel has no
 /// phase: every event updates, and the session ends after a short idle time.
 enum ScrollZoom {
@@ -227,6 +227,13 @@ enum ScrollZoom {
         var idleEnd: Bool
 
         static let ignore = Step(begin: false, update: false, end: false, idleEnd: false)
+    }
+
+    /// The frame a scroll or pinch zooms: only the photo in crop mode (double-click), and only
+    /// while the pointer is over it; nil lets the gesture pass through.
+    static func target(cropFrameID: String?, frameUnderPointer: String?) -> String? {
+        guard let cropFrameID, frameUnderPointer == cropFrameID else { return nil }
+        return cropFrameID
     }
 
     static func step(phase: NSEvent.Phase, momentumPhase: NSEvent.Phase, inSession: Bool) -> Step {
@@ -553,6 +560,12 @@ enum SpreadDrag {
 /// paper and in dark mode; the accent colour stays for the selection and the current page.
 enum SnapStyle {
     static let purple = NSColor(srgbRed: 0xA0 / 255.0, green: 0x20 / 255.0, blue: 0xF0 / 255.0, alpha: 1)
+}
+
+/// The on-screen marking of text boxes (never printed): a blue tint and a dashed blue outline.
+enum TextBoxStyle {
+    static let outline = NSColor(srgbRed: 0, green: 0x7A / 255.0, blue: 1, alpha: 0.75)
+    static let tint = NSColor(srgbRed: 0, green: 0x7A / 255.0, blue: 1, alpha: 0.07)
 }
 
 // MARK: - Text bar

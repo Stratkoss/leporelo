@@ -34,7 +34,8 @@ enum CanvasContent: Equatable {
 /// `updateLayout`/`endLayoutChange` on mouse up; guides drawn while snapped); double-click a photo
 /// = crop mode (`cropFrameID`: dashed accent border, a drag moves the crop with
 /// `beginTransform`/`nudge`/`endTransform`, Escape, Return or a click elsewhere leave it); scroll
-/// wheel or pinch over a photo = zoom (one session per gesture, also outside crop mode); ⌥-drag =
+/// wheel or pinch over the photo in crop mode = zoom (one session per gesture; outside crop mode
+/// nothing); ⌥-drag =
 /// carry the photo to another frame (swap); drop a photo from the tray = `dropPhoto`;
 /// double-click a text = overlay editor (`beginTextEditing`/`updateText`/`endTextEditing`; drawn
 /// in the text's printed style, `EditorModel.overlayTextID` while open, the text stays selected
@@ -45,7 +46,8 @@ enum CanvasContent: Equatable {
 /// Every click on a spread also makes its page the current page (`EditorModel.currentPageSide`,
 /// spec 5), drawn with a 2 pt accent outline inset 1 pt; not on the cover.
 /// `showGrid` draws a 5 mm grid on each page. Without `showGuides` ("Vodítka", off by default)
-/// the page is drawn as it will be cut: clipped to the trim, no bleed band and no guide lines. The cover is read-only. Sessions end on mouse up,
+/// the page is drawn as it will be cut: clipped to the trim, no bleed band and no guide lines
+/// except the spine (fold), which is always drawn on spreads. The cover is read-only. Sessions end on mouse up,
 /// selection change, focus loss, window resign key, window close and app termination.
 struct SpreadCanvasView: NSViewRepresentable {
     let content: CanvasContent?
@@ -335,7 +337,7 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
         }
         ctx.restoreGState()
 
-        if showGuides { drawBleedTint(layout, trim: trim) }
+        if showGuides { drawBleedTint(layout, trim: trim) } else if content?.isCover != true { drawSpine(layout, geometry: geometry) }
         drawTextBoxes(page, layout)
         if showGrid, isEditable { drawGrid(layout, geometry: geometry) }
         drawCurrentPage(layout, geometry: geometry)
@@ -519,15 +521,30 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
         path.fill()
     }
 
-    /// Text boxes are invisible when empty in print; on screen they get a dashed outline and the
+    /// The fold between the pages when the guides are off: a thin grey line, as the renderer's
+    /// spine guide but lighter. The pages are paper, so the colour does not follow dark mode.
+    private func drawSpine(_ layout: CanvasLayout, geometry: PageGeometry) {
+        let x = geometry.format.pageWidthMM
+        let path = NSBezierPath()
+        path.move(to: layout.viewPoint(Point(x: x, y: 0)))
+        path.line(to: layout.viewPoint(Point(x: x, y: geometry.spreadSize.height)))
+        path.lineWidth = 1
+        NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 0.25).setStroke()
+        path.stroke()
+    }
+
+    /// Text boxes are invisible when empty in print; on screen they get a light accent tint and a
+    /// dashed accent outline (fixed colours: the pages are paper, also in dark mode) and the
     /// template's placeholder, so they can be found and double-clicked.
     private func drawTextBoxes(_ page: Spread, _ layout: CanvasLayout) {
         for box in page.texts where box.id != overlayTextID {
             let r = layout.viewRect(box.rect)
-            let path = NSBezierPath(rect: r)
+            TextBoxStyle.tint.setFill()
+            r.fill(using: .sourceOver)
+            let path = NSBezierPath(rect: r.insetBy(dx: 0.5, dy: 0.5))
             path.lineWidth = 1
-            path.setLineDash([3, 3], count: 2, phase: 0)
-            NSColor.tertiaryLabelColor.setStroke()
+            path.setLineDash([4, 3], count: 2, phase: 0)
+            TextBoxStyle.outline.setStroke()
             path.stroke()
             guard box.text.isEmpty, let placeholder = EditorText.placeholder(templateID: page.templateID, textID: box.id)
             else { continue }
@@ -876,8 +893,9 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
         let frameID: String
         if let scrollFrame {
             frameID = scrollFrame
-        } else if let p = mmPoint(event), let frame = photoFrame(at: p) {
-            frameID = frame.id
+        } else if let p = mmPoint(event),
+                  let id = ScrollZoom.target(cropFrameID: cropFrameID, frameUnderPointer: photoFrame(at: p)?.id) {
+            frameID = id
         } else {
             return super.scrollWheel(with: event)
         }
@@ -924,10 +942,12 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
         guard isEditable, let model else { return }
         let ending = event.phase.contains(.ended) || event.phase.contains(.cancelled)
         if event.phase.contains(.began) || (magnifyFrame == nil && !ending) {
-            guard let p = mmPoint(event), let frame = photoFrame(at: p) else { return }
-            select(.frame(frame.id))
-            model.beginTransform(frame: frame.id, in: page?.id)
-            magnifyFrame = frame.id
+            guard let p = mmPoint(event),
+                  let id = ScrollZoom.target(cropFrameID: cropFrameID, frameUnderPointer: photoFrame(at: p)?.id)
+            else { return }
+            select(.frame(id))
+            model.beginTransform(frame: id, in: page?.id)
+            magnifyFrame = id
         }
         guard let id = magnifyFrame else { return }
         if let frame = frame(id) {
