@@ -184,6 +184,24 @@ enum LayoutHandles {
 
 /// The rectangle of a frame or text during a mouse drag, from its rectangle at the start.
 enum LayoutDrag {
+    /// Whether a resize keeps the ratio: on a corner of a photo by default (so the crop does not
+    /// change shape, as in Canva) and ⇧ frees it; on an empty frame or a text only with ⇧.
+    static func keepsAspect(isCorner: Bool, isPhoto: Bool, shift: Bool) -> Bool {
+        isCorner && isPhoto != shift
+    }
+
+    /// `snapped`, a corner resize snapped per axis, brought back to `start`'s ratio: the `driving`
+    /// axis keeps its snapped length, the other follows, the corner opposite the dragged one stays.
+    static func keepingAspect(_ snapped: Rect, start: Rect, edges: RectEdges, driving: SnapAxis) -> Rect {
+        let w = start.size.width, h = start.size.height
+        guard w > 0, h > 0 else { return snapped }
+        let f = driving == .x ? snapped.size.width / w : snapped.size.height / h
+        let newW = w * f, newH = h * f
+        let x = edges.contains(.minX) ? start.maxX - newW : start.minX
+        let y = edges.contains(.minY) ? start.maxY - newH : start.minY
+        return Rect(x: x, y: y, width: newW, height: newH)
+    }
+
     /// `.all` moves `start` by `delta`; otherwise only the given edges follow the pointer and the
     /// opposite ones stay. `keepAspect` on a corner keeps `start`'s width/height ratio: the larger
     /// relative change of the two drives. No side ever gets below `minSize` (a shrink past it

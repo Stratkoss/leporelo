@@ -365,6 +365,28 @@ struct LayoutHandleTests {
         #expect(near(shrunk.maxX, 110) && near(shrunk.maxY, 80))
     }
 
+    /// A photo keeps its ratio on a corner unless ⇧ frees it; empty frames and texts the other way round.
+    @Test func photoCornersKeepTheRatioByDefault() {
+        #expect(LayoutDrag.keepsAspect(isCorner: true, isPhoto: true, shift: false))
+        #expect(!LayoutDrag.keepsAspect(isCorner: true, isPhoto: true, shift: true))
+        #expect(!LayoutDrag.keepsAspect(isCorner: true, isPhoto: false, shift: false))
+        #expect(LayoutDrag.keepsAspect(isCorner: true, isPhoto: false, shift: true))
+        #expect(!LayoutDrag.keepsAspect(isCorner: false, isPhoto: true, shift: false))
+    }
+
+    /// A corner snapped on one axis: that length stays, the other follows the start ratio, the
+    /// opposite corner stays.
+    @Test func snappedCornerKeepsTheRatio() {
+        // Bottom-right corner, right edge snapped to 160 (width 150): height 90.
+        let x = LayoutDrag.keepingAspect(Rect(x: 10, y: 20, width: 150, height: 75), start: rect,
+                                         edges: [.maxX, .maxY], driving: .x)
+        #expect(near(x.minX, 10) && near(x.minY, 20) && near(x.size.width, 150) && near(x.size.height, 90))
+        // Top-left corner, top edge snapped to 50 (height 30): width 50, bottom-right stays.
+        let y = LayoutDrag.keepingAspect(Rect(x: 70, y: 50, width: 40, height: 30), start: rect,
+                                         edges: [.minX, .minY], driving: .y)
+        #expect(near(y.size.height, 30) && near(y.size.width, 50) && near(y.maxX, 110) && near(y.maxY, 80))
+    }
+
     @Test func resizeNeverBelowMinimum() {
         // Dragging the left edge past the right one: the right edge stays, the width is the minimum.
         let left = LayoutDrag.rect(from: rect, edges: .minX, delta: Point(x: 500, y: 0), keepAspect: false, minSize: 10)

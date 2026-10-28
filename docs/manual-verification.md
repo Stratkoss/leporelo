@@ -126,6 +126,7 @@ Nic z tohoto oddílu se při stavbě nedalo ověřit v běžící aplikaci (ovl�
 - [ ] Zkusit jinak: jiné doporučené rozložení aktuální stránky; u ručně upravené se nejdřív zeptá; na obálce vypnuté s nápovědou.
 - [ ] Přidat rámeček / Přidat text: na aktuální stránce (jinak na pravé), nová položka je vybraná; na obálce vypnuté.
 - [ ] Vodítka: ve výchozím stavu vypnutá a stránka končí ořezem (bez spadávky a čar), takže je vidět bílá kolem fotek jako v tisku. Zapnutá ukážou ořez, bezpečnou zónu, hřbet a spadávku; po restartu zůstanou, jak byla. Tenká šedá čára ohybu (hřbet) je vidět vždy, i s vypnutými vodítky.
+- [ ] Poměr fotky: tažení za roh rámečku s fotkou drží poměr stran (i když se chytí k jiné fotce nebo narazí na okraj), Shift ho uvolní. Boční úchyt mění jen jednu stranu (ořez). Prázdný rámeček a text se za roh mění volně, se Shiftem drží poměr.
 - [ ] Textová pole: každé (prázdné i vyplněné) má světle modrý podklad a modrý čárkovaný rámeček, i v tmavém režimu; v exportu nejsou.
 - [ ] Mřížka: ukáže mřížku 5 mm a přichytává k ní; po restartu aplikace zůstane, jak byla.
 - [ ] Přichytávat: vypnuté = fotka se chytá jen k mřížce (je-li zapnutá); po restartu zůstane.

@@ -30,7 +30,8 @@ enum CanvasContent: Equatable {
 /// Interaction (all through `EditorModel`, every gesture one undo step):
 /// click = select a frame or text (`selectedItem`; 8 handles), click on the background =
 /// deselect; drag inside an item = move it, drag a handle = resize it (`LayoutDrag`, snapped by
-/// `SnapEngine` unless ⌘ is held, ⇧ on a corner keeps the ratio; `beginLayoutChange`/
+/// `SnapEngine` unless ⌘ is held; a photo's corner keeps the ratio, ⇧ frees it (empty frames and
+/// texts the other way round); `beginLayoutChange`/
 /// `updateLayout`/`endLayoutChange` on mouse up; guides drawn while snapped); double-click a photo
 /// = crop mode (`cropFrameID`: dashed accent border, a drag moves the crop with
 /// `beginTransform`/`nudge`/`endTransform`, Escape, Return or a click elsewhere leave it); scroll
@@ -765,12 +766,13 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
     /// inside a margin band: `MarginRule.allowedTargets`), threshold 8 points. Sets the guides of
     /// the axes that snapped to an alignment line (`mouseDragged` then keeps only those the
     /// conformed result touches) and returns the reasons of the snap, nil when snapping is off:
-    /// while ⌘ is held, for a ⇧ corner resize (the snapped edges would break the kept ratio) or
-    /// with both "Přichytávat" and "Mřížka" off.
-    private func snapped(_ rect: Rect, edges: RectEdges, item: LayoutItem, keepAspect: Bool, flags: NSEvent.ModifierFlags,
-                         scale: CGFloat) -> (rect: Rect, reasons: [SnapAxis: SnapReason]?) {
+    /// while ⌘ is held or with both "Přichytávat" and "Mřížka" off. With `keepAspect` one snapped
+    /// axis drives (x first) and the other follows `start`'s ratio (`LayoutDrag.keepingAspect`),
+    /// so only the driving axis keeps its guide and reason.
+    private func snapped(_ rect: Rect, edges: RectEdges, item: LayoutItem, start: Rect, keepAspect: Bool,
+                         flags: NSEvent.ModifierFlags, scale: CGFloat) -> (rect: Rect, reasons: [SnapAxis: SnapReason]?) {
         snapGuides = []
-        guard !flags.contains(.command), !keepAspect, snapSettings.grid || snapSettings.objects,
+        guard !flags.contains(.command), snapSettings.grid || snapSettings.objects,
               let geometry, let model, let pageRect = pageRect(containing: rect), scale > 0 else { return (rect, nil) }
         let others = otherRects(item)
         var targets = SnapEngine.targets(geometry: geometry, marginMM: model.marginMM, area: .spread, others: others,
@@ -782,9 +784,14 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
         }
         targets = MarginRule(geometry: geometry, marginMM: model.marginMM).allowedTargets(targets, area: .spread)
         let result = SnapEngine.snap(rect, moving: edges, to: targets, threshold: Double(Self.snapThreshold / scale))
+        var snappedRect = result.rect, reasons = result.reasons
+        if keepAspect, let driving = [SnapAxis.x, .y].first(where: { reasons[$0] != nil }) {
+            snappedRect = LayoutDrag.keepingAspect(result.rect, start: start, edges: edges, driving: driving)
+            reasons = reasons.filter { $0.key == driving }
+        }
         // Only alignment draws a line across the spread; equal gaps and sizes show their distances.
-        snapGuides = result.guides.filter { result.reasons[$0.axis] == .alignment }
-        return (result.rect, result.reasons)
+        snapGuides = result.guides.filter { reasons[$0.axis] == .alignment }
+        return (snappedRect, reasons)
     }
 
     /// The stored rects of the spread's frames and texts other than `item`.
@@ -839,13 +846,26 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
             }
             let isCorner = state.edges != .all
                 && !state.edges.isDisjoint(with: [.minX, .maxX]) && !state.edges.isDisjoint(with: [.minY, .maxY])
-            let keepAspect = isCorner && event.modifierFlags.contains(.shift)
+            var isPhoto = false
+            if case .frame(let id) = state.item { isPhoto = frame(id)?.photoID != nil }
+            let keepAspect = LayoutDrag.keepsAspect(isCorner: isCorner, isPhoto: isPhoto,
+                                                    shift: event.modifierFlags.contains(.shift))
             let raw = LayoutDrag.rect(from: state.startRect, edges: state.edges, delta: layout.mmDelta(delta),
                                       keepAspect: keepAspect, minSize: MarginRule.minItemMM)
-            let snap = snapped(raw, edges: state.edges, item: state.item, keepAspect: keepAspect,
-                               flags: event.modifierFlags, scale: layout.scale)
+            let snap = snapped(raw, edges: state.edges, item: state.item, start: state.startRect,
+                               keepAspect: keepAspect, flags: event.modifierFlags, scale: layout.scale)
+            var rect = snap.rect
+            if keepAspect, case .frame = state.item, let geometry {
+                // The margin rule trims each edge on its own; shrink both sides by the tighter axis instead.
+                let conformed = MarginRule(geometry: geometry, marginMM: model.marginMM).conformFrame(rect, area: .spread)
+                if conformed != rect, rect.size.width > 0, rect.size.height > 0 {
+                    let fx = conformed.size.width / rect.size.width, fy = conformed.size.height / rect.size.height
+                    rect = LayoutDrag.keepingAspect(conformed, start: state.startRect, edges: state.edges,
+                                                    driving: fx <= fy ? .x : .y)
+                }
+            }
             // After an outside commit mid-gesture (e.g. ⌘Z) `updateLayout` starts a new session itself.
-            model.updateLayout(state.item, rect: snap.rect, mode: state.edges == .all ? .move : .resize)
+            model.updateLayout(state.item, rect: rect, mode: state.edges == .all ? .move : .resize)
             // The margin rule may have moved the item off a snap line: draw only the guides it is on.
             if let shown = itemRect(state.item) { snapGuides = SnapEngine.guides(snapGuides, touching: shown) }
             if let reasons = snap.reasons {
