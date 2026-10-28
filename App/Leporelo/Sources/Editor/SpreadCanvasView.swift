@@ -358,7 +358,7 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
     }
 
     /// Lines every `snapSettings.gridMM` (5 mm) inside the trim of each page, the same lines the
-    /// grid snaps to. The pages are paper, so the colour resolves in the light appearance.
+    /// grid snaps to: faint black, fixed because the pages are paper also in dark mode.
     private func drawGrid(_ layout: CanvasLayout, geometry: PageGeometry) {
         let step = snapSettings.gridMM
         guard step > 0, step * layout.scale >= 3 else { return }
@@ -381,10 +381,8 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
             }
         }
         path.lineWidth = 0.5
-        (NSAppearance(named: .aqua) ?? effectiveAppearance).performAsCurrentDrawingAppearance {
-            NSColor.separatorColor.withAlphaComponent(0.4).setStroke()
-            path.stroke()
-        }
+        NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 0.08).setStroke()
+        path.stroke()
     }
 
     /// The current page ("Zkusit jinak", the picker): a 2 pt accent outline inset 1 pt into the

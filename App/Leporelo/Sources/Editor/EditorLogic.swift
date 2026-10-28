@@ -693,6 +693,7 @@ enum EditorText {
     static let fontFamily = "Písmo"
     static let fontSize = "Velikost"
     static let bold = "Tučně"
+    static let textBarHint = "Písmo a velikost: klikni na text (dvojklik ho upraví)"
     static let italic = "Kurzíva"
     static let alignment = "Zarovnání"
     static let alignLeft = "Vlevo"

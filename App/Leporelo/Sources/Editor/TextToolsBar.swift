@@ -10,7 +10,8 @@ import SwiftUI
 ///
 /// Decision: the editor keeps the bar's height reserved on a spread even when no text is active,
 /// so selecting a text never moves the canvas (a moved canvas would shift a running drag and the
-/// second click of a double-click). Without an active text the slot is empty.
+/// second click of a double-click). Without an active text the bar says where the text tools
+/// are („Písmo a velikost: klikni na text“), so it can be found.
 struct TextToolsBar: View {
     let model: EditorModel
 
@@ -35,7 +36,14 @@ struct TextToolsBar: View {
                 }
                 .background(.bar)
             } else {
-                Color.clear
+                HStack {
+                    Label(EditorText.textBarHint, systemImage: "textformat")
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
+                .padding(.horizontal, 12)
+                .frame(maxHeight: .infinity)
+                .background(.bar)
             }
         }
         .frame(height: Self.height)
