@@ -118,6 +118,43 @@ Potřebuješ album s dvoustranami (ideálně Davidovo z Canvy) a čistý stav ob
 - [ ] Stará kniha se dvoustranami `journal-*` / `gallery-*`: otevře se, jde změnit formát i okraj; „Zkusit jinak“ nejdřív potvrdí a pak převede jen vybranou stránku.
 - [ ] Export nové knihy (PDF) a nahrání do Canvy: stránky vypadají jako v editoru, fotky na výšku jsou ve svislých rámečcích, žádný text nezmizel, nic není mimo bezpečnou zónu ani označené jako nízké rozlišení.
 
+## E3. Lišta editoru, přichytávání a písmo (28. 10. 2026)
+
+Nic z tohoto oddílu se při stavbě nedalo ověřit v běžící aplikaci (ovládání obrazovky nebylo k dispozici). Každá akce lišty má test na úrovni modelu (přidat rámeček a text, okraj, Navrhnout znovu, Formát, Zkusit jinak) a všechny testy prochází (core 432, aplikace 313). Ověřené mimo aplikaci: PDF s textem ve Fraunces tučné kurzívě, Schibsted Grotesk kurzívě a Helvetice tučné v barvě má ta písma vložená (podmnožiny Fraunces-BoldItalic, SchibstedGrotesk-Italic, Helvetica-Bold) a stránka vypadá správně.
+
+**Lišta (spec 4).** U každé položky zapiš OK, nebo co se stalo.
+- [ ] Zkusit jinak: jiné doporučené rozložení aktuální stránky; u ručně upravené se nejdřív zeptá; na obálce vypnuté s nápovědou.
+- [ ] Přidat rámeček / Přidat text: na aktuální stránce (jinak na pravé), nová položka je vybraná; na obálce vypnuté.
+- [ ] Mřížka: ukáže mřížku 5 mm a přichytává k ní; po restartu aplikace zůstane, jak byla.
+- [ ] Přichytávat: vypnuté = fotka se chytá jen k mřížce (je-li zapnutá); po restartu zůstane.
+- [ ] Okraj: šipky mění po 1 mm od 6 do 30 mm; všechny dvoustrany se upraví a jedno ⌘Z to vrátí.
+- [ ] Zúžené okno: položky, které se nevejdou, jsou v nabídce » s čitelným názvem. Hlavně zkus „Okraj“: dá se z přetékající nabídky vůbec změnit? (Podezření z kódu: krokovač v nabídce nefunguje.)
+- [ ] Zpět do třídění, Navrhnout znovu (dialog s počtem zachovaných dvoustran), Formát (fajfka u aktuálního, změna s potvrzením), Exportovat… (vypnuté bez dvoustran), Třídění / Dvoustrany.
+
+**Přichytávání (spec 2).**
+- [ ] Táhni fotku k hraně sousední fotky se zapnutou i vypnutou mřížkou: sedne přesně na hranu, ne 1–2 mm vedle, i když je poblíž čára mřížky, okraje nebo střed stránky.
+- [ ] Dvě fotky v zákrytu přiblíž (snímek obrazovky zvětši): mezi lícujícími hranami není světlá spára 1 px.
+- [ ] Fotka mezi dvěma jinými v řadě: cvakne doprostřed, obě mezery mají fialový štítek se stejným číslem („12,5 mm“).
+- [ ] Mezera stejná jako jinde na stránce: fotka cvakne a fialově se ukáže i ta druhá stejná mezera.
+- [ ] Změna velikosti za úchyt: šířka nebo výška cvakne na rozměr sousední fotky a obě dostanou štítek s rozměrem.
+- [ ] Fialové vzdálenosti k sousedům (a k hraně stránky, když soused chybí) se ukazují při tažení; se stisknutým ⌘ nic; po puštění myši zmizí. Štítky se nepřekrývají tak, aby nešly přečíst (zapiš, kde ano).
+- [ ] Šipky: vzdálenosti se ukážou a chvíli po puštění klávesy zmizí; šipky nepřichytávají.
+- [ ] U okraje: fialová čára se neukáže tam, kam fotka kvůli okraji nesmí.
+
+**Písmo u textu (spec 3).**
+- [ ] Klik na text: nad dvoustranou je pruh (písmo, velikost, tučně, kurzíva, zarovnání, barva, Výchozí). Bez vybraného textu je místo prázdné a plátno neposkočí. Na obálce pruh není.
+- [ ] Písmo: nahoře Fraunces a Schibsted Grotesk, pod čarou písma Macu, každé svým písmem; hledání funguje (i bez diakritiky); seznam se neseká.
+- [ ] Velikost: psaní čísla + Return, šipky, nabídka velikostí; 500 se omezí na 200 (zapiš, jestli políčko pak ukazuje 200, nebo pořád 500).
+- [ ] Tučně / kurzíva: tlačítka i ⌘B / ⌘I; u písma bez tučného nebo kurzivního řezu jsou šedá. Zkus ⌘B i během psaní v textu (dvojklik).
+- [ ] Zarovnání vlevo / na střed / vpravo; barvy z nabídky i „Jiná…“ (tažení v panelu barev = jeden krok zpět).
+- [ ] Klik na „Téměř černá“ u textu bez vlastní barvy: zapiš, jestli to přidá krok zpět bez viditelné změny.
+- [ ] Výchozí vrátí text na původní vzhled; každá změna jde vrátit jedním ⌘Z.
+- [ ] Dvojklik na stylovaný text: editor ukazuje stejné písmo, velikost, zarovnání a barvu jako plátno; změna v pruhu během psaní se projeví hned a napsaný text zůstane.
+- [ ] Po skončení úprav zůstane text vybraný (Esc ho nechá vybraný; šipky ho posunou, Delete smaže) — zapiš, jestli ti to vadí.
+- [ ] Zkusit jinak / jiné rozložení u stránky se stylovaným textem: text si vzhled ponese.
+- [ ] Export: PDF ukazuje texty stejně jako plátno.
+- [ ] Kniha se stylovaným textem otevřená na Macu bez daného písma (nebo písmo dočasně vypni v Knihovně písem): text se ukáže výchozím písmem a kontrola před tiskem hlásí „Písmo „X“ v tomto Macu chybí“.
+
 ## F. Originály a automatické ukládání
 
 - [ ] Vyber fotku, která je jen v iCloudu. V buňce se ukáže spinner, banner říká „Stahuji originály 1 / 1“ a potom je soubor v `<album>.leporelo/originals/`.
