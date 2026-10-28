@@ -384,3 +384,173 @@ private func sizedPhoto(_ id: String, _ w: Int, _ h: Int) -> Photo {
     #expect(SpreadRenderer.pixelHint(mm: 1e300, dpi: 300) == SpreadRenderer.maxPixelHint)
     #expect(SpreadRenderer.pixelHint(mm: -5, dpi: 300) == 1)
 }
+
+// MARK: - Per-text style (fonts, size, bold/italic, alignment, colour)
+
+private func styled(_ role: TextRole, _ style: TextStyle?, text: String = "Amalfi",
+                    rect: Rect = Rect(x: 20, y: 130, width: 100, height: 20)) -> TextBox {
+    TextBox(id: "t", rect: rect, role: role, text: text, style: style)
+}
+
+private let wghtTag = 0x7767_6874
+
+private func wght(_ font: CTFont) -> Double? {
+    let variation = CTFontCopyVariation(font) as? [NSNumber: NSNumber]
+    return variation?[NSNumber(value: wghtTag)]?.doubleValue
+}
+
+private func traits(_ font: CTFont) -> CTFontSymbolicTraits { CTFontGetSymbolicTraits(font) }
+
+@Suite struct TextStyleRenderTests {
+    @Test func defaultStyleMatchesRoleFont() {
+        FontRegistry.registerBundledFonts()
+        for role in [TextRole.title, .date, .body, .caption, .pageNumber] {
+            let spec = SpreadRenderer.font(for: role)
+            let resolved = SpreadRenderer.resolvedStyle(for: styled(role, nil), pageWidth: nil)
+            #expect(resolved.family == spec.name)
+            #expect(abs(resolved.sizePt - SpreadRenderer.points(fromMM: spec.size)) < 1e-9)
+            #expect(!resolved.bold && !resolved.italic && !resolved.isFallback)
+            #expect(resolved.alignment == .left)
+            #expect(resolved.colorHex == "#1A1A1A")
+            // The same face and size as the role font drawn before styles existed.
+            let font = SpreadRenderer.ctFont(for: resolved)
+            let old = CTFontCreateWithName(spec.name as CFString, spec.size, nil)
+            #expect(CTFontCopyPostScriptName(font) as String == CTFontCopyPostScriptName(old) as String)
+            // Exactly the role size, so texts without a style draw pixel-identical to before.
+            #expect(Double(CTFontGetSize(font)).bitPattern == spec.size.bitPattern, "\(role)")
+            #expect(CTFontCopyVariation(font) as NSDictionary? == CTFontCopyVariation(old) as NSDictionary?)
+        }
+        let title = SpreadRenderer.resolvedStyle(for: styled(.title, nil), pageWidth: nil)
+        #expect(abs(title.sizePt - 28.06) < 0.01)
+    }
+
+    @Test func pageNumberDefaultsToRightOnTheRightPage() {
+        let right = styled(.pageNumber, nil, text: "13", rect: Rect(x: 530, y: 195, width: 40, height: 8))
+        let left = styled(.pageNumber, nil, text: "12", rect: Rect(x: 20, y: 195, width: 40, height: 8))
+        #expect(SpreadRenderer.resolvedStyle(for: right, pageWidth: 297).alignment == .right)
+        #expect(SpreadRenderer.resolvedStyle(for: left, pageWidth: 297).alignment == .left)
+        #expect(SpreadRenderer.resolvedStyle(for: right, pageWidth: nil).alignment == .left)
+        // An explicit alignment wins.
+        let centred = styled(.pageNumber, TextStyle(alignment: .center), text: "13",
+                             rect: Rect(x: 530, y: 195, width: 40, height: 8))
+        #expect(SpreadRenderer.resolvedStyle(for: centred, pageWidth: 297).alignment == .center)
+        // Other roles stay left.
+        let caption = styled(.caption, nil, rect: Rect(x: 530, y: 195, width: 40, height: 8))
+        #expect(SpreadRenderer.resolvedStyle(for: caption, pageWidth: 297).alignment == .left)
+    }
+
+    @Test func styleSizeAndFamilyApplied() {
+        let resolved = SpreadRenderer.resolvedStyle(for: styled(.body, TextStyle(fontFamily: "Helvetica", sizePt: 14)),
+                                                    pageWidth: nil)
+        #expect(resolved.family == "Helvetica" && resolved.sizePt == 14 && !resolved.isFallback)
+        let font = SpreadRenderer.ctFont(for: resolved)
+        #expect(CTFontCopyFamilyName(font) as String == "Helvetica")
+        #expect(abs(CTFontGetSize(font) - 14 * 25.4 / 72) < 1e-9)
+        // A stored size outside the range is clamped.
+        let huge = SpreadRenderer.resolvedStyle(for: styled(.body, TextStyle(sizePt: 900)), pageWidth: nil)
+        #expect(huge.sizePt == 200)
+    }
+
+    @Test func boldOfVariableBookFont() {
+        let resolved = SpreadRenderer.resolvedStyle(for: styled(.title, TextStyle(bold: true)), pageWidth: nil)
+        let font = SpreadRenderer.ctFont(for: resolved)
+        #expect(CTFontCopyFamilyName(font) as String == "Fraunces")
+        #expect(wght(font) == 700 || traits(font).contains(.traitBold))
+        // A family without a weight axis gets its bold face.
+        let helvetica = SpreadRenderer.ctFont(for: SpreadRenderer.resolvedStyle(
+            for: styled(.body, TextStyle(fontFamily: "Helvetica", bold: true)), pageWidth: nil))
+        #expect(CTFontCopyFamilyName(helvetica) as String == "Helvetica")
+        #expect(traits(helvetica).contains(.traitBold))
+    }
+
+    @Test func italicBookFontsResolve() {
+        for (role, family) in [(TextRole.title, "Fraunces"), (.body, "Schibsted Grotesk")] {
+            for bold in [false, true] {
+                let font = SpreadRenderer.ctFont(for: SpreadRenderer.resolvedStyle(
+                    for: styled(role, TextStyle(bold: bold, italic: true)), pageWidth: nil))
+                #expect(CTFontCopyFamilyName(font) as String == family)
+                #expect(traits(font).contains(.traitItalic), "\(family) bold \(bold)")
+                if bold { #expect(wght(font) == 700 || traits(font).contains(.traitBold)) }
+            }
+        }
+    }
+
+    @Test func registryKnowsFamiliesAndTraits() {
+        #expect(FontRegistry.isFamilyAvailable("Fraunces"))
+        #expect(FontRegistry.isFamilyAvailable("Schibsted Grotesk"))
+        #expect(FontRegistry.isFamilyAvailable("Helvetica"))
+        #expect(!FontRegistry.isFamilyAvailable("NoSuchFont123"))
+        #expect(FontRegistry.availableTraits(family: "Fraunces") == (bold: true, italic: true))
+        #expect(FontRegistry.availableTraits(family: "Schibsted Grotesk") == (bold: true, italic: true))
+        #expect(FontRegistry.availableTraits(family: "NoSuchFont123") == (bold: false, italic: false))
+    }
+
+    @Test func italicFilesBelongToTheBookFamilies() throws {
+        for (file, family) in [("Fraunces-Italic", "Fraunces"), ("SchibstedGrotesk-Italic", "Schibsted Grotesk")] {
+            let url = try #require(FontRegistry.fontURL(file))
+            let size = try #require(try url.resourceValues(forKeys: [.fileSizeKey]).fileSize)
+            #expect(size > 50_000)
+            let descriptors = try #require(CTFontManagerCreateFontDescriptorsFromURL(url as CFURL) as? [CTFontDescriptor])
+            let names = descriptors.compactMap { CTFontDescriptorCopyAttribute($0, kCTFontFamilyNameAttribute) as? String }
+            #expect(Set(names) == [family])
+        }
+    }
+
+    @Test func alignmentAndColourApplied() throws {
+        let box = styled(.body, TextStyle(alignment: .center, colorHex: "#FF0000"))
+        let string = SpreadRenderer.attributedText(box, pageWidth: nil)
+        let attrs = string.attributes(at: 0, effectiveRange: nil)
+        let para = try #require(attrs[NSAttributedString.Key(kCTParagraphStyleAttributeName as String)])
+        var alignment = CTTextAlignment.left
+        _ = CTParagraphStyleGetValueForSpecifier(para as! CTParagraphStyle, .alignment,
+                                                 MemoryLayout<CTTextAlignment>.size, &alignment)
+        #expect(alignment == .center)
+        let color = try #require(attrs[NSAttributedString.Key(kCTForegroundColorAttributeName as String)])
+        let srgb = try #require((color as! CGColor).converted(to: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                                               intent: .defaultIntent, options: nil))
+        let c = try #require(srgb.components)
+        #expect(abs(c[0] - 1) < 1e-6 && abs(c[1]) < 1e-6 && abs(c[2]) < 1e-6)
+    }
+
+    @Test func colourIsDrawn() async throws {
+        let (r, _) = try makeRenderer()
+        let box = Rect(x: 320, y: 100, width: 200, height: 40)
+        let s = spread(texts: [TextBox(id: "t", rect: box, role: .title, text: "Amalfi",
+                                       style: TextStyle(sizePt: 72, colorHex: "#FF0000"))])
+        let bmp = Bitmap(png: await r.renderPNG(s, options: RenderOptions(includeBleed: false, pixelsPerMM: ppmm)))
+        var red = false
+        for y in px(box.minY, includeBleed: false)..<px(box.maxY, includeBleed: false) {
+            for x in px(box.minX, includeBleed: false)..<px(box.maxX, includeBleed: false)
+            where near(bmp.pixel(x: x, y: y), 255, 0, 0, tol: 10) { red = true }
+        }
+        #expect(red)
+    }
+
+    @Test func overflowUsesStyleSize() {
+        let fits = styled(.body, nil, text: "Krátký text")
+        #expect(!SpreadRenderer.textOverflows(fits))
+        #expect(SpreadRenderer.textOverflows(styled(.body, TextStyle(sizePt: 60), text: "Krátký text")))
+    }
+
+    @Test func missingFamilyFallsBackAndWarns() {
+        let resolved = SpreadRenderer.resolvedStyle(for: styled(.body, TextStyle(fontFamily: "NoSuchFont123", sizePt: 14)),
+                                                    pageWidth: nil)
+        #expect(resolved.isFallback)
+        #expect(resolved.family == FontRegistry.textFont)
+        #expect(resolved.sizePt == 14)
+        let font = SpreadRenderer.ctFont(for: resolved)
+        #expect(CTFontCopyFamilyName(font) as String == FontRegistry.textFont)
+        // An available family is not a fallback.
+        #expect(!SpreadRenderer.resolvedStyle(for: styled(.body, TextStyle(fontFamily: "Helvetica")), pageWidth: nil)
+            .isFallback)
+    }
+
+    @Test func allFamiliesStartWithBookFonts() {
+        let families = FontRegistry.allFamilies()
+        #expect(Array(families.prefix(2)) == [FontRegistry.titleFont, FontRegistry.textFont])
+        #expect(Set(families).count == families.count)
+        #expect(families.contains("Helvetica"))
+        let rest = Array(families.dropFirst(2))
+        #expect(rest == rest.sorted { $0.localizedStandardCompare($1) == .orderedAscending })
+    }
+}

@@ -493,3 +493,25 @@ import Foundation
         #expect(ids == ["dpi:s2:f1", "duplicatePhoto:s2:f1"])
     }
 }
+
+// MARK: - Missing font
+
+extension PreflightTests {
+    @Test func missingFamilyFallsBackAndWarns() throws {
+        let box = TextBox(id: "cap", rect: Rect(x: 20, y: 130, width: 100, height: 20), role: .caption, text: "Popisek",
+                          style: TextStyle(fontFamily: "NoSuchFont123"))
+        let issues = try Self.issuesOfS1(Self.spread(texts: [box]))
+        #expect(issues.map(\.id) == ["missingFont:s1:cap"])
+        #expect(issues.first?.severity == .warning)
+        #expect(issues.first?.textID == "cap")
+        #expect(issues.first?.message == "Písmo „NoSuchFont123“ v tomto Macu chybí")
+    }
+
+    @Test func availableOrDefaultFamilyDoesNotWarn() throws {
+        for style in [nil, TextStyle(fontFamily: "Helvetica"), TextStyle(fontFamily: "Fraunces", italic: true)] {
+            let box = TextBox(id: "cap", rect: Rect(x: 20, y: 130, width: 100, height: 20), role: .caption,
+                              text: "Popisek", style: style)
+            #expect(try Self.issuesOfS1(Self.spread(texts: [box])).isEmpty)
+        }
+    }
+}

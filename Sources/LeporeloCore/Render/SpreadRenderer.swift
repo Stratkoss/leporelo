@@ -4,6 +4,31 @@ import Foundation
 import ImageIO
 import UniformTypeIdentifiers
 
+/// The look a text is drawn with, every field decided (`SpreadRenderer.resolvedStyle(for:pageWidth:)`).
+public struct ResolvedTextStyle: Sendable, Equatable {
+    /// The family actually drawn (the role's family when the chosen one is missing).
+    public var family: String
+    public var sizePt: Double
+    public var bold: Bool
+    public var italic: Bool
+    public var alignment: TextAlignment
+    /// "#RRGGBB" in sRGB.
+    public var colorHex: String
+    /// True when the text's chosen family is not on this Mac and the role's family is used instead.
+    public var isFallback: Bool
+
+    public init(family: String, sizePt: Double, bold: Bool, italic: Bool, alignment: TextAlignment,
+                colorHex: String, isFallback: Bool) {
+        self.family = family
+        self.sizePt = sizePt
+        self.bold = bold
+        self.italic = italic
+        self.alignment = alignment
+        self.colorHex = colorHex
+        self.isFallback = isFallback
+    }
+}
+
 public struct RenderOptions: Sendable {
     public var showGuides: Bool
     public var includeBleed: Bool
@@ -43,8 +68,10 @@ public struct RenderOptions: Sendable {
 /// A page shows only frames and texts that overlap its trim rect, clipped to its visible area,
 /// so it never shows a neighbour page's content in its margin.
 ///
-/// Text convention: `.pageNumber` is drawn like a caption and right aligned when its box lies on
-/// the right page (box centre right of the spine), left aligned otherwise.
+/// Text convention: each text is drawn with `resolvedStyle(for:pageWidth:)`: its own `TextStyle`
+/// where set, the default of its role otherwise. By default `.pageNumber` is drawn like a caption
+/// and right aligned when its box lies on the right page of a spread (box centre right of the
+/// spine), left aligned otherwise.
 public struct SpreadRenderer: Sendable {
     public static let emptyFrameGray = CGColor(srgbRed: 0xE6 / 255.0, green: 0xE6 / 255.0, blue: 0xE6 / 255.0, alpha: 1)
 
@@ -247,7 +274,7 @@ public struct SpreadRenderer: Sendable {
             drawFrame(frame, rect: rect, image: frame.photoID.flatMap { images[$0] }, in: ctx)
         }
         for box in spread.texts where box.rect.intersects(trim) {
-            drawText(box, in: ctx, pageWidth: geometry.format.pageWidthMM, isSpread: region.spineX != nil)
+            drawText(box, in: ctx, pageWidth: region.spineX)
         }
         if options.showGuides {
             drawGuides(in: ctx, trim: trim, safeRects: region.safeRects, spineX: region.spineX, scale: scale)
@@ -288,11 +315,76 @@ public struct SpreadRenderer: Sendable {
         }
     }
 
-    /// The text of `box` styled exactly as it is drawn (font and size of its role, word wrapping).
-    static func attributedText(_ box: TextBox, rightAligned: Bool) -> NSAttributedString {
-        let spec = Self.font(for: box.role)
-        let ctFont = CTFontCreateWithName(spec.name as CFString, spec.size, nil)
-        var alignment: CTTextAlignment = rightAligned ? .right : .left
+    /// The default text colour, a near-black.
+    public static let defaultColorHex = "#1A1A1A"
+
+    /// The look `box` is drawn with: each field of its `TextStyle` where set, the role's default
+    /// otherwise (family and size of `font(for:)`, regular, `defaultColorHex`). A size is clamped to
+    /// `TextStyle.sizeRangePt`. A family this Mac does not have falls back to the role's family and
+    /// sets `isFallback` (the stored choice is kept). `pageWidth` is the spine position on a spread
+    /// (nil on a cover page): a page number without its own alignment is right aligned when its box
+    /// centre lies right of it, left aligned otherwise.
+    public static func resolvedStyle(for box: TextBox, pageWidth: Double?) -> ResolvedTextStyle {
+        let role = font(for: box.role)
+        let style = box.style ?? TextStyle()
+        var family = role.name
+        var isFallback = false
+        if let wanted = style.fontFamily {
+            if FontRegistry.isFamilyAvailable(wanted) { family = wanted } else { isFallback = true }
+        }
+        let range = TextStyle.sizeRangePt
+        let size = style.sizePt.flatMap { $0.isFinite ? min(max($0, range.lowerBound), range.upperBound) : nil }
+            ?? points(fromMM: role.size)
+        let onRightPage = pageWidth.map { box.rect.minX + box.rect.size.width / 2 >= $0 } ?? false
+        let alignment = style.alignment ?? (box.role == .pageNumber && onRightPage ? .right : .left)
+        return ResolvedTextStyle(family: family, sizePt: size, bold: style.bold, italic: style.italic,
+                                 alignment: alignment, colorHex: style.colorHex ?? defaultColorHex,
+                                 isFallback: isFallback)
+    }
+
+    /// The Core Text font of `style`, sized in MILLIMETRES (`sizePt * 25.4 / 72`, rounded to a
+    /// billionth of a mm so a role's default size comes back exactly, e.g. 3.2 and not
+    /// 3.1999999999999997, and an unstyled text draws as it did before styles). The face is
+    /// matched by family, then italic by trait (the book fonts' italic files are faces of their
+    /// families). Bold sets the `wght` axis to 700 on a variable family and picks the bold face
+    /// otherwise. A trait the family lacks is left out.
+    public static func ctFont(for style: ResolvedTextStyle) -> CTFont {
+        FontRegistry.registerBundledFonts()
+        let size = (style.sizePt * 25.4 / 72 * 1e9).rounded() / 1e9
+        let descriptor = CTFontDescriptorCreateWithAttributes([kCTFontFamilyNameAttribute: style.family] as CFDictionary)
+        var font = CTFontCreateWithFontDescriptor(descriptor, size, nil)
+        if style.italic, let italic = CTFontCreateCopyWithSymbolicTraits(font, size, nil, .traitItalic, .traitItalic) {
+            font = italic
+        }
+        guard style.bold else { return font }
+        if let maxWeight = FontRegistry.weightAxisMax(font), maxWeight >= 700 {
+            let variation = [NSNumber(value: FontRegistry.weightAxisTag): NSNumber(value: 700)]
+            let bold = CTFontDescriptorCreateWithAttributes([kCTFontVariationAttribute: variation] as CFDictionary)
+            return CTFontCreateCopyWithAttributes(font, size, nil, bold)
+        }
+        return CTFontCreateCopyWithSymbolicTraits(font, size, nil, .traitBold, .traitBold) ?? font
+    }
+
+    /// sRGB colour of a "#RRGGBB" string; the default colour (and anything unreadable) is the
+    /// renderer's original near-black, sRGB 0.1 0.1 0.1.
+    static func color(hex: String) -> CGColor {
+        let digits = hex.hasPrefix("#") ? hex.dropFirst() : Substring(hex)
+        guard hex != defaultColorHex, digits.count == 6, let value = UInt32(digits, radix: 16) else {
+            return CGColor(srgbRed: 0.1, green: 0.1, blue: 0.1, alpha: 1)
+        }
+        return CGColor(srgbRed: Double((value >> 16) & 0xFF) / 255, green: Double((value >> 8) & 0xFF) / 255,
+                       blue: Double(value & 0xFF) / 255, alpha: 1)
+    }
+
+    /// The text of `box` styled exactly as it is drawn (`resolvedStyle`: font, size, alignment,
+    /// colour; word wrapping). `pageWidth` as in `resolvedStyle`.
+    static func attributedText(_ box: TextBox, pageWidth: Double?) -> NSAttributedString {
+        let resolved = resolvedStyle(for: box, pageWidth: pageWidth)
+        var alignment: CTTextAlignment = switch resolved.alignment {
+        case .left: .left
+        case .center: .center
+        case .right: .right
+        }
         var lineBreak: CTLineBreakMode = .byWordWrapping
         let style: CTParagraphStyle = withUnsafeBytes(of: &alignment) { alignBytes in
             withUnsafeBytes(of: &lineBreak) { breakBytes in
@@ -306,10 +398,9 @@ public struct SpreadRenderer: Sendable {
             }
         }
         let attributes: [NSAttributedString.Key: Any] = [
-            NSAttributedString.Key(kCTFontAttributeName as String): ctFont,
+            NSAttributedString.Key(kCTFontAttributeName as String): ctFont(for: resolved),
             NSAttributedString.Key(kCTParagraphStyleAttributeName as String): style,
-            NSAttributedString.Key(kCTForegroundColorAttributeName as String):
-                CGColor(srgbRed: 0.1, green: 0.1, blue: 0.1, alpha: 1),
+            NSAttributedString.Key(kCTForegroundColorAttributeName as String): color(hex: resolved.colorHex),
         ]
         return NSAttributedString(string: box.text, attributes: attributes)
     }
@@ -321,7 +412,7 @@ public struct SpreadRenderer: Sendable {
     }
 
     /// True when part of the text (trailing whitespace aside) does not fit its box and so is cut
-    /// from the print: Core Text lays it out with the renderer's font and size in the box and the
+    /// from the print: Core Text lays it out with the text's resolved font and size in the box and the
     /// visible range ends before the text does. An empty text never overflows.
     public static func textOverflows(_ box: TextBox) -> Bool {
         let trimmed = String(box.text.reversed().drop(while: \.isWhitespace).reversed())
@@ -329,15 +420,15 @@ public struct SpreadRenderer: Sendable {
         guard needed > 0 else { return false }
         guard box.rect.size.width > 0, box.rect.size.height > 0 else { return true }
         FontRegistry.registerBundledFonts()
-        let frame = textFrame(attributedText(box, rightAligned: false),
+        let frame = textFrame(attributedText(box, pageWidth: nil),
                               width: box.rect.size.width, height: box.rect.size.height)
         return CTFrameGetVisibleStringRange(frame).length < needed
     }
 
-    private func drawText(_ box: TextBox, in ctx: CGContext, pageWidth: Double, isSpread: Bool) {
+    /// `pageWidth` is the spine position on a spread, nil on a cover page.
+    private func drawText(_ box: TextBox, in ctx: CGContext, pageWidth: Double?) {
         guard !box.text.isEmpty, box.rect.size.width > 0, box.rect.size.height > 0 else { return }
-        let rightAligned = box.role == .pageNumber && isSpread && (box.rect.minX + box.rect.size.width / 2) >= pageWidth
-        let frame = Self.textFrame(Self.attributedText(box, rightAligned: rightAligned),
+        let frame = Self.textFrame(Self.attributedText(box, pageWidth: pageWidth),
                                    width: box.rect.size.width, height: box.rect.size.height)
 
         ctx.saveGState()

@@ -30,7 +30,7 @@ public struct PreflightIssue: Sendable, Equatable, Identifiable {
 /// order, then texts in order), then the cover front and back, then the album-level issues: missing
 /// cover, page count, selected photos not in the album (once spreads exist), unverified format.
 /// Within one frame: original, DPI, faces, photo used twice, then margin. Within one text: bleed,
-/// safe zone or margin (at most one of them), then overflow.
+/// safe zone or margin (at most one of them), then overflow, then missing font.
 ///
 /// "Rámeček zasahuje do okraje" (`margin:<spreadID>:<frameID>`, warning) flags a frame (empty or
 /// not) with an edge strictly inside the band next to a page edge (`MarginRule.frameIntrudesMargin`
@@ -46,6 +46,9 @@ public struct PreflightIssue: Sendable, Equatable, Identifiable {
 /// "Text se nevejde do rámečku" (`textOverflow:<spreadID>:<textID>`, warning) uses
 /// `SpreadRenderer.textOverflows`, i.e. the renderer's fonts and sizes; it is only checked for
 /// non-empty texts and skipped when the bundled fonts are not available.
+///
+/// "Písmo „X“ v tomto Macu chybí" (`missingFont:<spreadID>:<textID>`, warning) flags a non-empty
+/// text whose chosen family is not on this Mac; it is drawn with its role's font instead.
 ///
 /// DPI matches what the renderer prints: a frame edge lying on the outer boundary of the page area is
 /// stretched by `bleedMM`, so the DPI is computed on the frame extended on those sides. The outer
@@ -249,6 +252,9 @@ public enum Preflight {
             if fontsAvailable(), SpreadRenderer.textOverflows(text) {
                 add("textOverflow", .warning, text: text.id,
                     "Text se nevejde do rámečku, konec se nevytiskne")
+            }
+            if let family = text.style?.fontFamily, !FontRegistry.isFamilyAvailable(family) {
+                add("missingFont", .warning, text: text.id, "Písmo „\(family)“ v tomto Macu chybí")
             }
         }
 
