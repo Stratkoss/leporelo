@@ -318,7 +318,7 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
         let images = imageCache.images(for: page, area: area, album: album, revision: revision, geometry: geometry,
                                        package: package)
         let renderer = SpreadRenderer(album: album, geometry: geometry, images: PlaceholderImageProvider())
-        let options = RenderOptions(showGuides: true, includeBleed: true, pixelsPerMM: layout.scale)
+        let options = layout.rendererOptions
         ctx.saveGState()
         ctx.concatenate(layout.rendererTransform)
         if content?.isCover == true {

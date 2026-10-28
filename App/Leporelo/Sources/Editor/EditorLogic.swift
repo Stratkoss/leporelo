@@ -69,6 +69,12 @@ struct CanvasLayout: Equatable {
     var rendererTransform: CGAffineTransform {
         CGAffineTransform(a: 1, b: 0, c: 0, d: -1, tx: contentRect.minX, ty: contentRect.maxY)
     }
+
+    /// The options the canvas draws with under `rendererTransform`; frames are pixel aligned so
+    /// flush frames show no seam.
+    var rendererOptions: RenderOptions {
+        RenderOptions(showGuides: true, includeBleed: true, pixelsPerMM: scale, pixelAlignFrames: true)
+    }
 }
 
 // MARK: - Hit testing (mm)

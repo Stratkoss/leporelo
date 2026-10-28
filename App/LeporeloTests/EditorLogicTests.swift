@@ -127,16 +127,63 @@ struct CanvasLayoutTests {
         #expect(pixel(CGPoint(x: layout.contentRect.minX - 3, y: layout.contentRect.midY)) == (0, 0, 0))
     }
 
-    /// Items sharing an edge in mm share it on screen too, also at a scale that is no round
-    /// number, so a snapped edge never shows a seam between them.
-    @Test func sameEdgeSameViewX() throws {
+    /// Two dark frames sharing an edge (snapped flush) draw without a light seam on the canvas, at
+    /// a scale that is no round number and on a Retina backing too: the edge falls inside a device
+    /// pixel, so each frame clipped on its own would let the white page show through there.
+    @Test(arguments: [1, 2]) func flushFramesShowNoSeam(backingScale: Int) throws {
         let g = try canvaGeometry()
+        let viewSize = CGSize(width: 913, height: 611)
         let layout = CanvasLayout(visibleArea: CanvasLayout.visibleArea(geometry: g, isCover: false),
-                                  viewSize: CGSize(width: 913, height: 611), padding: 24)
-        let a = Rect(x: 37.3, y: 12.1, width: 81.7, height: 55.9)
-        let b = Rect(x: 37.3, y: 140.6, width: 123.45, height: 30.2)
-        #expect(layout.viewRect(a).minX == layout.viewRect(b).minX)
-        #expect(layout.viewRect(a).minX == layout.viewPoint(Point(x: 37.3, y: 0)).x)
+                                  viewSize: viewSize, padding: SpreadCanvasNSView.padding)
+        // Edges 0.3 pt past a whole point: inside a pixel at 1x (0.3) and at 2x (0.6).
+        let edges = try #require(layout.mmPoint(CGPoint(x: layout.viewPoint(Point(x: 121, y: 0)).x.rounded() + 0.3,
+                                                        y: layout.viewPoint(Point(x: 0, y: 101)).y.rounded() + 0.3)))
+        let edgeX = edges.x, edgeY = edges.y
+        let frames = [
+            Frame(id: "a", rect: Rect(x: 40, y: 30, width: edgeX - 40, height: 120), photoID: "p",
+                  offset: Point(x: 0, y: 0), zoom: 1),
+            Frame(id: "b", rect: Rect(x: edgeX, y: 30, width: 80, height: edgeY - 30), photoID: "p",
+                  offset: Point(x: 0, y: 0), zoom: 1),
+            Frame(id: "c", rect: Rect(x: edgeX, y: edgeY, width: 80, height: 49), photoID: "p",
+                  offset: Point(x: 0, y: 0), zoom: 1),
+        ]
+        let spread = Spread(id: "s", kind: .gallery, templateID: "gallery-3", dayKey: nil, frames: frames,
+                            texts: [], manuallyEdited: false)
+        let black = try #require(solidImage(r: 0, g: 0, b: 0, width: 30, height: 20))
+        let album = Album(formatVersion: 1, id: "a", title: "T", supplierProfileID: g.profile.id, formatID: g.format.id,
+                          world: Workflow.world, cover: nil, spreads: [spread], photos: [:], source: nil,
+                          createdAt: Date(timeIntervalSince1970: 0))
+        let renderer = SpreadRenderer(album: album, geometry: g, images: PlaceholderImageProvider())
+        let s = CGFloat(backingScale)
+        let w = Int(viewSize.width * s), h = Int(viewSize.height * s)
+        let ctx = try #require(CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                                         space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                         bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        // A flipped view's context on a backing of `s` pixels per point, then the canvas's own path.
+        ctx.translateBy(x: 0, y: CGFloat(h))
+        ctx.scaleBy(x: s, y: -s)
+        ctx.concatenate(layout.rendererTransform)
+        renderer.draw(spread, images: ["p": black], into: ctx, options: layout.rendererOptions)
+        let data = try #require(ctx.data).assumingMemoryBound(to: UInt8.self)
+        func darkest(x: Int, y: Int) -> UInt8 {
+            let i = y * w * 4 + x * 4
+            return max(data[i], data[i + 1], data[i + 2])
+        }
+
+        // The shared vertical edge (a | b, a | c) and the shared horizontal edge (b over c).
+        let vx = layout.viewPoint(Point(x: edgeX, y: 0)).x * s
+        let hy = layout.viewPoint(Point(x: 0, y: edgeY)).y * s
+        // Both edges fall inside a device pixel, else the test proves nothing.
+        #expect(vx - vx.rounded(.down) > 0.1 && vx - vx.rounded(.down) < 0.9)
+        #expect(hy - hy.rounded(.down) > 0.1 && hy - hy.rounded(.down) < 0.9)
+        let column = Int(vx), row = Int(hy)
+        let top = Int(layout.viewPoint(Point(x: 0, y: 32)).y * s), bottom = Int(layout.viewPoint(Point(x: 0, y: 148)).y * s)
+        let left = Int(layout.viewPoint(Point(x: edgeX + 2, y: 0)).x * s)
+        let right = Int(layout.viewPoint(Point(x: edgeX + 78, y: 0)).x * s)
+        let seamV = (top...bottom).map { darkest(x: column, y: $0) }.max() ?? 255
+        let seamH = (left...right).map { darkest(x: $0, y: row) }.max() ?? 255
+        #expect(seamV <= 40, "vertical seam at column \(column): \(seamV)")
+        #expect(seamH <= 40, "horizontal seam at row \(row): \(seamH)")
     }
 
     private func solidImage(r: UInt8, g: UInt8, b: UInt8, width: Int, height: Int) -> CGImage? {

@@ -37,13 +37,18 @@ public struct RenderOptions: Sendable {
     /// Resolution used for the image provider's `minPixelWidth` hint. `nil` means
     /// `pixelsPerMM * 25.4`. A PDF context at 72 units/inch passes 300 to request print-quality images.
     public var imageDPI: Double?
+    /// Snaps each frame's edges to whole device pixels, so two frames sharing an edge cover the
+    /// pixel it falls in without a light seam. For the on-screen canvas only; print output keeps
+    /// the exact edges.
+    public var pixelAlignFrames: Bool
 
     public init(showGuides: Bool = false, includeBleed: Bool = true, pixelsPerMM: Double,
-                imageDPI: Double? = nil) {
+                imageDPI: Double? = nil, pixelAlignFrames: Bool = false) {
         self.showGuides = showGuides
         self.includeBleed = includeBleed
         self.pixelsPerMM = pixelsPerMM
         self.imageDPI = imageDPI
+        self.pixelAlignFrames = pixelAlignFrames
     }
 }
 
@@ -271,7 +276,8 @@ public struct SpreadRenderer: Sendable {
 
         for frame in spread.frames where frame.rect.intersects(trim) {
             let rect = geometry.bleedExtended(frame.rect, area: region.area, includeBleed: options.includeBleed)
-            drawFrame(frame, rect: rect, image: frame.photoID.flatMap { images[$0] }, in: ctx)
+            drawFrame(frame, rect: options.pixelAlignFrames ? pixelAligned(rect, in: ctx) : rect,
+                      image: frame.photoID.flatMap { images[$0] }, in: ctx)
         }
         for box in spread.texts where box.rect.intersects(trim) {
             drawText(box, in: ctx, pageWidth: region.spineX)
@@ -283,6 +289,17 @@ public struct SpreadRenderer: Sendable {
 
     private func cgRect(_ r: Rect) -> CGRect {
         CGRect(x: r.minX, y: r.minY, width: r.size.width, height: r.size.height)
+    }
+
+    /// `rect` with each edge moved to the nearest whole device pixel of `ctx`. A shared edge rounds
+    /// the same for both frames, so they meet on a pixel boundary.
+    private func pixelAligned(_ rect: Rect, in ctx: CGContext) -> Rect {
+        let device = ctx.convertToDeviceSpace(cgRect(rect))
+        let snapped = CGRect(x: device.minX.rounded(), y: device.minY.rounded(),
+                             width: device.maxX.rounded() - device.minX.rounded(),
+                             height: device.maxY.rounded() - device.minY.rounded())
+        let user = ctx.convertToUserSpace(snapped)
+        return Rect(x: user.minX, y: user.minY, width: user.width, height: user.height)
     }
 
     /// `rect` is the frame extended by the bleed (`PageGeometry.bleedExtended`).
