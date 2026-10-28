@@ -741,8 +741,8 @@ final class EditorModel {
         setTextStyle(nil, of: id, in: spreadID, "Výchozí písmo")
     }
 
-    /// Stores `style` (sanitised by `AlbumEdit.setTextStyle`) as one step; nothing when it changes
-    /// nothing. A text session on this text is stored first as its own step and keeps running:
+    /// Stores `style` (sanitised by `AlbumEdit.setTextStyle`) as one step; nothing when the stored
+    /// style stays the same (the edit would only mark the spread as edited). A text session on this text is stored first as its own step and keeps running:
     /// the style write changes the store revision, so the session's next write registers a new
     /// step instead of amending its old one (which would undo the style with it). Any other
     /// session is committed.
@@ -757,7 +757,12 @@ final class EditorModel {
             commitSessions()
         }
         let edit = AlbumEdit.setTextStyle(spreadID: spreadID, textID: textID, style: style)
-        guard let updated = try? store.album.applying(edit).album, updated != store.album else { return }
+        func stored(_ album: Album) -> TextStyle?? {
+            album.spreads.first { $0.id == spreadID }?.texts.first { $0.id == textID }.map(\.style)
+        }
+        guard let updated = try? store.album.applying(edit).album, stored(updated) != stored(store.album) else {
+            return
+        }
         perform([edit], actionName)
     }
 

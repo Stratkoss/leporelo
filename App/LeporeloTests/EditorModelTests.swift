@@ -2136,6 +2136,20 @@ struct EditorTextStyleTests {
         #expect(!undo.canUndo)
     }
 
+    /// Picking the default near-black (or resetting) on an unstyled text of an untouched spread
+    /// stores nothing and adds no step, also not by marking the spread as edited.
+    @Test func defaultStyleOnUnstyledTextAddsNoStep() throws {
+        let (model, store, undo) = try makeModel(try standardAlbum())
+        let journal = try #require(store.album.spreads.first { $0.kind == .journal && !$0.manuallyEdited })
+        model.currentSpreadID = journal.id
+        model.selectedItem = .text("title")
+        let revision = store.revision
+        step(undo) { model.changeTextStyle { $0.colorHex = "#1A1A1A" } }
+        step(undo) { model.resetTextStyle() }
+        #expect(store.revision == revision)  // no write, so no step (the groups stay empty)
+        #expect(store.album.spreads.first { $0.id == journal.id }?.manuallyEdited == false)
+    }
+
     @Test func styleChangeWhileEditingKeepsText() throws {
         let (model, store, _) = try makeModel(try standardAlbum())
         let undo = UndoManager()  // groups by event, like the window's

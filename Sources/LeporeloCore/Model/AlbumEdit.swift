@@ -37,9 +37,13 @@ extension Album {
     }
 
     /// A text style as stored: nil or a style equal to the default -> nil, size clamped to
-    /// `TextStyle.sizeRangePt` (NaN or infinite -> nil, JSON cannot encode them).
+    /// `TextStyle.sizeRangePt` (NaN or infinite -> nil, JSON cannot encode them), the default
+    /// colour (`SpreadRenderer.defaultColorHex`, any letter case) -> nil.
     static func sanitizedTextStyle(_ style: TextStyle?) -> TextStyle? {
         guard var style else { return nil }
+        if style.colorHex?.caseInsensitiveCompare(SpreadRenderer.defaultColorHex) == .orderedSame {
+            style.colorHex = nil
+        }
         if let size = style.sizePt {
             style.sizePt = size.isFinite
                 ? min(TextStyle.sizeRangePt.upperBound, max(TextStyle.sizeRangePt.lowerBound, size)) : nil

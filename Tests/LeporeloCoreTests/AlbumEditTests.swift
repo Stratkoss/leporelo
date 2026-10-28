@@ -125,6 +125,12 @@ private let sampleStyle = TextStyle(fontFamily: "Georgia", sizePt: 14, bold: tru
     // A style that is empty only after the NaN size is dropped counts as empty too.
     let (nan, _) = try album.applying(.setTextStyle(spreadID: "s1", textID: "t1", style: TextStyle(sizePt: .nan)))
     #expect(nan.spreads[0].texts[0].style == nil)
+    // The default near-black chosen explicitly is the default, in any letter case.
+    let (black, _) = try album.applying(.setTextStyle(spreadID: "s1", textID: "t1", style: TextStyle(colorHex: "#1a1a1a")))
+    #expect(black.spreads[0].texts[0].style == nil)
+    let (boldBlack, _) = try album.applying(
+        .setTextStyle(spreadID: "s1", textID: "t1", style: TextStyle(bold: true, colorHex: "#1A1A1A")))
+    #expect(boldBlack.spreads[0].texts[0].style == TextStyle(bold: true))
 }
 
 @Test func setTextStyleUnknownIDsThrow() {
