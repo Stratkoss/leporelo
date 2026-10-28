@@ -167,10 +167,11 @@ public enum SnapEngine {
     /// `rect` with `edges` snapped onto a line within `threshold` (inclusive). The tiers are
     /// searched in order and the first with a line in reach is used; inside it the nearest line
     /// wins, a tie goes to an edge point (min/max) before the centre, then to an equal spacing or
-    /// size line before an alignment line, then to the smaller position. With `.all` the whole rectangle moves (its size kept) so that its min, centre
-    /// or max lands exactly on the line; otherwise each edge in `edges` snaps on its own and the
-    /// others stay. A line anchored `.min`/`.centre`/`.max` only catches that point, and a line
-    /// that would turn a resized rectangle inside out is no target.
+    /// size line before an alignment line, then to the smaller position. With `.all` the whole
+    /// rectangle moves (its size kept) so that its min, centre or max lands exactly on the line;
+    /// otherwise each edge in `edges` snaps on its own and the others stay. A line anchored
+    /// `.min`/`.centre`/`.max` only catches that point, and a line that would turn a resized
+    /// rectangle inside out is no target.
     public static func snap(_ rect: Rect, moving edges: RectEdges, to targets: SnapTargets, threshold: Double) -> SnapResult {
         var minX = rect.minX, maxX = rect.maxX, minY = rect.minY, maxY = rect.maxY
         var width = rect.size.width, height = rect.size.height

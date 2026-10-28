@@ -742,9 +742,9 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
     /// for a resize, equal sizes (`sizeLines`), the grid; per `snapSettings`, without the lines
     /// inside a margin band: `MarginRule.allowedTargets`), threshold 8 points. Sets the guides of
     /// the axes that snapped to an alignment line (`mouseDragged` then keeps only those the
-    /// conformed result touches) and returns the
-    /// reasons of the snap, nil when snapping is off: while ⌘ is held, for a ⇧ corner resize (the
-    /// snapped edges would break the kept ratio) or with both "Přichytávat" and "Mřížka" off.
+    /// conformed result touches) and returns the reasons of the snap, nil when snapping is off:
+    /// while ⌘ is held, for a ⇧ corner resize (the snapped edges would break the kept ratio) or
+    /// with both "Přichytávat" and "Mřížka" off.
     private func snapped(_ rect: Rect, edges: RectEdges, item: LayoutItem, keepAspect: Bool, flags: NSEvent.ModifierFlags,
                          scale: CGFloat) -> (rect: Rect, reasons: [SnapAxis: SnapReason]?) {
         snapGuides = []

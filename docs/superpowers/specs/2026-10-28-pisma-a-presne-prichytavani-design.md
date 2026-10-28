@@ -112,8 +112,8 @@ Builder v běžící aplikaci projde každou položku lišty editoru a ověří 
 | Zkusit jinak | jiné doporučené rozložení aktuální stránky; u ručně upravené se nejdřív zeptá; vypnuté s vysvětlením v nápovědě, když nejde |
 | Přidat rámeček | prázdný rámeček na aktuální stránce (jinak na pravé), vybraný; vypnuté na obálce |
 | Přidat text | textové pole na aktuální stránce, vybrané; vypnuté na obálce |
-| Mřížka | zobrazí mřížku 5 mm a přichytává k ní (druhé patro, 2.1); pamatuje se |
-| Přichytávat | přichytávání k rozložení (první patro, 2.1); pamatuje se |
+| Mřížka | zobrazí mřížku 5 mm a přichytává k ní (třetí patro, 2.1); pamatuje se |
+| Přichytávat | přichytávání k rozložení (první a druhé patro, 2.1); pamatuje se |
 | Okraj | krok 1 mm v rozsahu bezpečná zóna–30 mm; všechny dvoustrany se upraví jedním krokem zpět |
 | Zpět do třídění | uloží rozpracované a přepne do třídění |
 | Navrhnout znovu | dialog s počtem zachovaných ručních dvoustran, pak nový návrh |
