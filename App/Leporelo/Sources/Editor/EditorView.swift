@@ -20,13 +20,12 @@ extension FocusedValues {
 /// (`TextToolsBar`, spec 3.2) and a banner for the spread's problems that belong to no frame,
 /// the tray on the right (`PhotoTrayView`), the strip at the bottom (`SpreadStripView`); toolbar:
 /// "Zkusit jinak" (the current page, spec 5), "Přidat rámeček", "Přidat text" (on the current
-/// page, else the right one), "Mřížka", "Vodítka", "Přichytávat", "Okraj", "Navrhnout znovu", "Formát",
-/// "Exportovat…" (the window adds "Třídění | Dvoustrany" and "Zpět do třídění"). The grid, guides and
+/// page, else the right one), "Mřížka", "Vodítka", "Přichytávat", "Formát" (formats, "Okraj" and
+/// "Navrhnout znovu…"), "Exportovat…" (the window adds "Třídění | Dvoustrany"). The grid, guides and
 /// snapping switches are remembered for the app (`@AppStorage`); the margin belongs to the book
 /// (`EditorModel.setMargin`).
 struct EditorView: View {
     let model: EditorModel
-    let onBackToTriage: () -> Void
 
     @Environment(\.undoManager) private var undoManager
     @Environment(\.exportAlbum) private var exportAlbum
@@ -284,30 +283,9 @@ struct EditorView: View {
 
             Toggle(EditorText.snap, systemImage: "square.and.line.vertical.and.square", isOn: $snapObjects)
                 .help(EditorText.snap)
-
-            let profile = model.geometry.profile
-            Stepper(value: Binding(get: { model.marginMM }, set: { model.setMargin($0) }),
-                    in: profile.safeMM...max(profile.safeMM, MarginRule.maxMarginMM), step: 1) {
-                Text(EditorText.margin(model.marginMM))
-                    .monospacedDigit()
-            }
-            .help(EditorText.margin(model.marginMM))
         }
 
         ToolbarItemGroup(placement: .primaryAction) {
-            Button(EditorText.backToTriage, systemImage: "square.grid.3x3") {
-                model.commitSessions()
-                onBackToTriage()
-            }
-            .help(EditorText.backToTriage)
-
-            Button(EditorText.redraft, systemImage: "wand.and.stars") {
-                model.commitSessions()
-                redraftKept = model.redraftPreview()
-                showsRedraft = true
-            }
-            .help(EditorText.redraft)
-
             Menu(EditorText.formatMenu, systemImage: "rectangle.ratio.3.to.4") {
                 ForEach(model.geometry.profile.formats, id: \.id) { format in
                     Button {
@@ -319,6 +297,27 @@ struct EditorView: View {
                             Text(format.name)
                         }
                     }
+                }
+                Divider()
+                Menu(EditorText.margin(model.marginMM)) {
+                    ForEach(EditorText.marginChoices(safeMM: model.geometry.profile.safeMM, current: model.marginMM),
+                            id: \.self) { mm in
+                        Button {
+                            model.setMargin(mm)
+                        } label: {
+                            if mm == model.marginMM {
+                                Label(EditorText.marginChoice(mm), systemImage: "checkmark")
+                            } else {
+                                Text(EditorText.marginChoice(mm))
+                            }
+                        }
+                    }
+                }
+                Divider()
+                Button(EditorText.redraft + "…") {
+                    model.commitSessions()
+                    redraftKept = model.redraftPreview()
+                    showsRedraft = true
                 }
             }
             .help(EditorText.formatMenu)

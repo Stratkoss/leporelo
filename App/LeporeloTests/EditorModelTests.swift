@@ -1495,6 +1495,95 @@ struct EditorLayoutTests {
         #expect(model.addFrame(on: .left, in: "nope") == nil)
     }
 
+    // MARK: Copy, cut, paste (⌘C ⌘X ⌘V)
+
+    @Test func copyPastePhotoFrameOffsetsTheCopyAndSelectsIt() throws {
+        let (model, store, undo) = try makeModel(try standardAlbum())
+        let gallery = try #require(store.album.spreads.first { $0.templateID == "gallery-2" && !$0.frames.isEmpty })
+        model.currentSpreadID = gallery.id
+        let original = gallery.frames[0]
+        let before = store.album
+
+        let clip = try #require(model.clipboardItem(.frame(original.id)))
+        let id = try #require(step(undo) { model.paste(clip) })
+        #expect(id != original.id)
+        let after = try #require(spread(store.album, gallery.id))
+        let copy = try #require(after.frames.first { $0.id == id })
+        #expect(copy.photoID == original.photoID && copy.zoom == original.zoom && copy.offset == original.offset)
+        #expect(copy.rect.size == original.rect.size)
+        #expect(copy.rect != original.rect)
+        #expect(!rule(model).frameIntrudesMargin(copy.rect, area: .spread))
+        #expect(model.selectedItem == .frame(id))
+        #expect(undo.undoActionName == "Vložit")
+        // A second paste does not land on the first copy.
+        let second = try #require(step(undo) { model.paste(clip) })
+        let rects = try #require(spread(store.album, gallery.id)).frames.map(\.rect)
+        #expect(Set(rects.map { "\($0)" }).count == rects.count, "\(second)")
+
+        undo.undo()
+        undo.undo()
+        #expect(store.album == before)
+    }
+
+    @Test func pasteOnAnotherSpreadKeepsThePosition() throws {
+        let (model, store, undo) = try makeModel(try standardAlbum())
+        let spreads = store.album.spreads.filter { !$0.frames.isEmpty }
+        let from = try #require(spreads.first), to = try #require(spreads.dropFirst().first)
+        model.currentSpreadID = from.id
+        let clip = try #require(model.clipboardItem(.frame(from.frames[0].id)))
+        model.currentSpreadID = to.id
+        let id = try #require(step(undo) { model.paste(clip) })
+        let copy = try #require(spread(store.album, to.id)?.frames.first { $0.id == id })
+        let occupied = to.frames.contains { $0.rect == from.frames[0].rect }
+        #expect(occupied || copy.rect == rule(model).conformMovedFrame(from.frames[0].rect, area: .spread))
+    }
+
+    @Test func pasteTextKeepsTextAndStyle() throws {
+        let (model, store, undo) = try makeModel(try standardAlbum())
+        let gallery = try #require(store.album.spreads.first { $0.templateID == "gallery-2" })
+        model.currentSpreadID = gallery.id
+        let textID = try #require(step(undo) { model.addText(on: .left) })
+        step(undo) { model.setText(textID, "Soul") }
+        model.selectedItem = .text(textID)
+        step(undo) { model.changeTextStyle { $0.sizePt = 30; $0.bold = true } }
+        let clip = try #require(model.clipboardItem(.text(textID)))
+        let id = try #require(step(undo) { model.paste(clip) })
+        let copy = try #require(spread(store.album, gallery.id)?.texts.first { $0.id == id })
+        #expect(copy.text == "Soul" && copy.style?.sizePt == 30 && copy.style?.bold == true)
+        #expect(model.selectedItem == .text(id))
+    }
+
+    @Test func pastedPhotoFromAnotherAlbumBecomesAnEmptyFrame() throws {
+        let (model, store, undo) = try makeModel(try standardAlbum())
+        let gallery = try #require(store.album.spreads.first { $0.templateID == "gallery-2" && !$0.frames.isEmpty })
+        model.currentSpreadID = gallery.id
+        var frame = gallery.frames[0]
+        frame.photoID = "not-in-this-album"
+        let id = try #require(step(undo) { model.paste(.frame(frame)) })
+        #expect(spread(store.album, gallery.id)?.frames.first { $0.id == id }?.photoID == nil)
+    }
+
+    @Test func cutRemovesTheItemInOneStep() throws {
+        let (model, store, undo) = try makeModel(try standardAlbum())
+        let gallery = try #require(store.album.spreads.first { $0.templateID == "gallery-2" && !$0.frames.isEmpty })
+        model.currentSpreadID = gallery.id
+        let frameID = gallery.frames[0].id
+        let clip = try #require(step(undo) { model.cut(.frame(frameID)) })
+        #expect(clip == .frame(gallery.frames[0]))
+        #expect(spread(store.album, gallery.id)?.frames.contains { $0.id == frameID } == false)
+        #expect(undo.undoActionName == "Vyjmout")
+    }
+
+    @Test func clipboardRoundTripsThroughAPasteboard() throws {
+        let pasteboard = NSPasteboard(name: .init("leporelo-test-\(UUID().uuidString)"))
+        defer { pasteboard.releaseGlobally() }
+        let text = TextBox(id: "t", rect: Rect(x: 1, y: 2, width: 30, height: 10), role: .caption, text: "Ahoj")
+        #expect(LayoutClipboard.read(from: pasteboard) == nil)
+        LayoutClipboard.write(.text(text), to: pasteboard)
+        #expect(LayoutClipboard.read(from: pasteboard) == .text(text))
+        #expect(pasteboard.string(forType: .string) == "Ahoj")
+    }
+
     @Test func addFrameIdsAreUnique() throws {
         let (model, store, undo) = try makeModel(try standardAlbum())
         let gallery = try #require(store.album.spreads.first { $0.templateID == "gallery-2" })

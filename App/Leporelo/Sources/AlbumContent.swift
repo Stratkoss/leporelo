@@ -36,7 +36,7 @@ struct AlbumContent: View {
                         .environment(\.proposeAlbum, editor == nil ? nil : ProposeAlbumAction { propose() })
                 case .editor:
                     if let editor, editor.store === store {
-                        EditorView(model: editor, onBackToTriage: { switchTo(.triage) })
+                        EditorView(model: editor)
                             .environment(\.exportAlbum, exportAction)
                     } else {
                         ContentUnavailableView("Editor nejde otevřít", systemImage: "exclamationmark.triangle",

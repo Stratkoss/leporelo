@@ -540,6 +540,29 @@ enum WindowModeLogic {
 /// A photo on the drag pasteboard: the custom type `com.stratkoss.leporelo.photo-id` (UTF-8 id)
 /// plus the triage grid's plain-text payload (`PhotoDrag`), which is what a SwiftUI drag (the
 /// tray) reliably carries. Readers try the custom type first.
+/// A frame or text box on the clipboard (⌘C, ⌘X, ⌘V on the canvas).
+enum ClipboardItem: Codable, Equatable {
+    case frame(Frame)
+    case text(TextBox)
+}
+
+/// The clipboard of the canvas: a `ClipboardItem` as JSON under its own type on the general
+/// pasteboard (so it also pastes into another album window); a text also as plain text.
+enum LayoutClipboard {
+    static let type = NSPasteboard.PasteboardType("com.stratkoss.leporelo.layout-item")
+
+    static func write(_ item: ClipboardItem, to pasteboard: NSPasteboard = .general) {
+        guard let data = try? JSONEncoder().encode(item) else { return }
+        pasteboard.clearContents()
+        pasteboard.setData(data, forType: type)
+        if case .text(let box) = item, !box.text.isEmpty { pasteboard.setString(box.text, forType: .string) }
+    }
+
+    static func read(from pasteboard: NSPasteboard = .general) -> ClipboardItem? {
+        pasteboard.data(forType: type).flatMap { try? JSONDecoder().decode(ClipboardItem.self, from: $0) }
+    }
+}
+
 enum PhotoPasteboard {
     static let typeIdentifier = "com.stratkoss.leporelo.photo-id"
     static let type = NSPasteboard.PasteboardType(typeIdentifier)
@@ -653,7 +676,6 @@ enum TextColour {
 enum EditorText {
     static let triage = "Třídění"
     static let spreads = "Dvoustrany"
-    static let backToTriage = "Zpět do třídění"
     static let redraft = "Navrhnout znovu"
     static let export = "Exportovat…"
     static let changeTemplate = "Doporučené rozložení…"
@@ -732,8 +754,18 @@ enum EditorText {
         String(format: "%.1f mm", mm).replacingOccurrences(of: ".", with: ",")
     }
 
-    /// "Okraj: 10 mm" (the toolbar's margin stepper).
+    /// "Okraj: 10 mm" (the margin submenu of "Formát").
     static func margin(_ mm: Double) -> String { "Okraj: \(Int(mm)) mm" }
+
+    /// "10 mm": one choice of the margin submenu (margins are whole millimetres).
+    static func marginChoice(_ mm: Double) -> String { "\(Int(mm)) mm" }
+
+    /// The margins the "Okraj" menu offers: 6, 8, 10, 12, 15, 20, 25, 30 mm from the profile's
+    /// safe zone up, plus the book's current margin when it is none of them.
+    static func marginChoices(safeMM: Double, current: Double) -> [Double] {
+        let presets = [6.0, 8, 10, 12, 15, 20, 25, 30].filter { $0 >= safeMM && $0 <= MarginRule.maxMarginMM }
+        return Set(presets + [current]).sorted()
+    }
 
     static func kindName(_ kind: SpreadKind) -> String {
         switch kind {

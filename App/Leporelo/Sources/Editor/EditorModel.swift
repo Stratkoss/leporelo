@@ -956,7 +956,7 @@ final class EditorModel {
     /// text box, as one step; the spread gets a custom layout and the item's page becomes manual.
     /// False for an unknown item or spread.
     @discardableResult
-    func deleteItem(_ item: LayoutItem, in spreadID: String? = nil) -> Bool {
+    func deleteItem(_ item: LayoutItem, in spreadID: String? = nil, actionName: String = "Smazat") -> Bool {
         commitSessions()
         guard let id = spreadID ?? currentSpreadID,
               var spread = store.album.spreads.first(where: { $0.id == id }),
@@ -970,9 +970,63 @@ final class EditorModel {
             spread.texts.remove(at: i)
         }
         spread = PageEditing.markingCustom(spread, side: PageSpread.side(of: rect, geometry: geometry))
-        guard perform([.replaceSpread(spread)], "Smazat") else { return false }
+        guard perform([.replaceSpread(spread)], actionName) else { return false }
         if requestedItem == ItemRef(spreadID: id, item: item) { requestedItem = nil }
         return true
+    }
+
+    /// ⌘C: the frame or text `item` of the spread as it is stored (a running session first).
+    func clipboardItem(_ item: LayoutItem, in spreadID: String? = nil) -> ClipboardItem? {
+        commitSessions()
+        guard let id = spreadID ?? currentSpreadID,
+              let spread = store.album.spreads.first(where: { $0.id == id }) else { return nil }
+        switch item {
+        case .frame(let frameID): return spread.frames.first { $0.id == frameID }.map(ClipboardItem.frame)
+        case .text(let textID): return spread.texts.first { $0.id == textID }.map(ClipboardItem.text)
+        }
+    }
+
+    /// ⌘X: `clipboardItem` and then the item removed as one step "Vyjmout".
+    @discardableResult
+    func cut(_ item: LayoutItem, in spreadID: String? = nil) -> ClipboardItem? {
+        guard let clip = clipboardItem(item, in: spreadID),
+              deleteItem(item, in: spreadID, actionName: "Vyjmout") else { return nil }
+        return clip
+    }
+
+    /// ⌘V: a copy of `clip` with a free id on the spread, one step "Vložit", selected. It keeps its
+    /// size and position (conformed to the margin, `conformMovedFrame`/`conformMovedText`); when
+    /// that place is taken it moves by 5 mm steps down and right. A photo that is not in this
+    /// album (copied from another one) leaves the frame empty. Returns the new id.
+    @discardableResult
+    func paste(_ clip: ClipboardItem, in spreadID: String? = nil) -> String? {
+        commitSessions()
+        guard let id = spreadID ?? currentSpreadID,
+              var spread = store.album.spreads.first(where: { $0.id == id }) else { return nil }
+        let taken = spread.frames.map(\.rect) + spread.texts.map(\.rect)
+        func place(_ rect: Rect, _ conform: (Rect) -> Rect) -> Rect {
+            var placed = conform(rect)
+            for k in 1...20 where taken.contains(placed) {
+                let step = 5.0 * Double(k)
+                placed = conform(Rect(x: rect.minX + step, y: rect.minY + step,
+                                      width: rect.size.width, height: rect.size.height))
+            }
+            return placed
+        }
+        let rule = marginRule
+        switch clip {
+        case .frame(var frame):
+            frame.id = PageEditing.freeItemID("frame", taken: Set(spread.frames.map(\.id)))
+            frame.rect = place(frame.rect) { rule.conformMovedFrame($0, area: .spread) }
+            if let photoID = frame.photoID, store.album.photos[photoID] == nil { frame.photoID = nil }
+            spread.frames.append(frame)
+            return addItem(.frame(frame.id), at: frame.rect, to: spread, "Vložit")
+        case .text(var box):
+            box.id = PageEditing.freeItemID("text", taken: Set(spread.texts.map(\.id)))
+            box.rect = place(box.rect) { rule.conformMovedText($0, area: .spread) }
+            spread.texts.append(box)
+            return addItem(.text(box.id), at: box.rect, to: spread, "Vložit")
+        }
     }
 
     /// "Okraj": sets the book's page margin (`AlbumUpdater.settingMargin`: clamped to the profile's

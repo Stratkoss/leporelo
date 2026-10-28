@@ -702,6 +702,13 @@ struct WindowModeTests {
 }
 
 struct EditorTextTests {
+    @Test func marginChoicesStartAtTheSafeZoneAndKeepTheCurrentMargin() {
+        #expect(EditorText.marginChoices(safeMM: 6, current: 6) == [6, 8, 10, 12, 15, 20, 25, 30])
+        #expect(EditorText.marginChoices(safeMM: 9, current: 9) == [9, 10, 12, 15, 20, 25, 30])
+        #expect(EditorText.marginChoices(safeMM: 6, current: 7) == [6, 7, 8, 10, 12, 15, 20, 25, 30])
+        #expect(EditorText.marginChoice(10) == "10 mm")
+    }
+
     @Test func czechCountsAgree() {
         #expect(EditorText.problems(1) == "1 problém")
         #expect(EditorText.problems(3) == "3 problémy")

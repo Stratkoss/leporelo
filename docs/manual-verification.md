@@ -97,7 +97,7 @@ Otevři album s fotkami, které ještě nemá dvoustrany (nebo jeho kopii). Fotk
 - [ ] Cmd-Z v listu „Udělat z toho knihu“ úvodního okna otevřeného z okna alba (Cmd-N, když je album vepředu): napiš do pole názvu pár znaků a stiskni Cmd-Z. Očekávání: vrátí se psaní v poli, album se nezmění (třeba výběr fotky nebo text zůstanou). Totéž v sheetu exportu, ve výběru šablony a v potvrzovacích dialozích.
 - [ ] Cmd-W nebo Cmd-Q do 0,5 s po posledním písmenu psaného textu a následné otevření: poslední znaky mohou chybět (ověř a zapiš; zaručené je jen uložení po 0,5 s nečinnosti).
 - [ ] Varování: nízké DPI, chybějící originál a text mimo bezpečnou zónu mají oranžové nebo červené ikony u rámečku či rohu textu s popiskem; prázdné tělo deníku dá pruh „1 problém na této dvoustraně“ s popoverem; chyba počtu stran je v záhlaví pásu („N problémů alba“).
-- [ ] Panel nástrojů: „Navrhnout znovu“ ukáže „Zachovám N ručně upravených dvoustran. Pokračovat?“ se správným N; „Formát“ vypíše formáty se zatržením a změna ukáže „Rozložení se přepočítá, obsah zůstane.“ a přepočítá.
+- [ ] „Formát“ > „Navrhnout znovu…“ ukáže „Zachovám N ručně upravených dvoustran. Pokračovat?“ se správným N; „Formát“ vypíše formáty se zatržením a změna ukáže „Rozložení se přepočítá, obsah zůstane.“ a přepočítá.
 - [ ] VoiceOver: položky pásu čtou „Dvoustrana 3, Deník, čtvrtek 18. června 2026, 2 problémy“, buňky zásobníku „Fotka čt 18. 6. · 9:05, vybraná, v albu“.
 - [ ] Výkon: psaní textu ve velkém albu (stovky dvoustran) nesekne (miniatury v pásu se při změně přepočítávají).
 
@@ -132,10 +132,11 @@ Nic z tohoto oddílu se při stavbě nedalo ověřit v běžící aplikaci (ovl�
 - [ ] Textová pole: každé (prázdné i vyplněné) má světle modrý podklad a modrý čárkovaný rámeček, i v tmavém režimu; v exportu nejsou.
 - [ ] Mřížka: ukáže mřížku 5 mm a přichytává k ní; po restartu aplikace zůstane, jak byla.
 - [ ] Přichytávat: vypnuté = fotka se chytá jen k mřížce (je-li zapnutá); po restartu zůstane.
-- [ ] Okraj: šipky mění po 1 mm od bezpečné zóny profilu (u Canvy 6 mm) do 30 mm; všechny dvoustrany se upraví a jedno ⌘Z to vrátí.
+- [ ] Okraj: „Formát“ > „Okraj: 6 mm“ nabízí 6, 8, 10, 12, 15, 20, 25 a 30 mm se zatržením u aktuálního; všechny dvoustrany se upraví a jedno ⌘Z to vrátí.
+- [ ] ⌘C / ⌘X / ⌘V: vybraný rámeček s fotkou nebo text se zkopíruje a vloží o 5 mm vedle (na jiné dvoustraně na stejné místo) a je vybraný; ⌘X ho odebere; každé je jeden krok ⌘Z. Při psaní v textu ⌘C/⌘V kopírují jen text.
 - [ ] Žádná fotka se nedotkne kraje stránky ani hřbetu, všude je aspoň okraj (výchozí 6 mm), i na obálce. U staré knihy se nad plátnem ukáže „Některé fotky sahají až ke kraji stránky“ a „Srovnat do okraje“ ji opraví (jedno ⌘Z vrátí); pak lišta zmizí.
-- [ ] Zúžené okno: položky, které se nevejdou, jsou v nabídce » s čitelným názvem. Hlavně zkus „Okraj“: dá se z přetékající nabídky vůbec změnit? (Podezření z kódu: krokovač v nabídce nefunguje.)
-- [ ] Zpět do třídění, Navrhnout znovu (dialog s počtem zachovaných dvoustran), Formát (fajfka u aktuálního, změna s potvrzením), Exportovat… (vypnuté bez dvoustran), Třídění / Dvoustrany.
+- [ ] Zúžené okno: položky, které se nevejdou, jsou v nabídce » s čitelným názvem.
+- [ ] V liště už není okraj, „Zpět do třídění“ ani „Navrhnout znovu“. Formát (fajfka u aktuálního, změna s potvrzením; v něm „Okraj“ a „Navrhnout znovu…“ s dialogem počtu zachovaných dvoustran), Exportovat… (vypnuté bez dvoustran), Třídění / Dvoustrany.
 
 **Přichytávání (spec 2).**
 - [ ] Táhni fotku k hraně sousední fotky se zapnutou i vypnutou mřížkou: sedne přesně na hranu, ne 1–2 mm vedle, i když je poblíž čára mřížky, okraje nebo střed stránky.

@@ -170,7 +170,8 @@ final class CanvasImageCache {
     }
 }
 
-final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NSViewToolTipOwner {
+final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NSViewToolTipOwner,
+    NSMenuItemValidation {
     weak var model: EditorModel?
     var onChangeLayout: ((String) -> Void)?
 
@@ -257,6 +258,32 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
 
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
+
+    // MARK: Clipboard (Edit > Cut, Copy, Paste reach the canvas as first responder)
+
+    @objc func copy(_ sender: Any?) {
+        guard isEditable, let item = selectedItem, let clip = model?.clipboardItem(item, in: page?.id) else { return }
+        LayoutClipboard.write(clip)
+    }
+
+    @objc func cut(_ sender: Any?) {
+        guard isEditable, let item = selectedItem, let clip = model?.cut(item, in: page?.id) else { return }
+        LayoutClipboard.write(clip)
+    }
+
+    @objc func paste(_ sender: Any?) {
+        guard isEditable, let clip = LayoutClipboard.read() else { return }
+        if cropFrameID != nil { endCropMode() }
+        model?.paste(clip, in: page?.id)
+    }
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        switch menuItem.action {
+        case #selector(copy(_:)), #selector(cut(_:)): isEditable && selectedItem != nil
+        case #selector(paste(_:)): isEditable && LayoutClipboard.read() != nil
+        default: true
+        }
+    }
 
     private var isEditable: Bool { content.map { !$0.isCover } ?? false }
     private var area: PrintArea { content?.isCover == true ? .cover : .spread }
