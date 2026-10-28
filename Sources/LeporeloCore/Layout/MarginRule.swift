@@ -125,7 +125,8 @@ public struct MarginRule: Sendable {
         func allowed(_ v: Double, _ edges: [Double]) -> Bool {
             !edges.contains { abs(v - $0) > Self.eps && abs(v - $0) < marginMM - Self.eps }
         }
-        return SnapTargets(x: targets.x.filter { allowed($0, xs) }, y: targets.y.filter { allowed($0, ys) })
+        return SnapTargets(x: targets.x.filter { allowed($0.position, xs) },
+                           y: targets.y.filter { allowed($0.position, ys) })
     }
 
     /// `spread` with every frame conformed by `conformFrame` and every text by `conformText`;

@@ -16,6 +16,11 @@ import Foundation
             settings: SnapSettings(grid: grid, objects: objects))
     }
 
+    /// Alignment lines of one tier at `positions`.
+    static func lines(_ positions: [Double], tier: SnapTier = .items) -> [SnapLine] {
+        positions.map { SnapLine(position: $0, tier: tier) }
+    }
+
     @Test func moveSnapsLeftEdgeToMargin() throws {
         let t = try Self.targets()
         let rect = Rect(x: 11.5, y: 50, width: 80, height: 60)
@@ -57,22 +62,22 @@ import Foundation
 
     @Test func gridTargetsOnlyWhenGridOn() throws {
         let off = try Self.targets(grid: false)
-        #expect(!off.x.contains(5))
-        #expect(!off.x.contains(302))
+        #expect(!off.xs.contains(5))
+        #expect(!off.xs.contains(302))
         let on = try Self.targets(grid: true, objects: false)
-        #expect(on.x.contains(5))
-        #expect(on.x.contains(302))
-        #expect(on.y.contains(205))
-        #expect(!on.x.contains(0.5))
+        #expect(on.xs.contains(5))
+        #expect(on.xs.contains(302))
+        #expect(on.ys.contains(205))
+        #expect(!on.xs.contains(0.5))
     }
 
     @Test func gapTargetsBesideOtherFrames() throws {
         let other = Rect(x: 100, y: 20, width: 50, height: 40)
         let t = try Self.targets(others: [other])
-        #expect(t.x.contains(96))
-        #expect(t.x.contains(154))
-        #expect(t.x.contains(100) && t.x.contains(125) && t.x.contains(150))
-        #expect(t.y.contains(16) && t.y.contains(64))
+        #expect(t.xs.contains(96))
+        #expect(t.xs.contains(154))
+        #expect(t.xs.contains(100) && t.xs.contains(125) && t.xs.contains(150))
+        #expect(t.ys.contains(16) && t.ys.contains(64))
     }
 
     @Test func noTargetsWhenBothOff() throws {
@@ -83,23 +88,23 @@ import Foundation
 
     @Test func pageTargetsForSpreadAndCover() throws {
         let spread = try Self.targets(area: .spread)
-        for x in [0, 10, 148.5, 287, 297, 307, 445.5, 584, 594] as [Double] { #expect(spread.x.contains(x)) }
-        for y in [0, 10, 105, 200, 210] as [Double] { #expect(spread.y.contains(y)) }
+        for x in [0, 10, 148.5, 287, 297, 307, 445.5, 584, 594] as [Double] { #expect(spread.xs.contains(x)) }
+        for y in [0, 10, 105, 200, 210] as [Double] { #expect(spread.ys.contains(y)) }
         let cover = try Self.targets(area: .cover)
-        #expect(cover.x.contains(148.5))
-        #expect(!cover.x.contains(445.5))
-        #expect(!cover.x.contains(307))
-        #expect(cover.x.max() == 297)
+        #expect(cover.xs.contains(148.5))
+        #expect(!cover.xs.contains(445.5))
+        #expect(!cover.xs.contains(307))
+        #expect(cover.xs.max() == 297)
     }
 
     @Test func tieGoesToSmallerTarget() {
-        let t = SnapTargets(x: [10, 14], y: [])
+        let t = SnapTargets(x: Self.lines([10, 14]), y: [])
         let result = SnapEngine.snap(Rect(x: 12, y: 0, width: 0, height: 1), moving: .all, to: t, threshold: 3)
         #expect(result.rect.minX == 10)
     }
 
     @Test func bestOfMinMidMaxWins() {
-        let t = SnapTargets(x: [100, 200], y: [])
+        let t = SnapTargets(x: Self.lines([100, 200]), y: [])
         // minX 98.5 (d 1.5 to 100), maxX 199.5 (d 0.5 to 200) -> maxX wins
         let result = SnapEngine.snap(Rect(x: 98.5, y: 0, width: 101, height: 10), moving: .all, to: t, threshold: 2)
         #expect(result.rect.maxX == 200)
@@ -107,7 +112,7 @@ import Foundation
     }
 
     @Test func resizeDoesNotInvertRect() {
-        let t = SnapTargets(x: [50], y: [])
+        let t = SnapTargets(x: Self.lines([50]), y: [])
         let rect = Rect(x: 51, y: 0, width: 5, height: 5)
         let result = SnapEngine.snap(rect, moving: .maxX, to: t, threshold: 10)
         #expect(result.rect == rect)
@@ -117,18 +122,19 @@ import Foundation
 
     @Test func targetsInsideTheMarginBandAreDropped() throws {
         let rule = MarginRule(geometry: try Self.geometry(), marginMM: 10)
-        let raw = SnapTargets(x: [0, 4, 5, 10, 150, 287, 292, 297, 302, 307, 590, 594], y: [0, 5, 10, 105, 200, 205, 210])
+        let raw = SnapTargets(x: Self.lines([0, 4, 5, 10, 150, 287, 292, 297, 302, 307, 590, 594]),
+                              y: Self.lines([0, 5, 10, 105, 200, 205, 210]))
         let allowed = rule.allowedTargets(raw, area: .spread)
-        #expect(allowed.x == [0, 10, 150, 287, 297, 307, 594])
-        #expect(allowed.y == [0, 10, 105, 200, 210])
+        #expect(allowed.xs == [0, 10, 150, 287, 297, 307, 594])
+        #expect(allowed.ys == [0, 10, 105, 200, 210])
         // The cover has no spine: 287 is its margin line, 292 lies in the band before its edge.
-        let cover = rule.allowedTargets(SnapTargets(x: [5, 287, 292, 297], y: []), area: .cover)
-        #expect(cover.x == [287, 297])
+        let cover = rule.allowedTargets(SnapTargets(x: Self.lines([5, 287, 292, 297]), y: []), area: .cover)
+        #expect(cover.xs == [287, 297])
         // The real grid at margin 10: no grid line at 5 mm from any page edge survives.
         let grid = rule.allowedTargets(try Self.targets(grid: true, objects: false), area: .spread)
-        for v in [5.0, 292, 302, 589] { #expect(!grid.x.contains(v)) }
-        for v in [5.0, 205] { #expect(!grid.y.contains(v)) }
-        #expect(grid.x.contains(10) && grid.x.contains(15))
+        for v in [5.0, 292, 302, 589] { #expect(!grid.xs.contains(v)) }
+        for v in [5.0, 205] { #expect(!grid.ys.contains(v)) }
+        #expect(grid.xs.contains(10) && grid.xs.contains(15))
     }
 
     /// The canvas pipeline: snap to the allowed targets, conform, keep the guides the result
@@ -172,6 +178,80 @@ import Foundation
         }
     }
 
+    // MARK: Tiers: items, then page, then grid
+
+    @Test func targetsCarryTheirTier() throws {
+        let t = try Self.targets(others: [Rect(x: 100, y: 20, width: 50, height: 40)], grid: true)
+        func tier(_ v: Double) -> SnapTier? { t.x.first { $0.position == v }?.tier }
+        #expect(tier(100) == .items && tier(125) == .items && tier(150) == .items)
+        #expect(tier(96) == .page && tier(154) == .page)
+        #expect(tier(10) == .page && tier(148.5) == .page && tier(297) == .page)
+        #expect(tier(15) == .grid)
+        #expect(t.x.allSatisfy { $0.anchor == .any && $0.reason == .alignment })
+        // One line per position: the grid line at 100 is the item edge.
+        #expect(t.x.filter { $0.position == 100 }.count == 1)
+    }
+
+    @Test func neighbourEdgeBeatsCloserGridLine() throws {
+        let t = try Self.targets(others: [Rect(x: 20, y: 100, width: 3.3, height: 40)], grid: true)
+        // minX 24.4: the grid line 25 is 0.6 away, the neighbour's maxX 23.3 is 1.1 away.
+        let result = SnapEngine.snap(Rect(x: 24.4, y: 30, width: 40, height: 30), moving: .all, to: t, threshold: 4)
+        #expect(result.rect.minX == 23.3)
+        #expect(result.rect.size == Size(width: 40, height: 30))
+        #expect(result.guides.contains(SnapGuide(axis: .x, position: 23.3)))
+        #expect(result.reasons[.x] == .alignment)
+    }
+
+    @Test func neighbourEdgeBeatsCloserPageCentre() throws {
+        let t = try Self.targets(others: [Rect(x: 100, y: 20, width: 47, height: 40)])
+        // minX 148: the left page centre 148.5 is 0.5 away, the neighbour's maxX 147 is 1 away.
+        let result = SnapEngine.snap(Rect(x: 148, y: 120, width: 50, height: 40), moving: .all, to: t, threshold: 4)
+        #expect(result.rect.minX == 147)
+    }
+
+    @Test func gridUsedWhenNoItemOrPageLineInReach() throws {
+        let t = try Self.targets(grid: true)
+        let result = SnapEngine.snap(Rect(x: 61.2, y: 50, width: 42, height: 30), moving: .all, to: t, threshold: 2)
+        #expect(result.rect.minX == 60)
+    }
+
+    @Test func edgeBeatsCentreOnTie() {
+        // The line at 30 is 10 from both the centre (20) and maxX (40): maxX snaps.
+        let t = SnapTargets(x: Self.lines([30]), y: [])
+        let result = SnapEngine.snap(Rect(x: 0, y: 0, width: 40, height: 10), moving: .all, to: t, threshold: 15)
+        #expect(result.rect.minX == -10)
+        #expect(result.rect.maxX == 30)
+    }
+
+    @Test func pageTierUsedWhenNoItemLineInReach() {
+        let t = SnapTargets(x: Self.lines([10], tier: .page) + Self.lines([30], tier: .items)
+                               + Self.lines([11], tier: .grid), y: [])
+        let result = SnapEngine.snap(Rect(x: 11.5, y: 0, width: 5, height: 5), moving: .all, to: t, threshold: 2)
+        #expect(result.rect.minX == 10)
+    }
+
+    @Test func anchoredLineOnlyCatchesItsPoint() {
+        let line = SnapLine(position: 50, tier: .items, anchor: .min, reason: .equalSpacing)
+        let t = SnapTargets(x: [line], y: [])
+        let rect = Rect(x: 10, y: 0, width: 40.2, height: 10)
+        #expect(SnapEngine.snap(rect, moving: .all, to: t, threshold: 2).rect == rect)
+        #expect(SnapEngine.snap(rect, moving: .maxX, to: t, threshold: 2).rect == rect)
+        // Its own point: minX 50.3 lands on 50 and the reason is recorded.
+        let caught = SnapEngine.snap(Rect(x: 50.3, y: 0, width: 20, height: 10), moving: .all, to: t, threshold: 2)
+        #expect(caught.rect.minX == 50)
+        #expect(caught.reasons == [.x: .equalSpacing])
+        #expect(caught.guides == [SnapGuide(axis: .x, position: 50)])
+    }
+
+    @Test func resizeTakesLinesOfTheMovedEdge() {
+        let size = SnapLine(position: 105, tier: .items, anchor: .max, reason: .equalSize)
+        let t = SnapTargets(x: [size, SnapLine(position: 30, tier: .items, anchor: .min, reason: .equalSize)], y: [])
+        let result = SnapEngine.snap(Rect(x: 20, y: 0, width: 84, height: 10), moving: .maxX, to: t, threshold: 3)
+        #expect(result.rect.minX == 20)
+        #expect(result.rect.maxX == 105)
+        #expect(result.reasons == [.x: .equalSize])
+    }
+
     @Test func guidesNotTouchingTheResultAreDropped() {
         let rect = Rect(x: 0, y: 20, width: 100, height: 60)
         let guides = [SnapGuide(axis: .x, position: 5), SnapGuide(axis: .x, position: 50),
@@ -179,6 +259,11 @@ import Foundation
         #expect(SnapEngine.guides(guides, touching: rect)
                 == [SnapGuide(axis: .x, position: 50), SnapGuide(axis: .y, position: 80)])
     }
+}
+
+private extension SnapTargets {
+    var xs: [Double] { x.map(\.position) }
+    var ys: [Double] { y.map(\.position) }
 }
 
 private extension Rect {
