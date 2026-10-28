@@ -59,7 +59,13 @@ struct TextToolsBar: View {
         HStack(spacing: 12) {
             FontFamilyPicker(family: style.family,
                              missingFamily: style.isFallback ? storedStyle?.fontFamily : nil) { family in
-                model.changeTextStyle { $0.fontFamily = family }
+                // A face the new family lacks would stay stored but hidden and resurface later.
+                let available = Self.traits(family)
+                model.changeTextStyle {
+                    $0.fontFamily = family
+                    if !available.bold { $0.bold = false }
+                    if !available.italic { $0.italic = false }
+                }
             }
 
             sizeControls(style)

@@ -1525,6 +1525,24 @@ struct EditorLayoutTests {
         #expect(store.album == before)
     }
 
+    /// A frame against the bottom-right margin lines: the copy goes up-left instead of being
+    /// pulled back onto the original.
+    @Test func pasteNextToAFrameInTheCornerDoesNotStackOnIt() throws {
+        let (model, store, undo) = try makeModel(try standardAlbum())
+        let gallery = try #require(store.album.spreads.first { $0.templateID == "gallery-2" && !$0.frames.isEmpty })
+        model.currentSpreadID = gallery.id
+        var frame = gallery.frames[0]
+        let page = model.geometry.pageRect(side: .right)
+        frame.rect = Rect(x: page.maxX - 6 - 80, y: page.maxY - 6 - 60, width: 80, height: 60)
+        let id = try #require(step(undo) { model.paste(.frame(frame)) })
+        let second = try #require(step(undo) { model.paste(.frame(frame)) })
+        let frames = try #require(spread(store.album, gallery.id)).frames
+        let first = try #require(frames.first { $0.id == id }), copy = try #require(frames.first { $0.id == second })
+        #expect(first.rect == frame.rect)
+        #expect(copy.rect != first.rect && copy.rect.size == frame.rect.size)
+        #expect(!rule(model).frameIntrudesMargin(copy.rect, area: .spread))
+    }
+
     @Test func pasteOnAnotherSpreadKeepsThePosition() throws {
         let (model, store, undo) = try makeModel(try standardAlbum())
         let spreads = store.album.spreads.filter { !$0.frames.isEmpty }
@@ -1579,7 +1597,9 @@ struct EditorLayoutTests {
         defer { pasteboard.releaseGlobally() }
         let text = TextBox(id: "t", rect: Rect(x: 1, y: 2, width: 30, height: 10), role: .caption, text: "Ahoj")
         #expect(LayoutClipboard.read(from: pasteboard) == nil)
+        #expect(!LayoutClipboard.hasItem(in: pasteboard))
         LayoutClipboard.write(.text(text), to: pasteboard)
+        #expect(LayoutClipboard.hasItem(in: pasteboard))
         #expect(LayoutClipboard.read(from: pasteboard) == .text(text))
         #expect(pasteboard.string(forType: .string) == "Ahoj")
     }

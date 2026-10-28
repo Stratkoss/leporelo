@@ -558,6 +558,11 @@ enum LayoutClipboard {
         if case .text(let box) = item, !box.text.isEmpty { pasteboard.setString(box.text, forType: .string) }
     }
 
+    /// Cheap check for menu validation: the pasteboard holds a canvas item (not decoded).
+    static func hasItem(in pasteboard: NSPasteboard = .general) -> Bool {
+        pasteboard.types?.contains(type) == true
+    }
+
     static func read(from pasteboard: NSPasteboard = .general) -> ClipboardItem? {
         pasteboard.data(forType: type).flatMap { try? JSONDecoder().decode(ClipboardItem.self, from: $0) }
     }

@@ -62,7 +62,8 @@ struct EditorView: View {
         VStack(spacing: 0) {
             HStack(spacing: 0) {
                 VStack(spacing: 0) {
-                    if canvasContent != nil { TextToolsBar(model: model) }
+                    // The cover is read-only: no text tools, and no hint to click a text there.
+                    if let content = canvasContent, !content.isCover { TextToolsBar(model: model) }
                     issueBanner
                     marginBanner
                     canvas

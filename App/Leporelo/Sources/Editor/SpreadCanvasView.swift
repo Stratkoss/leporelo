@@ -280,7 +280,7 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         switch menuItem.action {
         case #selector(copy(_:)), #selector(cut(_:)): isEditable && selectedItem != nil
-        case #selector(paste(_:)): isEditable && LayoutClipboard.read() != nil
+        case #selector(paste(_:)): isEditable && LayoutClipboard.hasItem()
         default: true
         }
     }
