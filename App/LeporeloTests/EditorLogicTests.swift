@@ -142,6 +142,12 @@ struct CanvasLayoutTests {
         #expect(CanvasLayout.trim(geometry: g, isCover: true) == g.pageRect(side: .left))
     }
 
+    /// The canvas never paints outside its own frame: since macOS 14 an NSView does not clip by
+    /// default, and its background fill covered the text bar above it and the hint below it.
+    @Test @MainActor func canvasClipsToItsBounds() {
+        #expect(SpreadCanvasNSView(frame: NSRect(x: 0, y: 0, width: 100, height: 100)).clipsToBounds)
+    }
+
     /// Two dark frames sharing an edge (snapped flush) draw without a light seam on the canvas, at
     /// a scale that is no round number and on a Retina backing too: the edge falls inside a device
     /// pixel, so each frame clipped on its own would let the white page show through there.

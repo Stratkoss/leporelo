@@ -243,6 +243,8 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
+        // Since macOS 14 views do not clip by default: the background fill covered the text bar.
+        clipsToBounds = true
         registerForDraggedTypes([PhotoPasteboard.type, .string])
         imageCache.onLoad = { [weak self] in self?.needsDisplay = true }
         setAccessibilityElement(true)
@@ -314,7 +316,7 @@ final class SpreadCanvasNSView: NSView, NSTextViewDelegate, NSDraggingSource, NS
 
     override func draw(_ dirtyRect: NSRect) {
         NSColor.underPageBackgroundColor.setFill()
-        dirtyRect.fill()
+        dirtyRect.intersection(bounds).fill()
         guard let page, let album, let geometry, let package, let layout = layoutForBounds,
               let ctx = NSGraphicsContext.current?.cgContext else { return }
 
