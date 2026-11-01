@@ -126,8 +126,11 @@ final class CanvasImageCache {
     private func load(_ ids: Set<PhotoID>, page: Spread, area: PrintArea, album: Album, revision: Int,
                       geometry: PageGeometry, package: ProjectPackage) {
         inFlight.formUnion(ids)
-        var request = page
-        request.frames = page.frames.filter { $0.photoID.map(ids.contains) ?? false }
+        let request: Spread = {
+            var copy = page
+            copy.frames = page.frames.filter { $0.photoID.map(ids.contains) ?? false }
+            return copy
+        }()
         let renderer = SpreadRenderer(album: album, geometry: geometry,
                                       images: PackageImageProvider(package: package, album: album))
         Task { [weak self] in
