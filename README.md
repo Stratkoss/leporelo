@@ -103,4 +103,4 @@ From the design document, not promises: Saal Digital profile with wrap-around co
 
 ## License and fonts
 
-The code does not have a license yet, so all rights are reserved until one is added. The bundled fonts Fraunces and Schibsted Grotesk are under the SIL Open Font License 1.1 (texts in `Sources/LeporeloCore/Resources/Fonts/`) and are embedded in exported PDFs.
+The code is released under the [MIT License](LICENSE). The bundled fonts Fraunces and Schibsted Grotesk are under the SIL Open Font License 1.1 (texts in `Sources/LeporeloCore/Resources/Fonts/`) and are embedded in exported PDFs.

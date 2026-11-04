@@ -2,7 +2,7 @@
 
 # Leporelo
 
-Leporelo je nativní mac aplikace, která z fotek z dovolené v Apple Photos připraví fotoknihu k tisku. Fotky roztřídí po dnech a místech, doporučí výběr (ostrost, zavřené oči, duplicity a série, estetické skóre z Vision, vše lokálně), navrhne hrubé album ve stylu „deník + galerie“, nechá ho doladit v editoru dvoustran, zkontroluje ho před tiskem (rozlišení, bezpečná zóna, počet stran, chybějící originály) a vyexportuje PDF pro Canva Print. Aplikace je určena pro dva uživatele, ne jako produkt pro trh. Uživatelské rozhraní je česky.
+Leporelo je nativní mac aplikace, která z fotek z dovolené v Apple Photos připraví fotoknihu k tisku. Fotky roztřídí po dnech a místech, doporučí výběr (ostrost, zavřené oči, duplicity a série, estetické skóre z Vision, vše lokálně), navrhne hrubé album ve stylu „deník + galerie“, nechá ho doladit v editoru dvoustran, zkontroluje ho před tiskem (rozlišení, bezpečná zóna, počet stran, chybějící originály) a vyexportuje PDF pro Canva Print. Aplikace vznikla pro dva konkrétní uživatele a nyní je ve veřejné beta verzi, aby si ji mohl vyzkoušet každý, kdo chce z fotek v Apple Photos udělat tištěnou fotoknihu. Uživatelské rozhraní je česky.
 
 ## Požadavky
 
@@ -141,4 +141,4 @@ Co profil sám nepokryje a co je v kódu:
 
 ## Licence a písma
 
-V aplikaci jsou přibalená písma Fraunces (serif, titulky deníku) a Schibsted Grotesk (popisky) pod licencí SIL Open Font License 1.1. Texty licencí jsou v `Sources/LeporeloCore/Resources/Fonts/Fraunces-OFL.txt` a `Sources/LeporeloCore/Resources/Fonts/SchibstedGrotesk-OFL.txt`. Písma se vkládají do exportovaného PDF. Samotný kód repozitáře zatím licenci nemá.
+V aplikaci jsou přibalená písma Fraunces (serif, titulky deníku) a Schibsted Grotesk (popisky) pod licencí SIL Open Font License 1.1. Texty licencí jsou v `Sources/LeporeloCore/Resources/Fonts/Fraunces-OFL.txt` a `Sources/LeporeloCore/Resources/Fonts/SchibstedGrotesk-OFL.txt`. Písma se vkládají do exportovaného PDF. Kód repozitáře je pod licencí MIT (soubor [LICENSE](LICENSE)).
